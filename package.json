@@ -1,0 +1,16 @@
+{
+  "name": "claude-scheduler",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test tests/*.test.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.2.0",
+    "croner": "^9.1.0",
+    "express": "^5.1.0"
+  }
+}
