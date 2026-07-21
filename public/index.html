@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scheduler</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="brand">⏱ <span>Scheduler</span></div>
+  <nav class="tabs">
+    <a href="#jobs" data-tab="jobs">Jobs</a>
+    <a href="#history" data-tab="history">History</a>
+    <a href="#settings" data-tab="settings">Settings</a>
+  </nav>
+  <div class="header-right">
+    <button id="running-badge" class="pill" hidden title="View running jobs">◐ 0 running</button>
+    <div class="menu-wrap">
+      <button id="awake-btn" title="Keep this Mac awake so schedules fire">☕ <span id="awake-label">sleep ok</span></button>
+      <div id="awake-menu" class="menu" hidden>
+        <div class="menu-head">Keep Mac awake</div>
+        <button data-mode="off">Off — allow sleep</button>
+        <button data-mode="auto">While jobs are scheduled</button>
+        <button data-mode="timed" data-minutes="30">For 30 minutes</button>
+        <button data-mode="timed" data-minutes="60">For 1 hour</button>
+        <button data-mode="timed" data-minutes="240">For 4 hours</button>
+        <button data-mode="timed" data-minutes="480">For 8 hours</button>
+        <button data-mode="on">Indefinitely</button>
+      </div>
+    </div>
+    <label class="switch small" title="Pause all schedules">
+      <input type="checkbox" id="pause-all"><i></i><span>Pause</span>
+    </label>
+  </div>
+</header>
+<div id="paused-banner" class="banner" hidden>⏸ All schedules paused — nothing fires until you unpause.</div>
+
+<main>
+  <section id="tab-jobs">
+    <div class="toolbar">
+      <input id="job-search" type="search" placeholder="Filter jobs…" autocomplete="off">
+      <span class="spacer"></span>
+      <button id="new-job" class="primary">＋ New job</button>
+    </div>
+    <div id="jobs-list" class="list"></div>
+    <div id="jobs-empty" class="empty" hidden>
+      <p>No jobs yet.</p>
+      <button class="primary" onclick="document.getElementById('new-job').click()">Create your first job</button>
+    </div>
+  </section>
+
+  <section id="tab-history" hidden>
+    <div class="toolbar">
+      <select id="history-job"><option value="">All jobs</option></select>
+      <div id="status-chips" class="chips">
+        <button class="chip active" data-status="">All</button>
+        <button class="chip" data-status="active">Active</button>
+        <button class="chip" data-status="ok">OK</button>
+        <button class="chip" data-status="fail">Failed</button>
+      </div>
+    </div>
+    <div id="runs-list" class="list"></div>
+    <p id="runs-empty" class="empty" hidden>No runs match.</p>
+  </section>
+
+  <section id="tab-settings" hidden>
+    <form id="settings-form" class="card">
+      <h3>Extensions</h3>
+      <div id="ext-settings"></div>
+      <div class="row right"><span id="settings-msg" class="muted"></span><button class="primary">Save</button></div>
+    </form>
+    <details class="card danger">
+      <summary>Danger zone</summary>
+      <p>Cleanup deletes ALL jobs, run history and logs. Type <code>cleanup</code> to confirm.</p>
+      <div class="row"><input id="cleanup-confirm" placeholder="cleanup"><button id="cleanup-btn" class="danger-btn">Cleanup</button></div>
+      <p>Uninstall removes everything: launchd agent, data, and the tool itself. Type <code>uninstall</code> to confirm.</p>
+      <div class="row"><input id="uninstall-confirm" placeholder="uninstall"><button id="uninstall-btn" class="danger-btn">Uninstall</button></div>
+    </details>
+  </section>
+</main>
+
+<div id="log-drawer" hidden>
+  <div class="drawer-head">
+    <strong id="log-title"></strong>
+    <span id="log-progress" class="muted"></span>
+    <span class="spacer"></span>
+    <button id="log-kill" class="danger-btn" hidden>■ Stop</button>
+    <span id="run-actions"></span>
+    <button id="log-close" class="icon" title="Close">✕</button>
+  </div>
+  <pre id="log-view"></pre>
+</div>
+
+<dialog id="job-dialog">
+  <form id="job-form" method="dialog">
+    <h2 id="dialog-title">New job</h2>
+    <div id="form-errors" class="errors" hidden></div>
+
+    <label>Name <input id="f-name" required placeholder="e.g. Nightly triage"></label>
+
+    <div class="seg" id="f-type"></div>
+    <p id="f-type-desc" class="muted type-desc"></p>
+
+    <div id="ext-fields"></div>
+    <label>Working directory <input id="f-cwd" placeholder="~"></label>
+
+    <fieldset>
+      <legend>Schedule</legend>
+      <div id="sched-rows"></div>
+      <button type="button" id="add-sched" class="icon">＋ Add another time</button>
+      <div id="f-preview" class="muted preview"></div>
+    </fieldset>
+
+    <details id="advanced">
+      <summary>Advanced <span id="advanced-summary" class="muted"></span></summary>
+      <div id="ext-fields-adv"></div>
+      <div class="row">
+        <label>Timeout (min) <input id="f-timeoutMin" type="number" min="1" max="1440" value="60"></label>
+        <label>Retries <input id="f-retryCount" type="number" min="0" max="3" value="0"></label>
+        <label>Retry delay (min) <input id="f-retryDelayMin" type="number" min="1" max="1440" value="5"></label>
+      </div>
+      <label>Notify
+        <select id="f-notify">
+          <option value="failure">on failure</option><option value="always">always</option><option value="never">never</option>
+        </select>
+      </label>
+    </details>
+
+    <div class="row right">
+      <button type="button" id="dialog-cancel">Cancel</button>
+      <button class="primary" id="dialog-save" value="save">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toasts"></div>
+<script type="module" src="app.js"></script>
+</body>
+</html>
