@@ -7,18 +7,23 @@ import { ensureDirs, dbPath } from './lib/paths.js';
 import {
   openDb, createJob, listJobs, getJob, updateJob, deleteJob,
   insertRun, getRun, listRuns, lastRun, failOrphanRuns,
-  getSetting, setSetting, cleanupAll,
+  getSetting, setSetting, cleanupAll, listUsageSnapshots,
 } from './lib/db.js';
 import { validateJob, previewSchedule } from './lib/validate.js';
 import { loadExtensions, manifest, validateFields } from './lib/extensions.js';
 import { createRunner } from './lib/runner.js';
 import { createScheduler } from './lib/scheduler.js';
 import { createAwake } from './lib/awake.js';
+import { createUsageMonitor, POLL_FLOOR_SEC, DEFAULT_POLL_SEC, USAGE_SHOW_MODES } from './lib/usage.js';
 import { startUninstall } from './lib/uninstall.js';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 
-export function createApp({ db, runner, scheduler, extensions, awake, execFileFn = execFile, uninstallFn = startUninstall }) {
+export function createApp({
+  db, runner, scheduler, extensions, awake, usage = null,
+  execFileFn = execFile, uninstallFn = startUninstall,
+  usageRefreshFloorMs = POLL_FLOOR_SEC * 1000,
+}) {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
   app.use(express.static(join(ROOT, 'public')));
@@ -169,6 +174,55 @@ export function createApp({ db, runner, scheduler, extensions, awake, execFileFn
     }
   });
 
+  // Usage: read-only in M1 — nothing here influences whether a job fires.
+  const usageShow = () => {
+    const v = getSetting(db, 'usageShow', 'banner');
+    return USAGE_SHOW_MODES.includes(v) ? v : 'banner';
+  };
+  const usageWarnPct = () => Number(getSetting(db, 'usageWarnPct', 80)) || 80;
+
+  // A snapshot of "nothing known yet" rather than null: the client renders the
+  // same shape whether or not the first probe has landed.
+  const pendingSnapshot = () => ({
+    capturedAt: null, checkedAt: null, ok: null, error: null, stale: null,
+    available: null, subscriptionType: null, windows: {}, buckets: [],
+    ...(usage ? { pollSec: usage.status().pollSec, nextPollAt: usage.status().nextPollAt } : {}),
+  });
+
+  const usageBody = () => ({
+    ...(usage?.snapshot() ?? pendingSnapshot()),
+    display: usageShow(),
+    warnPct: usageWarnPct(),
+  });
+
+  app.get('/api/usage', (req, res) => {
+    if (!usage) return res.status(501).json({ error: 'usage monitor not available' });
+    res.json(usageBody());
+  });
+
+  // Throttled to the poll floor: a UI with a refresh button must not become a
+  // way to hammer the endpoint the floor exists to protect.
+  let lastForcedAt = 0;
+  app.post('/api/usage/refresh', async (req, res) => {
+    if (!usage) return res.status(501).json({ error: 'usage monitor not available' });
+    const since = Date.now() - lastForcedAt;
+    if (since < usageRefreshFloorMs) {
+      return res.status(429).json({
+        error: 'refreshed too recently',
+        retryAfterSec: Math.ceil((usageRefreshFloorMs - since) / 1000),
+        ...usageBody(),
+      });
+    }
+    lastForcedAt = Date.now();
+    await usage.refresh();
+    res.status(202).json(usageBody());
+  });
+
+  app.get('/api/usage/history', (req, res) => {
+    const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 2000);
+    res.json({ snapshots: listUsageSnapshots(db, { limit, okOnly: req.query.okOnly === '1' }) });
+  });
+
   // Settings: core {paused, home} + per-extension blocks from each ext's
   // `settings` field specs (defaults applied on read, validated on write).
   const extSettingsOut = () => Object.fromEntries([...extensions.values()]
@@ -183,12 +237,41 @@ export function createApp({ db, runner, scheduler, extensions, awake, execFileFn
     res.json({
       paused: getSetting(db, 'paused', '0') === '1',
       home: process.env.HOME || '',
+      usagePollSec: Number(getSetting(db, 'usagePollSec', DEFAULT_POLL_SEC)) || DEFAULT_POLL_SEC,
+      usageShow: usageShow(),
+      usageWarnPct: usageWarnPct(),
       extensions: extSettingsOut(),
     });
   });
 
   app.put('/api/settings', (req, res) => {
     const b = req.body || {};
+    // Usage keys are core, not per-extension: M2's guard and M4's planner read
+    // the same numbers, so they can't belong to any one job type.
+    if ('usagePollSec' in b) {
+      const n = Number(b.usagePollSec);
+      if (!Number.isFinite(n) || n < POLL_FLOOR_SEC || n > 3600) {
+        return res.status(400).json({ errors: [`usagePollSec must be ${POLL_FLOOR_SEC}-3600`] });
+      }
+      setSetting(db, 'usagePollSec', Math.round(n));
+    }
+    if ('usageShow' in b) {
+      if (!USAGE_SHOW_MODES.includes(b.usageShow)) {
+        return res.status(400).json({ errors: [`usageShow must be one of ${USAGE_SHOW_MODES.join('|')}`] });
+      }
+      setSetting(db, 'usageShow', b.usageShow);
+    }
+    if ('usageWarnPct' in b) {
+      const n = Number(b.usageWarnPct);
+      if (!Number.isFinite(n) || n < 1 || n > 99) return res.status(400).json({ errors: ['usageWarnPct must be 1-99'] });
+      setSetting(db, 'usageWarnPct', Math.round(n));
+    }
+    // A new interval takes effect now rather than after the old one elapses —
+    // otherwise lowering it from an hour means waiting an hour to find out.
+    if ('usagePollSec' in b && usage?.status().running) {
+      usage.stop();
+      usage.start({ immediate: false });
+    }
     if ('extensions' in b) {
       for (const [extId, values] of Object.entries(b.extensions || {})) {
         const ext = extensions.get(extId);
@@ -236,12 +319,16 @@ export async function main() {
       console.error(`extension ${ext.id} init failed:`, err.message);
     }
   }
-  const runner = createRunner({ db, extensions });
+  // Created before the runner so runs can be sampled either side; started after
+  // the scheduler because the first probe must never delay a fire.
+  const usage = createUsageMonitor({ db });
+  const runner = createRunner({ db, extensions, usage });
   const scheduler = createScheduler({ db, runner });
   scheduler.start();
+  usage.start();
   const awake = createAwake({ db, runner, scheduler });
   awake.refresh();
-  const app = createApp({ db, runner, scheduler, extensions, awake });
+  const app = createApp({ db, runner, scheduler, extensions, awake, usage });
   const port = Number(process.env.CS_PORT) || 9099;
   const server = app.listen(port, '127.0.0.1', () => {
     console.log(`claude-scheduler on http://127.0.0.1:${port} · extensions: ${[...extensions.keys()].join(', ')}`);
