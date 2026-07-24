@@ -7,6 +7,8 @@ import {
   openDb, createJob, listJobs, getJob, updateJob, deleteJob,
   insertRun, updateRun, getRun, listRuns, lastRun, pruneRuns, failOrphanRuns,
   getSetting, setSetting, cleanupAll,
+  insertUsageSnapshot, listUsageSnapshots, latestUsageSnapshot, pruneUsageSnapshots,
+  recordRunUsage, getRunUsage, avgDeltaForJob,
 } from '../lib/db.js';
 
 function freshDb() {
@@ -98,11 +100,98 @@ test('settings + cleanupAll', () => {
   const job = createJob(db, validJob());
   const r = insertRun(db, { jobId: job.id, status: 'running', trigger: 'manual' });
   updateRun(db, r.id, { logPath: '/tmp/a.log' });
+  insertUsageSnapshot(db, { ok: true, available: true, windows: { five_hour: { percent: 1 } } });
+  recordRunUsage(db, { runId: r.id, jobId: job.id, beforePct: { five_hour: 1 }, afterPct: { five_hour: 2 } });
+
   const paths = cleanupAll(db);
   assert.deepEqual(paths, ['/tmp/a.log']);
   assert.equal(listJobs(db).length, 0);
   assert.equal(listRuns(db).length, 0);
+  assert.equal(listUsageSnapshots(db).length, 0);
+  assert.equal(getRunUsage(db, r.id), null);
   assert.equal(getSetting(db, 'maxConcurrent'), '3'); // settings survive
+});
+
+test('usage snapshots: round-trip, okOnly filter, prune keeps newest N', () => {
+  const db = freshDb();
+  assert.equal(latestUsageSnapshot(db), null);
+
+  const snap = insertUsageSnapshot(db, {
+    capturedAt: '2026-07-25T00:00:00.000Z',
+    ok: true, available: true, subscriptionType: 'team',
+    windows: { five_hour: { percent: 37, resetsAt: '2026-07-25T00:20:00.386209+00:00' } },
+    buckets: [{ kind: 'weekly_scoped', percent: 90, severity: 'critical', scopeModel: 'Fable', isActive: true }],
+  });
+  assert.equal(snap.id, 1);
+  assert.equal(snap.ok, true);
+  assert.equal(snap.available, true);
+  assert.equal(snap.subscriptionType, 'team');
+  assert.equal(snap.windows.five_hour.percent, 37);
+  assert.equal(snap.buckets[0].scopeModel, 'Fable');
+  assert.equal(snap.error, null);
+
+  // failures are recorded too — a gap in the series is itself the signal
+  const bad = insertUsageSnapshot(db, { ok: false, error: 'probe exited 1' });
+  assert.equal(bad.ok, false);
+  assert.equal(bad.available, false);
+  assert.deepEqual(bad.windows, {});
+  assert.deepEqual(bad.buckets, []);
+  assert.equal(bad.error, 'probe exited 1');
+
+  assert.equal(listUsageSnapshots(db).length, 2);
+  assert.equal(latestUsageSnapshot(db).ok, false); // newest first
+  assert.equal(listUsageSnapshots(db, { okOnly: true }).length, 1);
+  assert.equal(latestUsageSnapshot(db, { okOnly: true }).id, 1);
+
+  for (let i = 0; i < 8; i++) insertUsageSnapshot(db, { ok: true, available: true });
+  assert.equal(pruneUsageSnapshots(db, 3), 7);
+  const kept = listUsageSnapshots(db);
+  assert.equal(kept.length, 3);
+  assert.deepEqual(kept.map((s) => s.id), [10, 9, 8]);
+});
+
+test('run_usage: delta computed per window, upsert, median aggregate', () => {
+  const db = freshDb();
+  const job = createJob(db, validJob());
+  const r = insertRun(db, { jobId: job.id, status: 'running', trigger: 'schedule' });
+
+  // before-only (launch): no delta yet
+  const pending = recordRunUsage(db, { runId: r.id, jobId: job.id, beforePct: { five_hour: 10, seven_day: 50 }, afterPct: {} });
+  assert.deepEqual(pending.deltaPct, {});
+
+  // after (finish) upserts the same row, and a window missing from `before`
+  // yields no delta rather than a bogus one
+  const done = recordRunUsage(db, {
+    runId: r.id, jobId: job.id,
+    beforePct: { five_hour: 10, seven_day: 50 },
+    afterPct: { five_hour: 12.5, seven_day: 51, weekly_scoped: 90 },
+  });
+  assert.deepEqual(done.deltaPct, { five_hour: 2.5, seven_day: 1 });
+  assert.equal(done.beforePct.five_hour, 10);
+  assert.ok(done.sampledAt);
+  assert.equal(listRuns(db, { jobId: job.id }).length, 1); // upsert, not a second row
+
+  // median over three samples ignores the outlier a concurrent run would create
+  for (const [before, after] of [[0, 3], [0, 40]]) {
+    const rn = insertRun(db, { jobId: job.id, status: 'ok', trigger: 'schedule' });
+    recordRunUsage(db, { runId: rn.id, jobId: job.id, beforePct: { five_hour: before }, afterPct: { five_hour: after } });
+  }
+  const agg = avgDeltaForJob(db, job.id);
+  assert.equal(agg.samples, 3);
+  assert.equal(agg.median.five_hour, 3); // [2.5, 3, 40]
+  assert.deepEqual(avgDeltaForJob(db, 'no-such-job'), { samples: 0, median: {} });
+});
+
+test('reopening a db with usage tables is idempotent', () => {
+  const dir = tmpData();
+  const path = join(dir, 'usage.db');
+  const db = openDb(path);
+  insertUsageSnapshot(db, { ok: true, available: true, subscriptionType: 'team' });
+  db.close();
+
+  const again = openDb(path);
+  assert.equal(listUsageSnapshots(again).length, 1);
+  assert.equal(latestUsageSnapshot(again).subscriptionType, 'team');
 });
 
 test('migration: v1 flat-column db folds into params + meta', () => {
