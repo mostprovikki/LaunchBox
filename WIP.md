@@ -12,7 +12,7 @@ Design: `docs/specs/2026-07-25-launchbox-design.md`. Each milestone has its own 
 - [ ] **M1 · usage foundation** — `2026-07-25-m1-usage-foundation.md`
   - [x] 1 `lib/usage.js` monitor + `tests/usage.test.js` — **71/71 tests pass**. `fakeSpawn` now records `stdin`. Deviations from the plan, both deliberate: self-rescheduling `setTimeout` rather than `setInterval` (a fixed interval can't back off), and the served snapshot is decoupled from the recorded row — a failure is logged with empty windows while the last good reading keeps being served, marked `stale`, with a `checkedAt` added to the documented shape so the UI can distinguish data age from probe age. The probe must `settle` **before** killing the answered child: the kill makes it exit 143, and a `close` handler that wins the race discards a good reading.
   - [x] 2 db: `usage_snapshots` + `run_usage` (+ `cleanupAll`). `avgDeltaForJob` returns `{samples, median}` (median, not mean — one delta polluted by a concurrent run would dominate a small sample).
-  - [ ] 3 per-run usage delta (percent calibration — M4 depends on it)
+  - [x] 3 per-run usage delta — `createRunner({ usage })`, optional; baseline read from the cache at launch, after-sample probed at finish with `refresh({coalesce: false})` so it can't be handed a reading taken before the run ended. Emits `usage:<runId>`. **75/75 tests pass.**
   - [ ] 4 settings: `usagePollSec`, `usageShow`, `usageWarnPct`
   - [ ] 5 API: `GET /api/usage`, `POST /api/usage/refresh`, `GET /api/usage/history`
   - [ ] 6 UI: extract `public/util.js`, then the usage strip (banner / compact / off)
