@@ -3,12 +3,17 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { tmpData, jobPayload, fakeSpawn, sleep, extensions } from './helpers.js';
 import { ensureDirs } from '../lib/paths.js';
+import { readFileSync } from 'node:fs';
 import { openDb, listRuns, getSetting } from '../lib/db.js';
 import { createRunner } from '../lib/runner.js';
 import { createScheduler } from '../lib/scheduler.js';
 import { createAwake } from '../lib/awake.js';
+import { createUsageMonitor } from '../lib/usage.js';
 import { createApp } from '../server.js';
 import { removalScript } from '../lib/uninstall.js';
+
+const USAGE_PAYLOAD = JSON.parse(readFileSync(new URL('./fixtures/get-usage-response.json', import.meta.url)))
+  .response.response;
 
 async function boot() {
   const dir = tmpData();
@@ -16,20 +21,31 @@ async function boot() {
   const db = openDb(join(dir, 'test.db'));
   const spawnFn = fakeSpawn();
   const caffSpawn = fakeSpawn();
-  const runner = createRunner({ db, extensions, spawnFn, notifyFn: () => {} });
+  const usageSpawn = fakeSpawn();
+  const usage = createUsageMonitor({ db, spawnFn: usageSpawn, getClaudePath: () => '/fake/claude' });
+  const runner = createRunner({ db, extensions, spawnFn, notifyFn: () => {}, usage });
   const scheduler = createScheduler({ db, runner });
   const awake = createAwake({ db, runner, scheduler, spawnFn: caffSpawn });
   const osaCalls = [];
   const uninstalls = [];
   const app = createApp({
-    db, runner, scheduler, extensions, awake,
+    db, runner, scheduler, extensions, awake, usage,
+    usageRefreshFloorMs: 5_000,
     execFileFn: (cmd, args, cb) => { osaCalls.push({ cmd, args }); cb(null); },
     uninstallFn: (opts) => uninstalls.push(opts),
   });
   const server = app.listen(0, '127.0.0.1');
   await new Promise((r) => server.once('listening', r));
   const base = () => `http://127.0.0.1:${server.address().port}`;
-  return { db, spawnFn, caffSpawn, runner, scheduler, awake, server, base, osaCalls, uninstalls };
+  return { db, spawnFn, caffSpawn, usageSpawn, usage, runner, scheduler, awake, server, base, osaCalls, uninstalls };
+}
+
+// Answer the probe a request is waiting on, once the route has spawned it.
+async function answerProbe(usageSpawn, payload = USAGE_PAYLOAD) {
+  const before = usageSpawn.calls.length;
+  for (let i = 0; i < 100 && usageSpawn.calls.length === before; i++) await sleep(2);
+  usageSpawn.calls.at(-1).child.stdout.emit('data',
+    JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: '1', response: payload } }) + '\n');
 }
 
 async function req(base, method, path, body) {
@@ -183,6 +199,9 @@ test('schedule preview + settings round-trip (per-extension)', async (t) => {
   assert.deepEqual(r.body, {
     paused: true,
     home: process.env.HOME || '',
+    usagePollSec: 180,
+    usageShow: 'banner',
+    usageWarnPct: 80,
     extensions: { claude: { claudePath: '/opt/claude', maxConcurrent: 4 } },
   });
 
@@ -190,6 +209,89 @@ test('schedule preview + settings round-trip (per-extension)', async (t) => {
   assert.equal(r.status, 400);
   r = await req(base(), 'PUT', '/api/settings', { extensions: { nope: { x: 1 } } });
   assert.equal(r.status, 400);
+});
+
+test('settings: usage keys round-trip and reject out-of-range values', async (t) => {
+  const { server, base } = await boot();
+  t.after(() => server.close());
+
+  let r = await req(base(), 'PUT', '/api/settings', { usagePollSec: 300, usageShow: 'compact', usageWarnPct: 70 });
+  assert.equal(r.body.ok, true);
+  r = await req(base(), 'GET', '/api/settings');
+  assert.equal(r.body.usagePollSec, 300);
+  assert.equal(r.body.usageShow, 'compact');
+  assert.equal(r.body.usageWarnPct, 70);
+  r = await req(base(), 'GET', '/api/usage');
+  assert.equal(r.body.display, 'compact');
+  assert.equal(r.body.warnPct, 70);
+  assert.equal(r.body.pollSec, 300, 'a new interval applies without a restart');
+
+  // The 60s floor is not the client's to lower.
+  for (const bad of [{ usagePollSec: 30 }, { usagePollSec: 'soon' }, { usageShow: 'sideways' }, { usageWarnPct: 0 }]) {
+    r = await req(base(), 'PUT', '/api/settings', bad);
+    assert.equal(r.status, 400, JSON.stringify(bad));
+  }
+  r = await req(base(), 'GET', '/api/settings');
+  assert.equal(r.body.usagePollSec, 300, 'a rejected write changes nothing');
+});
+
+test('usage: pending snapshot, throttled refresh, history', async (t) => {
+  const { server, base, usageSpawn } = await boot();
+  t.after(() => server.close());
+
+  // Before the first probe the shape is the same, with nothing asserted in it.
+  let r = await req(base(), 'GET', '/api/usage');
+  assert.equal(r.body.ok, null);
+  assert.equal(r.body.available, null);
+  assert.deepEqual(r.body.windows, {});
+  assert.equal(r.body.display, 'banner');
+  assert.equal(r.body.warnPct, 80);
+  assert.equal(r.body.pollSec, 180);
+
+  const forced = req(base(), 'POST', '/api/usage/refresh');
+  await answerProbe(usageSpawn);
+  r = await forced;
+  assert.equal(r.status, 202);
+  assert.equal(r.body.windows.five_hour.percent, 37);
+  assert.equal(r.body.windows.seven_day.percent, 64);
+  assert.equal(r.body.buckets.length, 3);
+  assert.equal(r.body.subscriptionType, 'team');
+  assert.equal(r.body.stale, false);
+
+  // A refresh button must not become a way to hammer the endpoint the poll
+  // floor exists to protect — but the caller still gets the current reading.
+  r = await req(base(), 'POST', '/api/usage/refresh');
+  assert.equal(r.status, 429);
+  assert.ok(r.body.retryAfterSec >= 1 && r.body.retryAfterSec <= 5);
+  assert.equal(r.body.windows.five_hour.percent, 37);
+  assert.equal(usageSpawn.calls.length, 1, 'no second probe');
+
+  r = await req(base(), 'GET', '/api/usage/history?limit=5');
+  assert.equal(r.body.snapshots.length, 1);
+  assert.equal(r.body.snapshots[0].ok, true);
+  assert.equal(r.body.snapshots[0].windows.five_hour.percent, 37);
+});
+
+test('usage: a manual run records its delta and cleanup wipes the history', async (t) => {
+  const { db, base, server, spawnFn, usageSpawn, runner } = await boot();
+  t.after(() => server.close());
+
+  const forced = req(base(), 'POST', '/api/usage/refresh');
+  await answerProbe(usageSpawn);
+  await forced;
+
+  const job = (await req(base(), 'POST', '/api/jobs', jobPayload())).body;
+  const run = (await req(base(), 'POST', `/api/jobs/${job.id}/run`)).body;
+  const recorded = new Promise((r) => runner.events.once(`usage:${run.id}`, r));
+  spawnFn.calls[0].child.emit('close', 0);
+  const after = { ...USAGE_PAYLOAD, rate_limits: { ...USAGE_PAYLOAD.rate_limits, five_hour: { utilization: 39, resets_at: '2026-07-25T00:20:00Z' } } };
+  await answerProbe(usageSpawn, after);
+  assert.deepEqual((await recorded).deltaPct, { five_hour: 2, seven_day: 0 });
+
+  assert.ok((await req(base(), 'GET', '/api/usage/history')).body.snapshots.length >= 2);
+  await req(base(), 'POST', '/api/cleanup');
+  assert.deepEqual((await req(base(), 'GET', '/api/usage/history')).body.snapshots, []);
+  assert.equal(getSetting(db, 'usageShow', 'banner'), 'banner', 'settings survive cleanup');
 });
 
 test('awake endpoints: modes, timed validation, caffeinate lifecycle', async (t) => {
