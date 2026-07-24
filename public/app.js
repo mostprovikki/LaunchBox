@@ -1,19 +1,6 @@
 import { renderFields, collectFields } from './fields.js';
-
-const $ = (sel) => document.querySelector(sel);
-const $$ = (sel) => [...document.querySelectorAll(sel)];
-const api = async (method, path, body) => {
-  const res = await fetch(path, {
-    method,
-    headers: { 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const text = await res.text();
-  let data = null;
-  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
-  if (!res.ok) throw Object.assign(new Error('api error'), { status: res.status, data });
-  return data;
-};
+import { $, $$, api, apiErr, esc, toast, relTime, fullTime, duration } from './util.js';
+import { renderUsage } from './usage.js';
 
 let exts = []; // extension manifests from /api/extensions
 let jobs = [];
@@ -25,43 +12,6 @@ let jobSearch = '';
 let runStatusFilter = '';
 
 const extById = (id) => exts.find((e) => e.id === id);
-
-function esc(s) {
-  return String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-}
-
-// ---------- toasts ----------
-function toast(msg, kind = '', ms = 3500) {
-  const el = document.createElement('div');
-  el.className = `toast ${kind}`;
-  el.textContent = msg;
-  $('#toasts').appendChild(el);
-  setTimeout(() => el.remove(), ms);
-}
-const apiErr = (e, fallback) => toast((e.data?.errors || [e.data?.error || fallback]).join(' · '), 'err');
-
-// ---------- time helpers ----------
-function relTime(iso) {
-  if (!iso) return '—';
-  const diff = new Date(iso) - Date.now();
-  const abs = Math.abs(diff);
-  const units = [[86400e3, 'd'], [3600e3, 'h'], [60e3, 'm'], [1e3, 's']];
-  for (const [ms, u] of units) {
-    if (abs >= ms) {
-      const v = Math.round(abs / ms);
-      return diff > 0 ? `in ${v}${u}` : `${v}${u} ago`;
-    }
-  }
-  return 'now';
-}
-function fullTime(iso) {
-  return iso ? new Date(iso).toLocaleString() : '';
-}
-function duration(ms) {
-  if (ms == null) return '';
-  if (ms < 60e3) return (ms / 1000).toFixed(1) + 's';
-  return Math.floor(ms / 60e3) + 'm ' + Math.round((ms % 60e3) / 1000) + 's';
-}
 
 // ---------- schedule text ----------
 function cronToPreset(expr) {
@@ -164,6 +114,16 @@ async function refreshJobs() {
     renderAwake(data.awake);
     renderJobs();
   } catch { /* daemon briefly down — next poll retries */ }
+  refreshUsage();
+}
+
+// Rides the jobs tick rather than adding a timer: this reads a cached snapshot,
+// so its cost is a local request and the strip is never more than a tick stale.
+// Polled even when the display is `off` — M2 wants the state regardless.
+async function refreshUsage() {
+  try {
+    renderUsage(await api('GET', '/api/usage'));
+  } catch { /* 501 without a monitor, or the daemon blinked — leave the last render */ }
 }
 
 async function onJobAction(job, act, el) {
@@ -553,6 +513,9 @@ async function loadSettings() {
     const s = await api('GET', '/api/settings');
     home = s.home || '';
     renderExtSettings(s.extensions);
+    $('#s-usageShow').value = s.usageShow;
+    $('#s-usagePollSec').value = s.usagePollSec;
+    $('#s-usageWarnPct').value = s.usageWarnPct;
     $('#pause-all').checked = s.paused;
     $('#paused-banner').hidden = !s.paused;
   } catch { /* daemon briefly down */ }
@@ -563,9 +526,16 @@ async function saveSettings(ev) {
   const extensions = {};
   for (const fs of $$('#ext-settings fieldset')) extensions[fs.dataset.ext] = collectFields(fs);
   try {
-    await api('PUT', '/api/settings', { extensions });
+    await api('PUT', '/api/settings', {
+      extensions,
+      usageShow: $('#s-usageShow').value,
+      usagePollSec: Number($('#s-usagePollSec').value),
+      usageWarnPct: Number($('#s-usageWarnPct').value),
+    });
     $('#settings-msg').textContent = 'saved ✓';
     setTimeout(() => { $('#settings-msg').textContent = ''; }, 2000);
+    refreshUsage(); // a display-mode change should be visible without a reload
+
   } catch (e) {
     $('#settings-msg').textContent = (e.data?.errors || [e.data?.error || 'save failed']).join(' · ');
   }
@@ -581,6 +551,22 @@ $('#history-job').addEventListener('change', refreshRuns);
 $$('#status-chips .chip').forEach((c) => c.addEventListener('click', () => { setStatusChip(c.dataset.status); refreshRuns(); }));
 $('#log-close').addEventListener('click', closeLog);
 $('#settings-form').addEventListener('submit', saveSettings);
+// Clicking the strip or the chip forces a probe; the floor throttle answers 429
+// with the current reading, so the click is never a dead end.
+for (const sel of ['#usage-strip', '#usage-chip']) {
+  $(sel).addEventListener('click', async () => {
+    try {
+      renderUsage(await api('POST', '/api/usage/refresh'));
+      toast('Usage refreshed', 'ok');
+    } catch (e) {
+      if (e.status === 429) {
+        renderUsage(e.data);
+        toast(`Just checked — try again in ${e.data.retryAfterSec}s`);
+      } else apiErr(e, 'usage refresh failed');
+    }
+  });
+}
+
 $('#running-badge').addEventListener('click', () => {
   location.hash = '#history?status=active';
   if (hashParts().tab === 'history') { setStatusChip('active'); refreshRuns(); }

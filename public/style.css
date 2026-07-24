@@ -5,6 +5,10 @@
   --radius: 10px;
 }
 * { box-sizing: border-box; }
+/* The whole UI hides things with el.hidden, and any class that sets `display`
+   silently beats the UA rule for [hidden] — which is why .menu (display: flex)
+   made the awake menu permanently visible. Settle it once, here. */
+[hidden] { display: none !important; }
 html, body { height: 100%; }
 body {
   margin: 0; background: var(--bg); color: var(--text);
@@ -205,3 +209,27 @@ legend { color: var(--muted); padding: 0 6px; font-size: 12.5px; }
 .toast.ok { border-left-color: var(--ok); }
 .toast button { margin-left: auto; padding: 2px 10px; font-size: 12.5px; }
 @keyframes slidein { from { transform: translateY(8px); opacity: 0; } }
+
+/* ---------- usage strip ---------- */
+/* Fixed height in every state — pending, stale, unavailable — so arriving
+   snapshots never move the toolbar or the list below them. */
+.usage-strip {
+  display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  min-height: 30px; margin-bottom: 12px; padding: 0 2px;
+  font-size: 12.5px; color: var(--muted); cursor: pointer;
+}
+.usage-strip.stale { opacity: .55; }
+.meter { display: flex; align-items: center; gap: 7px; }
+.m-label { color: var(--text); font-weight: 600; }
+.m-bar { width: 64px; height: 5px; border-radius: 999px; background: var(--panel2); overflow: hidden; }
+.m-bar i { display: block; height: 100%; background: var(--ok); border-radius: 999px; transition: width .3s ease; }
+.m-pct { color: var(--text); font-variant-numeric: tabular-nums; }
+.m-reset { font-size: 11.5px; }
+.meter.warn .m-bar i, .usage-chip.warn { background: var(--warn); }
+.meter.warn .m-pct { color: var(--warn); }
+.meter.fail .m-bar i, .usage-chip.fail { background: var(--fail); }
+.meter.fail .m-pct { color: var(--fail); }
+.meter.accent .m-bar i, .usage-chip.accent { background: var(--accent); }
+.usage-chip { background: var(--panel2); color: var(--text); font-variant-numeric: tabular-nums; }
+.usage-chip.warn, .usage-chip.fail, .usage-chip.accent { color: #16110a; }
+.usage-chip.stale { opacity: .55; }
