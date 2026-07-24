@@ -43,6 +43,15 @@ export function fakeSpawn() {
     const child = new EventEmitter();
     child.stdout = new EventEmitter();
     child.stderr = new EventEmitter();
+    // Recording stdin: children driven over a control channel (the usage probe)
+    // write to it, and what they wrote is the thing worth asserting on.
+    child.stdin = {
+      chunks: [],
+      write(c) { this.chunks.push(String(c)); return true; },
+      end(c) { if (c != null) this.write(c); this.ended = true; },
+      on() {}, once() {}, destroy() {},
+      get written() { return this.chunks.join(''); },
+    };
     child.pid = 4242;
     child.unref = () => {};
     child.kill = (sig = 'SIGTERM') => {
