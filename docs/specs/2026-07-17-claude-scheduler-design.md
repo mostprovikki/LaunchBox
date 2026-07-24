@@ -1,5 +1,7 @@
 # Claude Scheduler — Design
 
+> **Status: shipped, and superseded in scope as of 2026-07-25.** This document remains the accurate design of record for the **scheduling core** (daemon/launchd model, job & run model, execution flow, cleanup/uninstall) — all of it still describes the code. It predates two things: the extension system (job types became plugins; see [`../plans/2026-07-19-extensions-roadmap.md`](../plans/2026-07-19-extensions-roadmap.md)), and the v2 scope where Claude **session and usage management** became a second core pillar and the product was renamed **LaunchBox** in the UI/docs. For current scope read [`2026-07-25-launchbox-design.md`](2026-07-25-launchbox-design.md) first. Known drift in this doc: the job model below shows flat `prompt`/`command`/`model` columns (now folded into `params` JSON), and the `POST /api/runs/:id/resume` route is now the generic `POST /api/runs/:id/actions/:actionId`. Left unedited as a historical record.
+
 2026-07-17. Local scheduler UI to create cron jobs / one-shot tasks that run headless Claude Code (`claude -p`) on time. Standalone tool at `~/tools/claude-scheduler/` (own git repo, outside the system_migration suite).
 
 ## Goals
