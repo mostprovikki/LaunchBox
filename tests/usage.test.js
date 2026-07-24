@@ -242,6 +242,27 @@ test('concurrent refreshes coalesce into one probe', async () => {
   assert.deepEqual(sa, sb);
 });
 
+test('refresh({coalesce:false}) waits its turn and then probes for itself', async () => {
+  const { usage, spawnFn } = setup();
+  const scheduled = usage.refresh();
+  const measuring = usage.refresh({ coalesce: false });
+  assert.equal(spawnFn.calls.length, 1, 'the in-flight probe is not duplicated yet');
+
+  const stale = payload();
+  stale.rate_limits.five_hour.utilization = 37;
+  reply(spawnFn, ok(stale));
+  await scheduled;
+
+  // A caller measuring what just happened must not be handed a reading taken
+  // before it asked — it gets its own probe once the first one is out of the way.
+  await sleep(0);
+  assert.equal(spawnFn.calls.length, 2);
+  const fresh = payload();
+  fresh.rate_limits.five_hour.utilization = 52;
+  reply(spawnFn, ok(fresh));
+  assert.equal((await measuring).windows.five_hour.percent, 52);
+});
+
 test('start polls on the interval and stop halts it', async () => {
   // Floor lowered only so the test doesn't take a minute; production floors at 60s.
   const { usage, spawnFn } = setup({ intervalMs: 20, pollFloorMs: 5 });

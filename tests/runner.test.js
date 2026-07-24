@@ -4,18 +4,27 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpData, validJob, fakeSpawn, sleep, extensions } from './helpers.js';
 import { ensureDirs } from '../lib/paths.js';
-import { openDb, createJob, getRun, listRuns, setSetting } from '../lib/db.js';
+import { openDb, createJob, getRun, listRuns, setSetting, getRunUsage, avgDeltaForJob } from '../lib/db.js';
 import { createRunner } from '../lib/runner.js';
 import { shouldNotify } from '../lib/notify.js';
 
-function setup({ minuteMs = 60_000 } = {}) {
+function setup({ minuteMs = 60_000, usage = null } = {}) {
   const dir = tmpData();
   ensureDirs();
   const db = openDb(join(dir, 'test.db'));
   const spawnFn = fakeSpawn();
   const notifications = [];
-  const runner = createRunner({ db, extensions, spawnFn, notifyFn: (t, m) => notifications.push(m), minuteMs });
+  const runner = createRunner({ db, extensions, spawnFn, notifyFn: (t, m) => notifications.push(m), minuteMs, usage });
   return { dir, db, spawnFn, notifications, runner };
+}
+
+// Stands in for the usage monitor — the runner only needs snapshot()/refresh(),
+// so its tests never need a real one (or a real probe).
+function fakeUsage(before, after = before) {
+  const snap = (p) => (p == null ? null : { ok: true, windows: { five_hour: { percent: p }, seven_day: { percent: p + 20 } } });
+  const u = { probes: 0, snapshot: () => snap(before) };
+  u.refresh = async (opts) => { u.probes++; u.lastOpts = opts; return snap(after); };
+  return u;
 }
 
 const INIT = JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-9', model: 'm', cwd: '/tmp' });
@@ -190,4 +199,58 @@ test('killAll kills active and clears queue', async () => {
   assert.equal(runner.runningCount(), 0);
   assert.equal(getRun(db, queued.id).status, 'queued'); // queued row left; failOrphanRuns at boot or cleanup wipes
   assert.equal(spawnFn.calls[0].child.killedWith, 'SIGKILL');
+});
+
+test('usage calibration: a finished run records the delta it caused', async () => {
+  const usage = fakeUsage(37, 41);
+  const { db, spawnFn, runner } = setup({ usage });
+  const job = createJob(db, validJob());
+  const run = runner.start(job, 'manual');
+  const recorded = new Promise((r) => runner.events.once(`usage:${run.id}`, r));
+
+  spawnFn.calls[0].child.emit('close', 0);
+  const row = await recorded;
+
+  assert.deepEqual(row.beforePct, { five_hour: 37, seven_day: 57 });
+  assert.deepEqual(row.afterPct, { five_hour: 41, seven_day: 61 });
+  assert.deepEqual(row.deltaPct, { five_hour: 4, seven_day: 4 });
+  assert.deepEqual(getRunUsage(db, run.id).deltaPct, { five_hour: 4, seven_day: 4 });
+  assert.deepEqual(avgDeltaForJob(db, job.id), { samples: 1, median: { five_hour: 4, seven_day: 4 } });
+
+  // The baseline came from the cache; only the after-sample probes, and it must
+  // not join a probe that started before the run ended.
+  assert.equal(usage.probes, 1);
+  assert.deepEqual(usage.lastOpts, { coalesce: false });
+});
+
+test('usage calibration: a killed run still records; a blind monitor records nothing', async () => {
+  const usage = fakeUsage(37, 44);
+  const { db, spawnFn, runner } = setup({ usage });
+  const job = createJob(db, validJob());
+  const run = runner.start(job, 'manual');
+  const recorded = new Promise((r) => runner.events.once(`usage:${run.id}`, r));
+  runner.kill(run.id);
+  // A killed run consumed real usage — the sample is worth keeping.
+  assert.deepEqual((await recorded).deltaPct, { five_hour: 7, seven_day: 7 });
+
+  const blind = fakeUsage(null);
+  const b = setup({ usage: blind });
+  const j2 = createJob(b.db, validJob());
+  const r2 = b.runner.start(j2, 'manual');
+  b.spawnFn.calls[0].child.emit('close', 0);
+  await sleep(30);
+  assert.equal(getRunUsage(b.db, r2.id), null, 'no baseline → no fabricated row');
+  assert.equal(blind.probes, 0, 'and no pointless probe');
+});
+
+test('usage calibration: a skipped run is not sampled', async () => {
+  const usage = fakeUsage(37, 41);
+  const { db, spawnFn, runner } = setup({ usage });
+  const job = createJob(db, validJob());
+  runner.start(job, 'manual');
+  const skipped = runner.start(job, 'schedule');
+  await sleep(30);
+  assert.equal(skipped.status, 'skipped');
+  assert.equal(getRunUsage(db, skipped.id), null);
+  assert.equal(spawnFn.calls.length, 1);
 });
