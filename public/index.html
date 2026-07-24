@@ -15,6 +15,7 @@
     <a href="#settings" data-tab="settings">Settings</a>
   </nav>
   <div class="header-right">
+    <button id="usage-chip" class="pill usage-chip" hidden title="Usage">◔</button>
     <button id="running-badge" class="pill" hidden title="View running jobs">◐ 0 running</button>
     <div class="menu-wrap">
       <button id="awake-btn" title="Keep this Mac awake so schedules fire">☕ <span id="awake-label">sleep ok</span></button>
@@ -38,6 +39,7 @@
 
 <main>
   <section id="tab-jobs">
+    <div id="usage-strip" class="usage-strip" title="Usage — click to refresh"></div>
     <div class="toolbar">
       <input id="job-search" type="search" placeholder="Filter jobs…" autocomplete="off">
       <span class="spacer"></span>
@@ -66,6 +68,21 @@
 
   <section id="tab-settings" hidden>
     <form id="settings-form" class="card">
+      <h3>Usage</h3>
+      <fieldset>
+        <legend>📊 Usage monitor</legend>
+        <label>Show on Jobs tab
+          <select id="s-usageShow">
+            <option value="banner">banner — labelled meters</option>
+            <option value="compact">compact — one chip in the header</option>
+            <option value="off">off — don't show</option>
+          </select>
+        </label>
+        <div class="row">
+          <label>Check every (sec) <input id="s-usagePollSec" type="number" min="60" max="3600"></label>
+          <label>Warn above (%) <input id="s-usageWarnPct" type="number" min="1" max="99"></label>
+        </div>
+      </fieldset>
       <h3>Extensions</h3>
       <div id="ext-settings"></div>
       <div class="row right"><span id="settings-msg" class="muted"></span><button class="primary">Save</button></div>

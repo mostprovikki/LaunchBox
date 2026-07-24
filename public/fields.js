@@ -1,9 +1,7 @@
 // Renders extension FieldSpec arrays ({key,label,type,…}) into form controls
 // and reads them back. Shared by the job dialog and the settings tab.
 
-function esc(s) {
-  return String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-}
+import { esc } from './util.js';
 
 function control(f, value) {
   const v = value ?? f.default ?? '';

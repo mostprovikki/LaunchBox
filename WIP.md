@@ -9,15 +9,15 @@ All 9 steps done (scaffold+paths, db, validate+preview, formatter, notify+runner
 
 Design: `docs/specs/2026-07-25-launchbox-design.md`. Each milestone has its own plan under `docs/plans/`.
 
-- [ ] **M1 · usage foundation** — `2026-07-25-m1-usage-foundation.md`
+- [x] **M1 · usage foundation** — `2026-07-25-m1-usage-foundation.md` — **shipped, 78/78 tests pass.** Read-only: nothing in M1 can block a run or suppress a fire.
   - [x] 1 `lib/usage.js` monitor + `tests/usage.test.js` — **71/71 tests pass**. `fakeSpawn` now records `stdin`. Deviations from the plan, both deliberate: self-rescheduling `setTimeout` rather than `setInterval` (a fixed interval can't back off), and the served snapshot is decoupled from the recorded row — a failure is logged with empty windows while the last good reading keeps being served, marked `stale`, with a `checkedAt` added to the documented shape so the UI can distinguish data age from probe age. The probe must `settle` **before** killing the answered child: the kill makes it exit 143, and a `close` handler that wins the race discards a good reading.
   - [x] 2 db: `usage_snapshots` + `run_usage` (+ `cleanupAll`). `avgDeltaForJob` returns `{samples, median}` (median, not mean — one delta polluted by a concurrent run would dominate a small sample).
   - [x] 3 per-run usage delta — `createRunner({ usage })`, optional; baseline read from the cache at launch, after-sample probed at finish with `refresh({coalesce: false})` so it can't be handed a reading taken before the run ended. Emits `usage:<runId>`. **75/75 tests pass.**
   - [x] 4 settings: `usagePollSec` (60-3600), `usageShow`, `usageWarnPct` (1-99) — core block, validated on write, and a poll-interval change re-arms the monitor immediately.
   - [x] 5 API: `GET /api/usage` (pending shape before the first probe, never null), `POST /api/usage/refresh` (429 + current snapshot inside the floor), `GET /api/usage/history?limit=&okOnly=`. **78/78 tests pass.**
-  - [ ] 6 UI: extract `public/util.js`, then the usage strip (banner / compact / off)
-  - [ ] 7 tests (`tests/usage.test.js`) — no test spawns the real `claude`
-  - [ ] 8 manual verify against the raw probe
+  - [x] 6 UI: `public/util.js` extracted (`$`/`$$`/`api`/`apiErr`/`esc`/`toast`/`relTime`/`fullTime`/`duration`), `public/usage.js` renders the strip from `buckets` (they carry severity/scope; `windows` is the fallback), Usage card in Settings, click on strip/chip forces a probe. Found and fixed a **pre-existing** bug: `.menu { display: flex }` outranks the UA rule for `[hidden]`, so the awake menu was permanently visible and my strip inherited the same flaw — now settled globally with `[hidden] { display: none !important }`.
+  - [x] 7 tests — `tests/usage.test.js` + runner/api coverage. No test spawns the real `claude`.
+  - [x] 8 manual verified 2026-07-24: raw probe read 5h 57 / week 67 / Fable 90 critical+active, and `/api/usage` plus the strip matched exactly. All three `usageShow` modes render with no layout shift (banner strip 30px in every data state, compact chip 24px, off nothing).
 - [ ] **M2 · usage-aware scheduling** — `2026-07-25-m2-usage-aware-scheduling.md`
   - [ ] `afterReset` schedule type (+ validate, preview, deterministic jitter)
   - [ ] budget guard via injectable `admit(job, trigger)` on `createRunner`
