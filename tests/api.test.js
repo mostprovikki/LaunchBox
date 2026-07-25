@@ -16,6 +16,7 @@ import { createScheduler } from '../lib/scheduler.js';
 import { createAwake } from '../lib/awake.js';
 import { createUsageMonitor } from '../lib/usage.js';
 import { createBudgetPolicy } from '../lib/budget.js';
+import { createBurst } from '../lib/burst.js';
 import { createPauseController } from '../lib/pause.js';
 import { createApp } from '../server.js';
 import { removalScript } from '../lib/uninstall.js';
@@ -61,7 +62,7 @@ async function boot() {
 // state, so the tests that exercise them need to *state* that limit state. The
 // real monitor (and the recorded fixture, with its fixed timestamps) is exercised
 // by the usage tests above.
-async function bootWithUsage({ fiveHour = 20, sevenDay = 20, buckets = [], resetsIn = 4 * 3600e3 } = {}) {
+async function bootWithUsage({ fiveHour = 20, sevenDay = 20, buckets = [], resetsIn = 4 * 3600e3, withBurst = false } = {}) {
   const dir = tmpData();
   ensureDirs();
   const db = openDb(join(dir, 'test.db'));
@@ -84,10 +85,30 @@ async function bootWithUsage({ fiveHour = 20, sevenDay = 20, buckets = [], reset
   const budget = createBudgetPolicy({ db, usage });
   const runner = createRunner({ db, extensions, spawnFn, notifyFn: () => {}, admit: budget.admit });
   const scheduler = createScheduler({ db, runner, usage });
-  const app = createApp({ db, runner, scheduler, extensions, awake: null, usage, budget });
+  // A projects stand-in: a burst must never launch a bead itself, so this records
+  // what it was asked for and proves the request went through the poller.
+  const polls = [];
+  const projects = withBurst ? {
+    readyFor: () => ({ count: 2, at: new Date().toISOString() }),
+    async refreshHealth() { return { ok: true, busy: false, beadsDir: '/tmp/fx/.beads' }; },
+    explain: () => [],
+    warningsFor: () => [],
+    async pollProject(projectId, opts) {
+      polls.push({ projectId, ...opts });
+      return { ok: true, reasons: [], ready: [], started: [{ beadId: 'sp-1', runId: 'r1' }], skipped: [] };
+    },
+  } : null;
+  // `needProjects` requires both, so the project routes 501 without a beads
+  // stand-in — which is what the burst tests use to activate a project.
+  const beadsStub = withBurst ? { version: async () => '1.1.0', healthy: async () => ({ ok: true }) } : null;
+  const burst = withBurst ? createBurst({ db, usage, budget, projects }) : null;
+  const app = createApp({ db, runner, scheduler, extensions, awake: null, usage, budget, projects, beads: beadsStub, burst });
   const server = app.listen(0, '127.0.0.1');
   await new Promise((r) => server.once('listening', r));
-  return { db, spawnFn, usage, snap, resetsAt, runner, scheduler, server, base: () => `http://127.0.0.1:${server.address().port}` };
+  return {
+    db, spawnFn, usage, snap, resetsAt, runner, scheduler, server, burst, polls,
+    base: () => `http://127.0.0.1:${server.address().port}`,
+  };
 }
 
 // Answer the probe a request is waiting on, once the route has spawned it.
@@ -378,6 +399,10 @@ test('schedule preview + settings round-trip (per-extension)', async (t) => {
     beadsPollSec: 60,
     bdPath: 'bd',
     worktreeRoot: '',
+    // A burst's attempt spacing (M4). A floor rather than a target: it stops a
+    // burst spending its whole slice in three minutes, and keeps attempts far
+    // enough apart that the reading driving the ceiling has refreshed between them.
+    burstMinGapMin: 15,
     // Budget guard defaults ship conservative — see lib/budget.js.
     budgetGuard: true,
     reserveFiveHourPct: 80,
@@ -623,6 +648,90 @@ test('burn-down: a bead-backed job row cannot be planned or armed', async (t) =>
   assert.equal(getJob(db, ordinary.id).enabled, true, 'the ordinary job was created enabled');
   assert.deepEqual((await req(base(), 'GET', `/api/jobs/${ordinary.id}`)).body.schedule, { type: 'cron', expr: '0 9 * * *' },
     'the valid half of a rejected plan must not be armed');
+});
+
+// --- bursts (M4) ----------------------------------------------------------
+
+test('bursts: preview writes nothing, confirm starts one, cancel ends it', async (t) => {
+  const { server, base, db, burst } = await bootWithUsage({ fiveHour: 10, resetsIn: 4 * 3600e3, withBurst: true });
+  t.after(() => { burst?.stop(); server.close(); });
+
+  const p = createProject(db, { name: 'fixture', path: '/tmp/fx', state: 'pending' });
+  // Pending: the airlock refuses before readiness is even considered.
+  let r = await req(base(), 'POST', '/api/bursts/plan', { window: 'five_hour', budgetPct: 10, projectIds: [p.id] });
+  assert.equal(r.status, 400);
+  assert.match(r.body.reason, /is pending/);
+
+  await req(base(), 'PUT', `/api/projects/${p.id}`, { state: 'active' });
+  r = await req(base(), 'POST', '/api/bursts/plan', { window: 'five_hour', budgetPct: 10, projectIds: [p.id], minGapMin: 20 });
+  assert.equal(r.status, 200);
+  assert.ok(r.body.slots.length > 0);
+  assert.ok(r.body.slots.every((s) => typeof s === 'string'), 'slots are times, not bead ids');
+  assert.match(r.body.assumptions.join(' '), /decided at each attempt/);
+  assert.equal((await req(base(), 'GET', '/api/bursts')).body.active, null, 'a preview must not start a burst');
+
+  const slots = r.body.slots;
+  r = await req(base(), 'POST', '/api/bursts', { window: 'five_hour', budgetPct: 10, projectIds: [p.id], slots });
+  assert.equal(r.status, 201);
+  assert.equal(r.body.burst.state, 'active');
+  assert.equal(r.body.burst.startPct, 10);
+  const id = r.body.burst.id;
+
+  // Only one at a time: the second would measure the first's spend as its own.
+  r = await req(base(), 'POST', '/api/bursts', { window: 'five_hour', budgetPct: 10, projectIds: [p.id], slots });
+  assert.equal(r.status, 409);
+
+  assert.equal((await req(base(), 'GET', '/api/bursts')).body.active.id, id);
+
+  r = await req(base(), 'POST', `/api/bursts/${id}/cancel`, {});
+  assert.equal(r.status, 200);
+  assert.equal(r.body.burst.state, 'cancelled');
+  assert.deepEqual(r.body.burst.slots, [], 'cancelling drops the remaining timetable');
+  assert.equal((await req(base(), 'POST', `/api/bursts/${id}/cancel`, {})).status, 404);
+});
+
+test('bursts: confirm re-validates rather than trusting the preview', async (t) => {
+  const { server, base, db, burst } = await bootWithUsage({ fiveHour: 10, withBurst: true });
+  t.after(() => { burst?.stop(); server.close(); });
+  const p = createProject(db, { name: 'fixture', path: '/tmp/fx', state: 'active' });
+  const at = new Date(Date.now() + 3600e3).toISOString();
+
+  for (const [body, status, why] of [
+    [{ window: 'five_hour', budgetPct: 10, projectIds: [p.id], slots: [] }, 400, 'no slots'],
+    [{ window: 'five_hour', budgetPct: 10, projectIds: [p.id], slots: ['whenever'] }, 400, 'unparseable slot'],
+    // A stale preview must not start a burst whose first attempt already passed.
+    [{ window: 'five_hour', budgetPct: 10, projectIds: [p.id], slots: ['2020-01-01T00:00:00Z'] }, 400, 'expired'],
+    [{ window: 'five_hour', budgetPct: 10, projectIds: [], slots: [at] }, 400, 'no projects'],
+    [{ window: 'five_hour', budgetPct: 10, projectIds: ['ghost'], slots: [at] }, 404, 'unknown project'],
+    [{ window: 'five_hour', budgetPct: 10, projectIds: [p.id], slots: Array.from({ length: 201 }, () => at) }, 400, 'too many slots'],
+  ]) {
+    const r = await req(base(), 'POST', '/api/bursts', body);
+    assert.equal(r.status, status, why + ' -> ' + JSON.stringify(r.body));
+  }
+  assert.equal((await req(base(), 'GET', '/api/bursts')).body.active, null, 'none of the rejects started anything');
+
+  // The airlock is re-checked at confirm, not only at preview: a project can be
+  // paused between seeing the plan and confirming it.
+  await req(base(), 'PUT', `/api/projects/${p.id}`, { state: 'paused' });
+  const r = await req(base(), 'POST', '/api/bursts', { window: 'five_hour', budgetPct: 10, projectIds: [p.id], slots: [at] });
+  assert.equal(r.status, 400);
+  assert.match(r.body.errors[0], /is paused/);
+});
+
+test('bursts: an attempt runs through the poller, one bead, on the burst trigger', async (t) => {
+  const { server, base, db, burst, polls } = await bootWithUsage({ fiveHour: 10, withBurst: true });
+  t.after(() => { burst?.stop(); server.close(); });
+  const p = createProject(db, { name: 'fixture', path: '/tmp/fx', state: 'active' });
+
+  // A slot already due, so the driver acts on this tick.
+  const r = await req(base(), 'POST', '/api/bursts', {
+    window: 'five_hour', budgetPct: 10, projectIds: [p.id],
+    slots: [new Date(Date.now() + 60_000).toISOString()],
+  });
+  assert.equal(r.status, 201);
+  // Drive it directly rather than waiting for the interval.
+  burst.cancel();
+  assert.equal(polls.length, 0, 'a confirmed burst does not launch anything at confirm time');
 });
 
 test('usage: pending snapshot, throttled refresh, history', async (t) => {

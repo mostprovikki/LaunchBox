@@ -7,7 +7,7 @@
 //   1. a project that will never contribute work says so, in words (`reasons`);
 //   2. a completed bead leaves an audit line in the human's checkout (auditNote).
 
-import { $, api, apiErr, esc, toast, relTime, fullTime } from './util.js';
+import { $, $$, api, apiErr, esc, toast, relTime, fullTime } from './util.js';
 
 // Which rows have the ready list expanded, plus the last body fetched for each.
 // The list re-renders on a timer, so expansion has to live outside the DOM or a
@@ -165,6 +165,9 @@ function renderRootsLine(data) {
 }
 
 function render(data) {
+  // Kept for the burst dialog, which needs to know which projects are activated
+  // without a second fetch when it opens.
+  lastProjects = data.projects ?? [];
   $('#projects-audit').textContent = data.auditNote || AUDIT_FALLBACK;
   renderRootsLine(data);
   const list = $('#projects-list');
@@ -316,11 +319,189 @@ async function discoverProjects() {
   refreshProjects();
 }
 
+// ---------- bursts ----------
+// "Spend ~15% of this window working through ready beads." Two things this screen
+// must not misrepresent:
+//   1. the meter is MEASURED spend, not the estimate that sized the timetable;
+//   2. WHICH beads run is decided at each attempt, not now — unlike the burn-down
+//      planner, a burst cannot name the work it will do, and implying otherwise
+//      would be a lie about unattended automation.
+
+// The server's slots, held verbatim for confirm. No arithmetic here that could
+// disagree with the policy that produced them.
+let plannedBurst = null;
+let lastProjects = [];
+
+const PRESETS = [
+  { label: '10% of session', window: 'five_hour', pct: 10 },
+  { label: '25% of session', window: 'five_hour', pct: 25 },
+  { label: '5% of weekly', window: 'seven_day', pct: 5 },
+];
+
+const WINDOW_LABELS = { five_hour: '5-hour', seven_day: 'weekly' };
+const windowLabel = (k) => WINDOW_LABELS[k] ?? String(k).replace(/_/g, ' ');
+
+function renderBurstStrip(active) {
+  const strip = $('#burst-strip');
+  if (!active) { strip.hidden = true; return; }
+  strip.hidden = false;
+  const spent = Math.max(0, (active.currentPct ?? active.startPct) - active.startPct);
+  const pctOfBudget = Math.min(100, (spent / active.budgetPct) * 100);
+  $('#burst-title').textContent = `Burst running · ${spent.toFixed(2)}% of ${active.budgetPct}% of the ${windowLabel(active.window)} window`;
+  $('#burst-fill').style.width = `${pctOfBudget}%`;
+  const left = (active.slots ?? []).length;
+  const next = left ? (active.slots ?? [])[0] : null;
+  $('#burst-detail').textContent = [
+    `${active.runs} run${active.runs === 1 ? '' : 's'} started`,
+    `${left} attempt${left === 1 ? '' : 's'} left`,
+    next ? `next ${relTime(next)}` : 'no attempts left',
+    'spend is measured, not estimated',
+  ].join(' · ');
+}
+
+async function refreshBurst() {
+  try {
+    const out = await api('GET', '/api/bursts');
+    renderBurstStrip(out.active);
+  } catch { /* daemon briefly down, or bursts unavailable */ }
+}
+
+async function openBurstDialog() {
+  plannedBurst = null;
+  $('#burst-errors').hidden = true;
+  $('#burst-result').hidden = true;
+  $('#burst-confirm').hidden = true;
+  // Fetch rather than trust the 5s tick. Found by driving it: opening the dialog
+  // straight after switching to the tab showed "no activated projects", because the
+  // background refresh had not run yet — a dialog that tells you your projects
+  // cannot contribute when they can is worse than a slow one. It costs zero `bd`
+  // calls by design, and it also means the ready counts are current at the moment
+  // the decision is made.
+  await refreshProjects();
+
+  const windows = [...new Set([...PRESETS.map((p) => p.window), 'five_hour', 'seven_day'])];
+  $('#b-window').innerHTML = windows.map((w) => `<option value="${esc(w)}">${esc(windowLabel(w))} window</option>`).join('');
+  $('#burst-presets').innerHTML = PRESETS
+    .map((p, i) => `<button type="button" class="preset" data-i="${i}">${esc(p.label)}</button>`).join('');
+  $$('#burst-presets .preset').forEach((n) => n.addEventListener('click', () => {
+    const p = PRESETS[Number(n.dataset.i)];
+    $('#b-window').value = p.window;
+    $('#b-budgetPct').value = String(p.pct);
+  }));
+
+  // Only activated projects are offered. The airlock is enforced server-side too,
+  // but offering a pending repo here would imply a burst could run it.
+  const eligible = lastProjects.filter((p) => p.state === 'active');
+  const held = lastProjects.length - eligible.length;
+  $('#b-projects').innerHTML = eligible.length
+    ? eligible.map((p) => `<label><input type="checkbox" value="${esc(p.id)}" checked>${esc(p.name)}`
+      + ` <span class="muted">${p.ready?.count == null ? 'ready unknown' : `${p.ready.count} ready`}</span></label>`).join('')
+      + (held ? `<p class="muted">${held} project${held === 1 ? '' : 's'} not activated — a burst can only draw from activated ones.</p>` : '')
+    : '<p class="muted">No activated projects. Activate one first — a burst cannot run work from a repo you haven\'t activated.</p>';
+
+  $('#burst-dialog').showModal();
+}
+
+const burstBody = () => ({
+  window: $('#b-window').value,
+  budgetPct: Number($('#b-budgetPct').value),
+  projectIds: $$('#b-projects input[type=checkbox]').filter((n) => n.checked).map((n) => n.value),
+  minGapMin: $('#b-minGapMin').value || null,
+  maxRuns: $('#b-maxRuns').value || null,
+});
+
+function renderBurstPreview(p) {
+  $('#burst-result').hidden = false;
+  $('#burst-confirm').hidden = false;
+  // The policy labels windows by key, which is for machines. Same swap the
+  // burn-down planner does — M2 shipped with `five_hour` leaking into the text and
+  // it read like a bug.
+  const humanise = (s) => String(s).replaceAll(p.window, windowLabel(p.window));
+  const conf = p.confidence === 'low'
+    ? ' · confidence <span class="conf-low">low</span> — cost per run is a guess from fewer than 3 measured runs'
+    : ' · confidence <span class="conf-high">high</span>';
+  $('#burst-summary').innerHTML = `<p><strong>${p.slots.length}</strong> attempt${p.slots.length === 1 ? '' : 's'}`
+    + ` · about <strong>${p.estimate.perRunPct}%</strong> per run (${esc(p.estimate.source)}, ${p.estimate.samples} sample${p.estimate.samples === 1 ? '' : 's'})`
+    + ` · up to <strong>${p.budgetPct}%</strong> of the ${esc(windowLabel(p.window))} window`
+    + ` · ${p.usablePct}% usable under the guard reserve${conf}</p>`
+    + '<p class="note">The beads themselves are chosen at each attempt, from whatever is ready and eligible then.</p>';
+  $('#burst-assumptions').innerHTML = (p.assumptions ?? []).map((a) => `<li>${esc(humanise(a))}</li>`).join('');
+  // Absolute times, one per row, like the burn-down plan. Relative labels rounded
+  // two different slots to the same "in 1h", which reads as a duplicate.
+  $('#burst-slots').innerHTML = p.slots
+    .map((at, i) => `<div><span>#${i + 1}</span><span>${esc(new Date(at).toLocaleString())}</span><span>~${p.estimate.perRunPct}%</span></div>`).join('');
+  // Show the spacing that was actually used — the field may have been left blank,
+  // in which case the server applied the burstMinGapMin setting.
+  if (p.minGapMin != null) $('#b-minGapMin').value = String(p.minGapMin);
+}
+
+async function previewBurst() {
+  $('#burst-errors').hidden = true;
+  const body = burstBody();
+  if (!body.projectIds.length) {
+    $('#burst-errors').hidden = false;
+    $('#burst-errors').textContent = 'Pick at least one activated project.';
+    return;
+  }
+  try {
+    plannedBurst = await api('POST', '/api/bursts/plan', body);
+    renderBurstPreview(plannedBurst);
+  } catch (e) {
+    plannedBurst = null;
+    $('#burst-result').hidden = true;
+    $('#burst-confirm').hidden = true;
+    $('#burst-errors').hidden = false;
+    $('#burst-errors').textContent = e.data?.reason || (e.data?.errors ?? []).join(' · ') || e.data?.error || 'could not plan that burst';
+  }
+}
+
+async function confirmBurst() {
+  if (!plannedBurst) return;
+  const body = burstBody();
+  try {
+    // The server's own slots, posted back unchanged.
+    const out = await api('POST', '/api/bursts', { ...body, slots: plannedBurst.slots });
+    $('#burst-dialog').close();
+    toast(`Burst started — up to ${out.burst.budgetPct}% of the ${windowLabel(out.burst.window)} window, `
+      + `${out.burst.slots.length} attempt${out.burst.slots.length === 1 ? '' : 's'}. It stops on measured spend.`);
+    refreshBurst();
+  } catch (e) {
+    $('#burst-errors').hidden = false;
+    $('#burst-errors').textContent = e.data?.reason || (e.data?.errors ?? []).join(' · ') || e.data?.error || 'could not start that burst';
+  }
+}
+
+async function cancelBurst() {
+  const out = await api('GET', '/api/bursts').catch(() => null);
+  const active = out?.active;
+  if (!active) { refreshBurst(); return; }
+  // In-flight runs are deliberately left alone: stopping them is the Pause/stop
+  // ladder's job, and a stopped run hands its bead back rather than closing it.
+  if (!confirm(`Cancel this burst?\n\nNo further attempts will be made. A run already in progress keeps going — `
+    + `use Pause or the run's own stop button for that.`)) return;
+  try {
+    await api('POST', `/api/bursts/${active.id}/cancel`);
+    toast('Burst cancelled — no further attempts.');
+  } catch (e) {
+    apiErr(e, 'could not cancel the burst');
+  }
+  refreshBurst();
+}
+
 // ---------- wire up ----------
 $('#project-register').addEventListener('click', registerProject);
 $('#project-path').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') registerProject(); });
 $('#project-discover').addEventListener('click', discoverProjects);
+$('#project-burst').addEventListener('click', openBurstDialog);
+$('#burst-preview').addEventListener('click', previewBurst);
+$('#burst-confirm').addEventListener('click', confirmBurst);
+$('#burst-close').addEventListener('click', () => $('#burst-dialog').close());
+$('#burst-cancel').addEventListener('click', cancelBurst);
 
 // Gated on visibility, like the history tick: the list is cheap but it is a
 // per-project cache read on the daemon, and a hidden tab has no reason to ask.
-setInterval(() => { if (!$('#tab-projects').hidden) refreshProjects(); }, 5000);
+setInterval(() => {
+  if ($('#tab-projects').hidden) return;
+  refreshProjects();
+  refreshBurst();
+}, 5000);
