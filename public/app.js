@@ -512,8 +512,15 @@ function openPlanDialog() {
     .map((w) => `<option value="${esc(w)}">${esc(resetWindowLabel(w))} window</option>`).join('');
   const soon = new Date(Date.now() + 6 * 3600e3);
   $('#p-deadline').value = new Date(soon.getTime() - soon.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-  $('#p-jobs').innerHTML = jobs.length
-    ? jobs.map((j) => `<label><input type="checkbox" value="${esc(j.id)}">${esc(j.name)}${j.enabled ? '' : ' (disabled)'}</label>`).join('')
+  // Bead-backed rows are deliberately not offered. Confirming a plan enables
+  // every job in it, and a bead's row is disabled on purpose so only its project
+  // can launch it — with a lease, a claim and a close. Arming one here would skip
+  // all three and could double-run the bead. The server enforces this too.
+  const plannable = jobs.filter((j) => !j.params?._beadId);
+  const beadCount = jobs.length - plannable.length;
+  $('#p-jobs').innerHTML = plannable.length
+    ? plannable.map((j) => `<label><input type="checkbox" value="${esc(j.id)}">${esc(j.name)}${j.enabled ? '' : ' (disabled)'}</label>`).join('')
+      + (beadCount ? `<p class="muted">${beadCount} bead task${beadCount === 1 ? '' : 's'} hidden — those are run by their project, not planned here.</p>` : '')
     : '<p class="muted">No jobs to plan with yet.</p>';
   $('#plan-dialog').showModal();
 }

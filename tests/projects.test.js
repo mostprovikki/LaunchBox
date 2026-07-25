@@ -777,6 +777,36 @@ test('an unrecognised permMode is an error, not a silent downgrade', () => {
   assert.equal(r.config.defaults.permMode, 'default');
 });
 
+// --- repo-declared budget ------------------------------------------------
+
+// `materialise` copies config.budget straight onto params.budget and builds its
+// row with createJob rather than validateJob, so anything unvalidated here
+// reaches the guard unchecked.
+test('a repo-declared budget block is validated, not taken on trust', () => {
+  const ok = parseProjectConfig({ autoLabel: 'x', budget: { minHeadroomPct: 25 } });
+  assert.equal(ok.ok, true);
+  assert.deepEqual(ok.config.budget, { minHeadroomPct: 25 }, 'a repo may hold itself to more headroom');
+
+  const bad = parseProjectConfig({ autoLabel: 'x', budget: { minHeadroomPct: 250 } });
+  assert.equal(bad.ok, false);
+  assert.match(bad.errors.join(' '), /minHeadroomPct must be 1-99/);
+
+  assert.equal(parseProjectConfig({ autoLabel: 'x', budget: 'lots' }).ok, false, 'a non-object budget is an error');
+  assert.equal(parseProjectConfig({ autoLabel: 'x' }).config.budget, null, 'no block declared means no block stored');
+});
+
+// permMode is the repo saying what may be done to its own files. The budget guard
+// protects account headroom shared with every other project, so it is not the
+// repo's to exempt itself from — and an error rather than a silent strip, so the
+// declaration cannot quietly mean something weaker than it says.
+test('a repo cannot exempt itself from the budget guard', () => {
+  const r = parseProjectConfig({ autoLabel: 'x', budget: { ignoreGuard: true, minHeadroomPct: 10 } });
+  assert.equal(r.ok, false);
+  assert.match(r.errors.join(' '), /ignoreGuard cannot be declared by a project/);
+  assert.equal(r.config.budget?.ignoreGuard, undefined, 'the exemption must not survive into the stored config');
+  assert.equal(r.config.budget?.minHeadroomPct, 10, 'the restricting half of the block still applies');
+});
+
 test('the materialised job carries permMode — a field default would never apply', async () => {
   const { projects, project, runner } = setup({
     config: { ...CONFIG, defaults: { ...CONFIG.defaults, permMode: 'auto' } },

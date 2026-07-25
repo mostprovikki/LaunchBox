@@ -333,14 +333,30 @@ export function createApp({
     res.json(policy.explain(job));
   });
 
+  // A bead's job row is not plannable, and this is a safety rule rather than a
+  // tidiness one. That row exists to carry per-bead cost history and ships
+  // deliberately disabled with a spent `once` entry so the cron scheduler can
+  // never arm it; `lib/projects.js` launches it directly, taking a lease,
+  // re-reading the bead, claiming it, and closing it only on an asserted
+  // completion. A planned `once` entry would fire it through the scheduler
+  // instead — no lease, no claim, no marker check, no close — and could race the
+  // poller for the same bead, which is the one thing the lease exists to prevent.
+  // Checked here and not only in the dialog: the dialog is a convenience, this is
+  // the rule.
+  const beadJobIds = (ids) => ids.filter((id) => getJob(db, id)?.params?._beadId);
+  const NOT_PLANNABLE = 'bead-backed jobs cannot be planned: the scheduler runs those from their project (lease, claim and close), and arming one here would bypass all three';
+
   // Burn-down preview. Never writes: the slots come back for the user to confirm.
   app.post('/api/budget/plan', (req, res) => {
     const b = req.body || {};
+    const jobIds = Array.isArray(b.jobIds) ? b.jobIds : [b.jobIds].filter(Boolean);
+    const beads = beadJobIds(jobIds);
+    if (beads.length) return res.status(400).json({ ok: false, reason: NOT_PLANNABLE });
     const result = policy.plan({
       window: b.window,
       targetPct: Number(b.targetPct),
       deadline: b.deadline || null,
-      jobIds: Array.isArray(b.jobIds) ? b.jobIds : [b.jobIds].filter(Boolean),
+      jobIds,
       minGapMin: Number(b.minGapMin) || undefined,
       maxConcurrent: Number(b.maxConcurrent) || undefined,
     });
@@ -362,6 +378,20 @@ export function createApp({
       if (at <= new Date()) return res.status(400).json({ errors: ['this plan has expired — re-plan and confirm again'] });
       const job = getJob(db, s?.jobId);
       if (!job) return res.status(404).json({ errors: [`unknown job: ${s?.jobId}`] });
+      // Rejected wholesale rather than dropped: apply() below force-enables every
+      // job it touches, so silently skipping this slot would leave the user's
+      // confirmed plan short by one with nothing said.
+      //
+      // Measured consequence of not having this check (reproduced live 2026-07-25,
+      // then fixed): the row came back enabled with a real future fire AND
+      // `_beadId`/`_projectId` stripped, because the round-trip through
+      // `validateJob` runs `validateFields`, which drops keys the extension does
+      // not declare. That detaches the row from its bead permanently —
+      // `findJobByBead` stops matching, so the poller can neither heal the row nor
+      // reuse it, mints a second row for the same bead, and throws away the cost
+      // history §4a.7 depends on. Meanwhile the orphan keeps firing the bead's
+      // prompt on a schedule with no lease, no claim and no close.
+      if (job.params?._beadId) return res.status(400).json({ errors: [NOT_PLANNABLE] });
       if (!byJob.has(job.id)) byJob.set(job.id, { job, ats: [] });
       byJob.get(job.id).ats.push(at.toISOString());
     }
