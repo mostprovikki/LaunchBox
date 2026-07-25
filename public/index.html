@@ -43,6 +43,7 @@
     <div class="toolbar">
       <input id="job-search" type="search" placeholder="Filter jobs…" autocomplete="off">
       <span class="spacer"></span>
+      <button id="plan-burndown" title="Spread remaining capacity across a deadline">◷ Plan burn-down</button>
       <button id="new-job" class="primary">＋ New job</button>
     </div>
     <div id="jobs-list" class="list"></div>
@@ -82,6 +83,18 @@
           <label>Check every (sec) <input id="s-usagePollSec" type="number" min="60" max="3600"></label>
           <label>Warn above (%) <input id="s-usageWarnPct" type="number" min="1" max="99"></label>
         </div>
+      </fieldset>
+      <fieldset>
+        <legend>🛡 Budget &amp; reserve</legend>
+        <p class="muted note">Keeps headroom free for your own interactive work. Only <em>scheduled</em> fires are ever skipped — a manual run always goes ahead — and if usage can't be read the guard lets everything through.</p>
+        <label class="switch small"><input type="checkbox" id="s-budgetGuard"><i></i><span>Enforce the guard</span></label>
+        <div class="row">
+          <label>Reserve 5h above (%) <input id="s-reserveFiveHourPct" type="number" min="1" max="100"></label>
+          <label>Reserve weekly above (%) <input id="s-reserveWeeklyPct" type="number" min="1" max="100"></label>
+        </div>
+        <label class="switch small"><input type="checkbox" id="s-pauseOnWarning"><i></i><span>Stand down while a limit is flagged warning or critical</span></label>
+        <label>Wake this Mac before a reset-anchored fire (min) <input id="s-awakeResetLeadMin" type="number" min="0" max="240"></label>
+        <div id="budget-state" class="note"></div>
       </fieldset>
       <h3>Extensions</h3>
       <div id="ext-settings"></div>
@@ -142,11 +155,51 @@
           <option value="failure">on failure</option><option value="always">always</option><option value="never">never</option>
         </select>
       </label>
+      <fieldset>
+        <legend>🛡 Budget guard</legend>
+        <label class="switch small"><input type="checkbox" id="f-ignoreGuard"><i></i><span>Run this job even when the guard would skip it</span></label>
+        <p class="note">Only for work that genuinely matters more than keeping interactive headroom free.</p>
+        <label>Require free headroom (%) <input id="f-minHeadroomPct" type="number" min="1" max="99" placeholder="no extra requirement"></label>
+      </fieldset>
     </details>
 
     <div class="row right">
       <button type="button" id="dialog-cancel">Cancel</button>
       <button class="primary" id="dialog-save" value="save">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="plan-dialog">
+  <form id="plan-form" method="dialog">
+    <h2>Plan burn-down</h2>
+    <p class="muted note">Lays out one-off fires that spend a chosen slice of what's left in a window before it resets. Nothing is scheduled until you confirm, and the plan is capped by the reserve the guard enforces.</p>
+    <div id="plan-errors" class="errors" hidden></div>
+
+    <div class="row">
+      <label>Window <select id="p-window"></select></label>
+      <label>Spend up to (%) <input id="p-targetPct" type="number" min="1" max="100" value="20"></label>
+    </div>
+    <label>By <input id="p-deadline" type="datetime-local"></label>
+    <div class="row">
+      <label>Min gap (min) <input id="p-minGapMin" type="number" min="1" max="1440" value="15"></label>
+      <label>At once <input id="p-maxConcurrent" type="number" min="1" max="10" value="1"></label>
+    </div>
+    <fieldset>
+      <legend>Jobs to spread it across</legend>
+      <div id="p-jobs" class="plan-jobs"></div>
+    </fieldset>
+
+    <div id="plan-result" hidden>
+      <div id="plan-summary"></div>
+      <ul id="plan-assumptions" class="note"></ul>
+      <div id="plan-slots" class="plan-slots"></div>
+    </div>
+
+    <div class="row right">
+      <button type="button" id="plan-cancel">Close</button>
+      <button type="button" id="plan-preview">Preview plan</button>
+      <button type="button" id="plan-confirm" class="primary" hidden>Schedule these fires</button>
     </div>
   </form>
 </dialog>

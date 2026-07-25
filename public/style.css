@@ -85,7 +85,11 @@ code { background: var(--panel2); padding: 1px 6px; border-radius: 5px; font-siz
 .switch.small i::after { width: 12px; height: 12px; }
 .switch.small input:checked + i::after { left: 14px; }
 .switch.small span { color: var(--muted); font-size: 13px; }
-.switch.small input:checked ~ span { color: var(--warn); }
+/* Amber-when-on belongs to the header's Pause switch, where "on" means schedules
+   are stopped. A settings toggle that is on because it's the safe default must
+   not borrow that alarm. */
+header .switch.small input:checked ~ span { color: var(--warn); }
+.switch.small input:checked ~ span { color: var(--text); }
 
 /* chips */
 .chips { display: flex; gap: 6px; }
@@ -178,6 +182,29 @@ legend { color: var(--muted); padding: 0 6px; font-size: 12.5px; }
   border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; color: var(--fail); font-size: 13px;
 }
 .muted { color: var(--muted); }
+.note { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 6px 0; }
+
+/* ---------- budget guard / burn-down plan ---------- */
+/* The guard's own state, when it isn't enforcing, has to read as information
+   rather than as an error — it is the shipped fail-open behaviour, not a fault. */
+#budget-state.warn { color: var(--warn); }
+.skip-chip {
+  border-radius: 999px; padding: 1px 8px; font-size: 11.5px;
+  background: var(--panel2); color: var(--muted); cursor: help;
+}
+.plan-jobs { display: flex; flex-direction: column; gap: 4px; max-height: 152px; overflow-y: auto; padding: 4px 0; }
+.plan-jobs label { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.plan-jobs input { width: auto; }
+.plan-slots {
+  max-height: 168px; overflow-y: auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px; color: var(--muted); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px; margin-top: 8px;
+}
+.plan-slots div { display: flex; gap: 10px; justify-content: space-between; }
+#plan-summary { font-size: 13px; margin-top: 12px; }
+#plan-assumptions { margin: 6px 0 0; padding-left: 18px; }
+.conf-low { color: var(--warn); font-weight: 600; }
+.conf-high { color: var(--ok); font-weight: 600; }
 
 /* ---------- awake menu / popovers ---------- */
 .menu-wrap { position: relative; }

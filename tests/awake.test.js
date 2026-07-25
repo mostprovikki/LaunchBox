@@ -6,7 +6,7 @@ import { tmpData, validJob, fakeSpawn } from './helpers.js';
 import { openDb, createJob, setSetting, updateJob } from '../lib/db.js';
 import { createAwake } from '../lib/awake.js';
 
-function setup({ nextFire = null, running = 0 } = {}) {
+function setup({ nextFire = null, running = 0, usage = null } = {}) {
   const dir = tmpData();
   const db = openDb(join(dir, 'test.db'));
   const spawnFn = fakeSpawn();
@@ -15,8 +15,15 @@ function setup({ nextFire = null, running = 0 } = {}) {
   const scheduler = { nextFire: () => state.nextFire };
   let t = Date.now();
   const clock = { now: () => t, advance: (ms) => { t += ms; } };
-  const awake = createAwake({ db, runner, scheduler, spawnFn, now: clock.now });
+  const awake = createAwake({ db, runner, scheduler, usage, spawnFn, now: clock.now });
   return { db, spawnFn, runner, state, awake, clock };
+}
+
+// Only window() and events are read by awake, so no probe is involved.
+function fakeUsage(resetsAt) {
+  const u = { resetsAt, events: new EventEmitter() };
+  u.window = () => ({ percent: 10, resetsAt: u.resetsAt });
+  return u;
 }
 
 test('off by default; on spawns caffeinate tied to daemon pid; off kills it', () => {
@@ -80,6 +87,42 @@ test('auto: follows running count via runner change events', () => {
   runner.events.emit('change');
   assert.equal(awake.status().active, false);
   assert.equal(spawnFn.calls[0].child.killedWith, 'SIGTERM');
+});
+
+test('auto: holds for an imminent reset-anchored fire even with nothing armed', () => {
+  // The scheduler can only arm an afterReset entry once usage reports a reset
+  // time, and there is no catch-up — so a 3 a.m. rollover on a sleeping Mac is a
+  // lost run. `auto` has to hold on the reset itself, not on an armed timer.
+  const usage = fakeUsage(null);
+  const { db, awake, clock } = setup({ usage });
+  const job = createJob(db, validJob({
+    schedule: { type: 'afterReset', window: 'five_hour', offsetMin: 0, jitterMin: 0 },
+  }));
+  awake.set({ mode: 'auto' });
+  assert.equal(awake.status().active, false); // no reset time known yet
+
+  // Well outside the 20-minute default lead: still allowed to sleep.
+  usage.resetsAt = new Date(clock.now() + 90 * 60_000).toISOString();
+  assert.equal(awake.refresh().active, false);
+
+  // Inside the lead: hold.
+  usage.resetsAt = new Date(clock.now() + 10 * 60_000).toISOString();
+  assert.equal(awake.refresh().active, true);
+
+  // A usage event is enough on its own — no other refresh trigger needed.
+  awake.set({ mode: 'off' });
+  awake.set({ mode: 'auto' });
+  assert.equal(awake.status().active, true);
+
+  // A reset time frozen in the past by a broken probe must not hold forever.
+  usage.resetsAt = new Date(clock.now() - 5 * 60_000).toISOString();
+  assert.equal(awake.refresh().active, false);
+
+  // And a disabled job is not worth staying up for.
+  usage.resetsAt = new Date(clock.now() + 5 * 60_000).toISOString();
+  assert.equal(awake.refresh().active, true);
+  updateJob(db, job.id, { enabled: false });
+  assert.equal(awake.refresh().active, false);
 });
 
 test('auto: enabled job with a future fire holds awake; paused releases', () => {
