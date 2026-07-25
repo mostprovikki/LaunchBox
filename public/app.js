@@ -793,6 +793,7 @@ async function loadSettings() {
     $('#s-beadsPollSec').value = s.beadsPollSec;
     $('#s-bdPath').value = s.bdPath ?? '';
     $('#s-worktreeRoot').value = s.worktreeRoot ?? '';
+    $('#s-burstMinGapMin').value = s.burstMinGapMin ?? 15;
     renderBudgetState();
   } catch { /* daemon briefly down */ }
 }
@@ -817,6 +818,7 @@ async function saveSettings(ev) {
       beadsPollSec: Number($('#s-beadsPollSec').value),
       bdPath: $('#s-bdPath').value.trim(),
       worktreeRoot: $('#s-worktreeRoot').value.trim(),
+      burstMinGapMin: Number($('#s-burstMinGapMin').value),
     });
     $('#settings-msg').textContent = 'saved ✓';
     setTimeout(() => { $('#settings-msg').textContent = ''; }, 2000);

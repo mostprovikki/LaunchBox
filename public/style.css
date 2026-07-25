@@ -234,6 +234,24 @@ legend { color: var(--muted); padding: 0 6px; font-size: 12.5px; }
 .conf-low { color: var(--warn); font-weight: 600; }
 .conf-high { color: var(--ok); font-weight: 600; }
 
+/* ---------- bursts (M4) ---------- */
+/* Preset buttons and slot chips. `.slot` renders each attempt TIME — a burst has
+   no bead to name at plan time, unlike a burn-down plan. */
+#burst-presets { flex-wrap: wrap; gap: 6px; }
+#burst-presets .preset { font-size: 12.5px; padding: 4px 10px; border-radius: 999px; }
+#burst-summary { font-size: 13px; margin-top: 12px; }
+#burst-assumptions { margin: 6px 0 0; padding-left: 18px; }
+
+.burst-strip { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin: 10px 0; }
+.burst-head { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+/* `--stopped`'s cool teal, deliberately NOT `--accent` (orange) or `--warn`: a
+   running burst is a normal, user-authorised state spending capacity already paid
+   for. Amber here would read as "something is wrong", the same misreading the M3
+   pause toggle hit. */
+.burst-meter { height: 6px; border-radius: 999px; background: var(--border); margin: 8px 0 6px; overflow: hidden; }
+.burst-meter > div { height: 100%; width: 0; background: var(--stopped); transition: width .4s ease; }
+.burst-strip .note { margin: 0; }
+
 /* ---------- awake menu / popovers ---------- */
 .menu-wrap { position: relative; }
 #awake-btn { color: var(--muted); font-size: 12.5px; border-radius: 999px; padding: 3px 12px; }

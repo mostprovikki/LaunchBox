@@ -77,7 +77,18 @@
       <input id="project-path" type="text" placeholder="/path/to/repo with a .scheduler.json" autocomplete="off">
       <button id="project-register">＋ Register</button>
       <span class="spacer"></span>
+      <button id="project-burst" title="Work through ready beads using a chosen slice of a usage window">◔ Burst…</button>
       <button id="project-discover" title="Scan the configured roots for repos that carry a .scheduler.json">⌕ Discover</button>
+    </div>
+    <!-- Live burst. Driven by MEASURED spend, not by the estimate that sized it. -->
+    <div id="burst-strip" class="burst-strip" hidden>
+      <div class="burst-head">
+        <strong id="burst-title"></strong>
+        <span class="spacer"></span>
+        <button id="burst-cancel" class="icon" title="Stop making further attempts">✕ Cancel</button>
+      </div>
+      <div class="burst-meter"><div id="burst-fill"></div></div>
+      <p id="burst-detail" class="note"></p>
     </div>
     <p id="projects-roots" class="note"></p>
     <p id="projects-bd" class="p-reason p-fault" hidden></p>
@@ -136,6 +147,7 @@
           <label><code>bd</code> command <input id="s-bdPath" placeholder="bd"></label>
         </div>
         <label>Worktree root — where scheduled runs get their own checkout <input id="s-worktreeRoot" placeholder="~/.cs-worktrees"></label>
+        <label>Burst attempt spacing (min) — a floor, so a burst can't spend its slice all at once <input id="s-burstMinGapMin" type="number" min="1" max="240"></label>
       </fieldset>
       <h3>Extensions</h3>
       <div id="ext-settings"></div>
@@ -208,6 +220,42 @@
     <div class="row right">
       <button type="button" id="dialog-cancel">Cancel</button>
       <button class="primary" id="dialog-save" value="save">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="burst-dialog">
+  <form id="burst-form" method="dialog">
+    <h2>Burst through ready beads</h2>
+    <!-- Worded per the design rule: a chosen slice of capacity already paid for,
+         never "use up what's left". Defaults stay conservative. -->
+    <p class="muted note">Spends a chosen slice of one usage window working through beads that are already ready, spread over time. It stops on <strong>measured</strong> spend, so a wrong estimate costs nothing.</p>
+    <div id="burst-errors" class="errors" hidden></div>
+
+    <div class="row">
+      <label>Window <select id="b-window"></select></label>
+      <label>Spend up to (%) <input id="b-budgetPct" type="number" min="1" max="100" value="10"></label>
+    </div>
+    <div class="row" id="burst-presets"></div>
+    <div class="row">
+      <label>Min gap (min) <input id="b-minGapMin" type="number" min="1" max="240" placeholder="from Settings"></label>
+      <label>Max runs (blank = as many as the budget buys) <input id="b-maxRuns" type="number" min="1" max="200"></label>
+    </div>
+    <fieldset>
+      <legend>Projects to draw ready beads from</legend>
+      <div id="b-projects" class="plan-jobs"></div>
+    </fieldset>
+
+    <div id="burst-result" hidden>
+      <div id="burst-summary"></div>
+      <ul id="burst-assumptions" class="note"></ul>
+      <div id="burst-slots" class="plan-slots"></div>
+    </div>
+
+    <div class="row right">
+      <button type="button" id="burst-close">Close</button>
+      <button type="button" id="burst-preview">Preview burst</button>
+      <button type="button" id="burst-confirm" class="primary" hidden>Start this burst</button>
     </div>
   </form>
 </dialog>

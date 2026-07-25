@@ -20,6 +20,7 @@ import { createAwake, DEFAULT_RESET_LEAD_MIN } from './lib/awake.js';
 import { createPauseController, PAUSE_MODES } from './lib/pause.js';
 import { createUsageMonitor, POLL_FLOOR_SEC, DEFAULT_POLL_SEC, USAGE_SHOW_MODES } from './lib/usage.js';
 import { createBudgetPolicy } from './lib/budget.js';
+import { createBurst, BURST_DEFAULTS } from './lib/burst.js';
 import { createBeads } from './lib/beads.js';
 import { createWorktrees } from './lib/worktree.js';
 import {
@@ -61,7 +62,7 @@ const BD_INFO_TTL_MS = 30_000;
 
 export function createApp({
   db, runner, scheduler, extensions, awake, usage = null, budget = null, pause = null,
-  projects = null, beads = null,
+  projects = null, beads = null, burst = null,
   execFileFn = execFile, uninstallFn = startUninstall,
   usageRefreshFloorMs = POLL_FLOOR_SEC * 1000,
 }) {
@@ -636,6 +637,87 @@ export function createApp({
     }
   });
 
+  // ------------------------------------------------------------------ bursts
+  // "Spend ~15% of this window working through ready beads." The burst owns *when*
+  // to attempt and *whether the budget still allows it*; the attempt itself goes
+  // through projects.pollProject, which holds the lease, re-reads the bead, claims
+  // it and owns the outcome. These routes must never launch anything themselves.
+  const needBurst = (res) => {
+    if (!burst) { res.status(503).json({ error: 'bursts are not available in this process' }); return false; }
+    return true;
+  };
+
+  // Preview. Writes nothing — the slots come back for the user to confirm, and the
+  // 400 carries `reason` so the existing client error handling renders it.
+  app.post('/api/bursts/plan', (req, res) => {
+    if (!needBurst(res)) return;
+    const b = req.body || {};
+    const result = burst.plan({
+      window: b.window,
+      budgetPct: Number(b.budgetPct),
+      projectIds: Array.isArray(b.projectIds) ? b.projectIds : [b.projectIds].filter(Boolean),
+      maxRuns: b.maxRuns == null || b.maxRuns === '' ? null : Number(b.maxRuns),
+      minGapMin: b.minGapMin == null || b.minGapMin === '' ? null : Number(b.minGapMin),
+      deadline: b.deadline || null,
+    });
+    res.status(result.ok ? 200 : 400).json(result);
+  });
+
+  // Confirm. Re-validated rather than trusted: a preview left open goes stale, and
+  // an expired timetable is rejected WHOLESALE rather than part-applied, matching
+  // /api/budget/plan/apply. Nothing here is claimed — the first bead is claimed at
+  // the first attempt, not now.
+  app.post('/api/bursts', (req, res) => {
+    if (!needBurst(res)) return;
+    const b = req.body || {};
+    const slots = Array.isArray(b.slots) ? b.slots : [];
+    if (!slots.length) return res.status(400).json({ errors: ['slots required'] });
+    if (slots.length > PLAN_SLOT_MAX) return res.status(400).json({ errors: [`at most ${PLAN_SLOT_MAX} slots`] });
+    const projectIds = Array.isArray(b.projectIds) ? b.projectIds.filter(Boolean) : [];
+    if (!projectIds.length) return res.status(400).json({ errors: ['projectIds required'] });
+
+    const ats = [];
+    for (const s of slots) {
+      const at = new Date(typeof s === 'string' ? s : s?.at ?? '');
+      if (Number.isNaN(at.getTime())) return res.status(400).json({ errors: [`invalid slot time: ${JSON.stringify(s)}`] });
+      ats.push(at.toISOString());
+    }
+    // The last slot may legitimately be far out; it is the FIRST one passing that
+    // means the preview went stale on screen.
+    if (new Date(ats[0]).getTime() <= Date.now()) {
+      return res.status(400).json({ errors: ['this plan has expired — re-plan and confirm again'] });
+    }
+    // The airlock is re-checked here, not just at plan time: a project could have
+    // been paused or de-activated between preview and confirm.
+    for (const id of projectIds) {
+      const p = getProject(db, id);
+      if (!p) return res.status(404).json({ errors: [`unknown project: ${id}`] });
+      if (p.state !== 'active') return res.status(400).json({ errors: [`${p.name} is ${p.state} — only an activated project can contribute to a burst`] });
+    }
+
+    const r = burst.start({
+      window: b.window, budgetPct: Number(b.budgetPct), projectIds, slots: ats,
+      maxRuns: b.maxRuns == null || b.maxRuns === '' ? null : Number(b.maxRuns),
+      minGapMin: b.minGapMin == null || b.minGapMin === '' ? null : Number(b.minGapMin),
+    });
+    if (!r.ok) return res.status(409).json({ errors: [r.reason] });
+    res.status(201).json({ ok: true, burst: r.burst });
+  });
+
+  app.get('/api/bursts', (req, res) => {
+    if (!needBurst(res)) return;
+    res.json({ active: burst.status(), bursts: burst.history({ limit: Number(req.query.limit) || 20 }) });
+  });
+
+  app.post('/api/bursts/:id/cancel', (req, res) => {
+    if (!needBurst(res)) return;
+    const active = burst.status();
+    if (!active || active.id !== req.params.id) return res.status(404).json({ error: 'no such running burst' });
+    const r = burst.cancel('cancelled from the UI');
+    if (!r.ok) return res.status(409).json({ error: r.reason });
+    res.json(r);
+  });
+
   // Settings: core {paused, home} + per-extension blocks from each ext's
   // `settings` field specs (defaults applied on read, validated on write).
   const extSettingsOut = () => Object.fromEntries([...extensions.values()]
@@ -664,6 +746,11 @@ export function createApp({
       beadsPollSec: beadsPollSec(),
       bdPath: bdPathSetting(),
       worktreeRoot: getSetting(db, 'worktreeRoot', ''),
+      // How far apart a burst spaces its attempts. It is a floor, not a target:
+      // spacing is what stops a burst spending its whole slice in three minutes,
+      // and it keeps attempts far enough apart that the usage reading driving the
+      // ceiling has actually refreshed between them.
+      burstMinGapMin: Number(getSetting(db, 'burstMinGapMin', BURST_DEFAULTS.burstMinGapMin)) || BURST_DEFAULTS.burstMinGapMin,
       ...policy.settings(),
       extensions: extSettingsOut(),
     });
@@ -693,7 +780,7 @@ export function createApp({
     }
     // Budget guard keys — core for the same reason the usage keys are: the guard,
     // the planner and (later) the backlog all read these same numbers.
-    for (const [key, min, max] of [['reserveFiveHourPct', 1, 100], ['reserveWeeklyPct', 1, 100], ['awakeResetLeadMin', 0, 240]]) {
+    for (const [key, min, max] of [['reserveFiveHourPct', 1, 100], ['reserveWeeklyPct', 1, 100], ['awakeResetLeadMin', 0, 240], ['burstMinGapMin', 1, 240]]) {
       if (!(key in b)) continue;
       const n = Number(b[key]);
       if (!Number.isFinite(n) || n < min || n > max) return res.status(400).json({ errors: [`${key} must be ${min}-${max}`] });
@@ -908,7 +995,20 @@ export async function main() {
     .catch((err) => console.error(`beads: orphan recovery failed (${err?.message ?? err})`));
   projects.start();
 
-  const app = createApp({ db, runner, scheduler, extensions, awake, usage, budget, pause, projects, beads });
+  // Bursts (M4). Started after the poller, and `resume()` rather than a fresh
+  // start: a burst that was active when the daemon stopped keeps its timetable, so
+  // a restart continues it instead of abandoning work the user confirmed. Slots
+  // that passed while the process was down come due at once, and the ceiling is
+  // re-measured on the first tick — so it cannot resume into a budget it has
+  // already spent.
+  const burst = createBurst({ db, usage, budget, projects, pause });
+  burst.events.on('started', (b) => console.log(`burst: started — ${b.budgetPct}% of ${b.window} across ${b.slots.length} attempt(s) from ${b.startPct}%`));
+  burst.events.on('finished', (b) => console.log(`burst: ${b.state} — ${b.reason} (${b.runs} run(s))`));
+  burst.events.on('error', (err) => console.error(`burst: tick failed — ${err?.message ?? err}`));
+  const resumed = burst.resume();
+  if (resumed) console.log(`burst: resuming — ${resumed.slots.length} attempt(s) left of ${resumed.budgetPct}% of ${resumed.window}`);
+
+  const app = createApp({ db, runner, scheduler, extensions, awake, usage, budget, pause, projects, beads, burst });
   const port = Number(process.env.CS_PORT) || 9099;
   const server = app.listen(port, '127.0.0.1', () => {
     console.log(`claude-scheduler on http://127.0.0.1:${port} · extensions: ${[...extensions.keys()].join(', ')}`);
