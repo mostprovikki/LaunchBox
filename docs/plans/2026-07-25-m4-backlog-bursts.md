@@ -1,5 +1,18 @@
 # M4 — Backlog pool & budget bursts
 
+> ⚠️ **PARTIALLY SUPERSEDED 2026-07-25 by [`2026-07-25-m4a-beads-task-sources.md`](./2026-07-25-m4a-beads-task-sources.md).**
+> Tasks are no longer owned by the scheduler: projects declare their own in **beads** (`bd`)
+> and the scheduler polls `bd ready --json` per registered repo.
+>
+> - **§4.2 `backlog_tasks` is dead** — do not build that table. The `bursts` table in the same
+>   section **survives as written**.
+> - **§4.1 (measured live ceiling), §4.3 (materialise as normal `jobs` rows) and §4.4
+>   (planning + `admit` enforcement) all survive**; only the *source* of candidate tasks
+>   changes, from `backlog_tasks` rows to ready beads.
+> - **§4.5's Backlog tab** becomes a Projects + ready-work tab; the burst preview/confirm
+>   screen is unchanged.
+> - Read M4a first, then this document for the burst mechanics.
+
 Design: [`2026-07-25-launchbox-design.md`](../specs/2026-07-25-launchbox-design.md). Depends on **M1** (usage + `run_usage` calibration) and **M2** (guard + admit hook). Verify: `npm test`.
 
 **Goal:** keep a pool of never-urgent tasks, then spend a chosen slice of capacity on them in one click — *"run a few backlog tasks using ~15% of my session limit"* or *"…using 5% of my weekly limit."*
