@@ -523,6 +523,46 @@ them; leaving a stale claim is the lesser harm. A bead that cannot be re-read (b
 reported via an `orphan-unresolved` event rather than guessed at. It is deliberately not awaited
 before the HTTP listener starts, because it makes `bd` calls that can block.
 
+### What adversarial review of the diff added — the races
+
+Live-driving caught wrong *outcomes*. Review caught **races and lost updates**, which are invisible
+both to a single-threaded test and to a human clicking through the UI. Recorded because they change
+how the poll loop must write state:
+
+- **Never echo a `state` read before an `await`.** A poll holds `bd` calls that block for up to
+  `BD_TIMEOUT_MS` each, so a human can click Pause mid-poll. Writing back the captured value undid
+  it; and because `error` is a polled state, a *failing* poll stamped `error` over `paused` and the
+  next poll promoted it to `active` and launched everything. All poll writes go through
+  `recordPoll`, which re-reads the row and only ever **transitions** state.
+- **`releaseOrphanLeases()` is blanket and must never run under a live poller.** It ran unawaited
+  after `start()` and freed leases the first poll had just taken; with a failed advisory claim the
+  same bead could then run **twice**. `recoverOrphans()` now releases the orphans it enumerated, by
+  key, synchronously before the interval is armed.
+- **The pause needs re-checking between beads**, not once per poll — each bead costs seconds of `bd`
+  calls, and `hold` has no downstream gate to fall back on.
+- **The completion marker must be anchored.** As a substring test, `TASK-COMPLETE: sp-12` closed
+  `sp-1` — the very wrong-id mistake the id-in-marker design exists to catch.
+- **A `catch` that forgets `err.busy` turns "busy" into "broken"** (it was the `bd --version` one).
+- **`get()`'s not-found regex matched neither stream on 1.1.0**, so the "bead no longer exists"
+  branch was dead code. stdout: `no issues found matching the provided IDs`; stderr:
+  `no issue found matching "<id>"`.
+- **`recoverOrphans` must require `assignee === BD_ACTOR`**, not merely "not someone else": our
+  claim always sets an assignee, so `in_progress` with none means a human moved it by hand.
+- **A run can be over before `onDone` subscribes** — `runner.start` fails a throwing spawn
+  synchronously, so `once` attached after the emit and never fired, holding the lease forever.
+- **Validate before writing.** The settings PUT persisted `beadsPollSec` before the `worktreeRoot`
+  check could reject the save, so the poller never re-armed; and since the form submits every field
+  and the check ran against registered projects, one badly-placed `worktreeRoot` could make *every*
+  settings save fail. Already-stored values are now grandfathered.
+- **The declaration is re-read from disk each poll.** The repo owns `.scheduler.json`, so it is the
+  source of truth; previously only `discover()` re-read it and discovery only walks `projectRoots`,
+  which left a hand-registered repo's typo unfixable.
+- **`maxConcurrent > 1` corrupted the worktree.** One worktree per project means two of our own
+  runs shared a checkout and a branch. Effective concurrency is clamped to 1 while a worktree is in
+  use, and the poll says so rather than ignoring the config silently.
+- The prompt now uses `bd -C <primary>`: the spawned child does **not** inherit `BEADS_DIR`, and its
+  cwd is a worktree whose `.beads/` is hollow.
+
 ### Two smaller corrections
 
 - **`BEADS_ACTOR=claude-scheduler` on every call.** Without it bd falls back to the *repo's*

@@ -10,7 +10,7 @@ import {
   insertRun, getRun, listRuns, lastRun, failOrphanRuns,
   getSetting, setSetting, cleanupAll, listUsageSnapshots,
   listProjects, getProject, getProjectByPath, createProject, updateProject, deleteProject,
-  listLeases, releaseOrphanLeases, listJobsByProject,
+  listLeases, listJobsByProject,
 } from './lib/db.js';
 import { validateJob, previewSchedule, scheduleEntries } from './lib/validate.js';
 import { loadExtensions, manifest, validateFields } from './lib/extensions.js';
@@ -696,6 +696,34 @@ export function createApp({
       }
       setSetting(db, 'beadsPollSec', Math.round(n));
     }
+    // worktreeRoot is VALIDATED BEFORE anything in this group is written. It used
+    // to be checked last, which meant a rejected save had already persisted the new
+    // poll interval and then returned before re-arming the poller. Worse: the form
+    // submits all four fields every time and this check runs against currently
+    // registered projects, so registering a repo that happens to contain the
+    // existing worktreeRoot made *every* settings save fail — usage, pause, budget
+    // and all — with an error message about worktrees.
+    let worktreeRoot = null;
+    if ('worktreeRoot' in b) {
+      // Expanded for the same reason as projectRoots, and additionally because
+      // `git worktree add` would happily create a directory called `~` in the cwd.
+      worktreeRoot = expandPath(b.worktreeRoot);
+      // The spike measured this: a worktree created inside the primary checkout
+      // shows up as `?? .worktrees/` in the human's `git status` — littering the
+      // very checkout the worktree exists to keep clean. Cheap to catch here for
+      // any repo we already know about.
+      const inside = worktreeRoot
+        && listProjects(db).find((p) => worktreeRoot === p.path || worktreeRoot.startsWith(p.path + '/'));
+      // Already-stored values are grandfathered: rejecting a value the user is not
+      // changing would wedge every future save behind an error about a field they
+      // did not touch.
+      if (inside && worktreeRoot !== (getSetting(db, 'worktreeRoot', '') || null)) {
+        return res.status(400).json({
+          errors: [`worktreeRoot must live outside every registered repo — ${worktreeRoot} is inside ${inside.path}, `
+            + 'so the worktree would show up as untracked noise in that repo\'s git status'],
+        });
+      }
+    }
     // Stored expanded and absolute. `~/dev` is what a human types (and what the
     // field suggests), but discovery hands these straight to readdir, which would
     // look for a directory literally named `~` and find nothing — and discovery
@@ -712,23 +740,7 @@ export function createApp({
       if (p !== bdPathSetting()) beads?.resetVersion();
       setSetting(db, 'bdPath', p);
     }
-    if ('worktreeRoot' in b) {
-      // Expanded for the same reason as projectRoots, and additionally because
-      // `git worktree add` would happily create a directory called `~` in the cwd.
-      const root = expandPath(b.worktreeRoot);
-      // The spike measured this: a worktree created inside the primary checkout
-      // shows up as `?? .worktrees/` in the human's `git status` — littering the
-      // very checkout the worktree exists to keep clean. Cheap to catch here for
-      // any repo we already know about.
-      const inside = root && listProjects(db).find((p) => root === p.path || root.startsWith(p.path + '/'));
-      if (inside) {
-        return res.status(400).json({
-          errors: [`worktreeRoot must live outside every registered repo — ${root} is inside ${inside.path}, `
-            + 'so the worktree would show up as untracked noise in that repo\'s git status'],
-        });
-      }
-      setSetting(db, 'worktreeRoot', root);
-    }
+    if (worktreeRoot !== null) setSetting(db, 'worktreeRoot', worktreeRoot);
     if ('beadsPollSec' in b) projects?.restart();
     // How long a run gets to wind down before the ladder escalates to SIGTERM.
     if ('softGraceMs' in b) {
@@ -834,7 +846,14 @@ export async function main() {
     `beads: COULD NOT hand ${beadId} back (${reason}) — it stays in_progress, which means bd ready will not `
     + `offer it again until someone runs: bd update ${beadId} --status open --assignee ""`
     + `${busy ? ' (the database was busy — worth retrying)' : ''}`));
-  projects.events.on('close-failed', ({ beadId, reason }) => console.warn(`beads: could not close ${beadId} — ${reason}`));
+  // Loud, like unclaim-failed, and for the same reason: the work is done but the
+  // bead still reads `in_progress`, which `bd ready` excludes — so the scheduler
+  // cannot see it again and only a human can finish the bookkeeping. Deliberately
+  // NOT handed back, because a retry would redo completed work.
+  projects.events.on('close-failed', ({ beadId, reason, busy, stranded }) => console.error(
+    `beads: the work for ${beadId} finished but the bead could NOT be closed (${reason})`
+    + `${stranded ? ` — it stays in_progress and hidden from bd ready. Close it yourself with: bd close ${beadId}` : ''}`
+    + `${busy ? ' (the database was busy — worth retrying)' : ''}`));
   projects.events.on('finished', ({ beadId, status, closed }) =>
     console.log(`beads: ${beadId} finished ${status}${closed ? ' — closed' : ' — left open for retry'}`));
   projects.events.on('unfinished', ({ beadId, runId }) => console.log(
@@ -843,20 +862,20 @@ export async function main() {
     `beads: could not check orphaned bead ${beadId} after the restart (${reason}) — it may still be in_progress and hidden from bd ready`));
 
   // Same role as failOrphanRuns: a daemon that died mid-run left leases with no
-  // live run behind them. Recovery FIRST, while the leases still say which beads
-  // were ours — releasing the lease alone would leave the bead `in_progress` and
-  // therefore invisible to `bd ready` forever. Deliberately not awaited before the
-  // server listens: it makes `bd` calls that can block on a busy database, and the
-  // UI should come up regardless.
+  // live run behind them, and beads still `in_progress` from our claim — which
+  // `bd ready` excludes, so the work in flight would be hidden forever.
+  //
+  // Called BEFORE `start()` and deliberately NOT awaited. `recoverOrphans`
+  // synchronously captures the orphan list and releases exactly those leases, then
+  // does the slow `bd` un-claiming in the background. Both halves matter: releasing
+  // by key rather than by `WHERE state = 'held'` is what stops a live lease being
+  // freed under a running poll, and getting the synchronous half in before the
+  // interval is armed is what stops the poll seeing stale `held` rows.
   projects.recoverOrphans()
     .then((out) => {
       for (const r of out.filter((x) => x.handedBack)) console.log(`beads: returned ${r.beadId} to the backlog after a restart`);
-      releaseOrphanLeases(db);
     })
-    .catch((err) => {
-      console.error(`beads: orphan recovery failed (${err?.message ?? err})`);
-      releaseOrphanLeases(db);
-    });
+    .catch((err) => console.error(`beads: orphan recovery failed (${err?.message ?? err})`));
   projects.start();
 
   const app = createApp({ db, runner, scheduler, extensions, awake, usage, budget, pause, projects, beads });
