@@ -20,7 +20,8 @@ Product name in UI/docs is **LaunchBox**. The launchd label (`com.claude-schedul
 | M1 | [m1-usage-foundation](../plans/2026-07-25-m1-usage-foundation.md) | Usage monitor (ground truth), usage banner on main page, settings |
 | M2 | [m2-usage-aware-scheduling](../plans/2026-07-25-m2-usage-aware-scheduling.md) | Reset-anchored schedules, budget guard/reserve, burn-down planner |
 | M3 | [m3-pause-modes](../plans/2026-07-25-m3-pause-modes.md) | Soft pause (graceful wind-down) + hard pause (force stop) |
-| M4 | [m4-backlog-bursts](../plans/2026-07-25-m4-backlog-bursts.md) | Backlog task pool + "spend N% of session/weekly limit" bursts |
+| M4a | [m4a-beads-task-sources](../plans/2026-07-25-m4a-beads-task-sources.md) | Projects declare work in beads; the scheduler polls `bd ready` and runs it (shipped) |
+| M4 | [m4-bursts](../plans/2026-07-25-m4-bursts.md) | "Spend N% of session/weekly limit" bursts over ready beads + per-bead worktrees |
 | M5 | [m5-sessions-dashboard](../plans/2026-07-25-m5-sessions-dashboard.md) | Sessions dashboard (port of claude-sessions-dashboard, MIT) |
 | M6 | deferred | Full LaunchBox rename (launchd label, package, data dir) + optional `node:sqlite` migration |
 
@@ -122,7 +123,10 @@ The codebase convention is a `createX({...deps})` factory per subsystem with **e
 | `lib/usage.js` | `createUsageMonitor({db, spawnFn, getClaudePath, intervalMs, now})` | Poll `get_usage`, persist snapshots, emit `usage` events, expose `snapshot()`/`window(name)`/`refresh()` |
 | `lib/budget.js` | `createBudgetPolicy({db, usage})` | Turn settings + snapshot into an `admit(job, trigger)` decision and a burn-down plan |
 | `lib/pause.js` | `createPauseController({db, runner, extensions})` | `off`/`soft`/`hard` mode state machine (M3) |
-| `lib/backlog.js` | `createBacklog({db, ...})` | Backlog pool + burst planner (M4) |
+| `lib/beads.js` | `createBeads({db, ...})` | The only thing that knows `bd` exists: version-pinned adapter, every call timeout-bounded (M4a) |
+| `lib/projects.js` | `createProjects({db, beads, runner, worktrees, pause})` | Poll registered repos, lease → re-read → claim → launch → close (M4a) |
+| `lib/worktree.js` | `createWorktrees({execFileFn})` | Create/reuse/reap the git worktree scheduled work runs in (M4a) |
+| `lib/burst.js` | `createBurst({db, usage, budget, projects, beads})` | Burst timetable + measured ceiling over ready beads (M4). Owns timing and admission only — it never launches a bead itself |
 | `lib/sessions.js` | `createSessionIndex({db, root, ...})` | Scan/parse `~/.claude/projects` with mtime-keyed caching (M5) |
 
 ### Seams (verified by reading the source)
@@ -141,7 +145,11 @@ The codebase convention is a `createX({...deps})` factory per subsystem with **e
 ```sql
 usage_snapshots(id, capturedAt, ok, available, subscriptionType, windows JSON, buckets JSON, error)   -- M1
 run_usage(runId, jobId, beforeJson, afterJson, deltaPct JSON, sampledAt)                              -- M1/M4 calibration
-backlog_tasks(id, title, prompt, cwd, type, params JSON, priority, estPct, state, createdAt, ...)     -- M4
+projects(id, name, path, beadsDir, state, config JSON, bdVersion, lastPollAt, readyCount, ...)         -- M4a
+task_leases(projectId, beadId, runId, state, acquiredAt, releasedAt)  PK (projectId, beadId)           -- M4a
+bursts(id, window, budgetPct, startPct, currentPct, projectIds JSON, slots JSON, state, reason, ...)   -- M4
+-- NB: there is deliberately no task table. Beads is the source of truth and is polled, never
+-- mirrored; per-bead cost rides `run_usage` because one job row per bead is reused every run.
 sessions(id, filePath, mtimeMs, sizeBytes, cwd, project, gitBranch, ..., scannedAt)                   -- M5
 ```
 

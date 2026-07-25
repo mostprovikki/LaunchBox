@@ -2,7 +2,8 @@
 
 Design context: [`2026-07-25-launchbox-design.md`](../specs/2026-07-25-launchbox-design.md).
 User-facing explainer (global, machine-wide): `~/.claude/docs/beads-task-tracking.md`.
-Supersedes §4.2's `backlog_tasks` in [`2026-07-25-m4-backlog-bursts.md`](./2026-07-25-m4-backlog-bursts.md).
+Superseded §4.2's `backlog_tasks` in the old `m4-backlog-bursts.md`, which was rewritten in
+consequence as [`2026-07-25-m4-bursts.md`](./2026-07-25-m4-bursts.md).
 Depends on **M1** (usage + `run_usage`), **M2** (guard + `admit`), **M3** (pause + graceful stop).
 Verify: `npm test`, then live.
 
@@ -44,8 +45,8 @@ Consequences that make this cheap:
 |---|---|
 | §4.1 measured live ceiling | **Survives unchanged.** Still the core of bursts. |
 | §4.2 `backlog_tasks` table | **Dies.** Beads owns task definitions. `bursts` survives as written. |
-| §4.3 materialise as normal `jobs` rows | **Survives, and is what makes this small** — a bead becomes a one-shot job and inherits scheduling, concurrency caps, logs, SSE, the M2 guard and M3 pause for free. |
-| §4.4 burst planning/enforcement | Survives; task *selection* now reads `bd ready` instead of `backlog_tasks`. |
+| §4.3 materialise as normal `jobs` rows | **Survives for the row, NOT for the firing.** A bead does get a real `jobs` row (that is what makes per-bead cost accumulate) — but it ships *disabled with a spent `once` entry* and is launched directly by the poller, never armed by the cron scheduler. ⚠️ The "inherits the M2 guard and M3 pause for free" half of this turned out to be **false**: `hold` deliberately admits everything reaching the runner, so the poller had to check `pause.blocksSchedule()` itself. |
+| §4.4 burst planning/enforcement | Planning and the ceiling survive; **the execution model did not.** Corrected in [`2026-07-25-m4-bursts.md`](./2026-07-25-m4-bursts.md) §4.2-4.3: a burst may not materialise `once` entries (that path bypasses the lease, re-read, claim, marker and close, and races the poller for the same bead) and may not claim ahead. It drives the poller instead. |
 | §4.5 Backlog tab | Becomes a **Projects + ready-work** tab; bursts keep their preview/confirm screen. |
 
 So a burst becomes: *"spend ~15% of my session limit running ready beads from these
