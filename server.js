@@ -9,18 +9,23 @@ import {
   insertRun, getRun, listRuns, lastRun, failOrphanRuns,
   getSetting, setSetting, cleanupAll, listUsageSnapshots,
 } from './lib/db.js';
-import { validateJob, previewSchedule } from './lib/validate.js';
+import { validateJob, previewSchedule, scheduleEntries } from './lib/validate.js';
 import { loadExtensions, manifest, validateFields } from './lib/extensions.js';
 import { createRunner } from './lib/runner.js';
 import { createScheduler } from './lib/scheduler.js';
-import { createAwake } from './lib/awake.js';
+import { createAwake, DEFAULT_RESET_LEAD_MIN } from './lib/awake.js';
 import { createUsageMonitor, POLL_FLOOR_SEC, DEFAULT_POLL_SEC, USAGE_SHOW_MODES } from './lib/usage.js';
+import { createBudgetPolicy } from './lib/budget.js';
 import { startUninstall } from './lib/uninstall.js';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
+// Ceiling on one confirmed burn-down plan. A plan is a preview a human read: at
+// some size that stops being true, and 200 one-shot entries on a job is already
+// well past anything worth confirming in one click.
+const PLAN_SLOT_MAX = 200;
 
 export function createApp({
-  db, runner, scheduler, extensions, awake, usage = null,
+  db, runner, scheduler, extensions, awake, usage = null, budget = null,
   execFileFn = execFile, uninstallFn = startUninstall,
   usageRefreshFloorMs = POLL_FLOOR_SEC * 1000,
 }) {
@@ -28,10 +33,24 @@ export function createApp({
   app.use(express.json({ limit: '1mb' }));
   app.use(express.static(join(ROOT, 'public')));
 
+  // main() passes the same policy the runner admits against; a standalone app
+  // (tests, embedding) gets an equivalent one so the settings routes still read
+  // and write the same keys.
+  const policy = budget ?? createBudgetPolicy({ db, usage });
+
+  // The live window list constrains which window an afterReset entry may anchor
+  // to; null (no monitor, or nothing probed yet) means validate falls back to the
+  // known windows rather than rejecting the job.
+  const windows = () => usage?.snapshot()?.windows ?? null;
+
   const decorate = (job) => ({
     ...job,
     nextFire: scheduler.nextFire(job.id),
-    lastRun: (({ id, status, finishedAt, startedAt } = {}) => (id ? { id, status, finishedAt, startedAt } : null))(lastRun(db, job.id) ?? {}),
+    // skipReason rides along so the jobs list can say *why* the last fire didn't
+    // run without fetching the run's meta separately.
+    lastRun: (({ id, status, finishedAt, startedAt, meta } = {}) => (id
+      ? { id, status, finishedAt, startedAt, skipReason: meta?.skipReason ?? null }
+      : null))(lastRun(db, job.id) ?? {}),
   });
 
   app.get('/api/extensions', (req, res) => {
@@ -43,7 +62,7 @@ export function createApp({
   });
 
   app.post('/api/jobs', (req, res) => {
-    const v = validateJob(req.body, extensions);
+    const v = validateJob(req.body, extensions, { windows: windows() });
     if (!v.ok) return res.status(400).json({ errors: v.errors });
     const job = createJob(db, v.job);
     scheduler.reload(job.id);
@@ -62,7 +81,7 @@ export function createApp({
     if (!existing) return res.status(404).json({ error: 'not found' });
     const merged = { ...existing, ...req.body, params: { ...existing.params, ...(req.body?.params ?? {}) } };
     // Toggling enabled on an existing once-job whose time passed: allow disable, block enable.
-    const v = validateJob(merged, extensions);
+    const v = validateJob(merged, extensions, { windows: windows() });
     if (!v.ok && !(req.body.enabled === false)) return res.status(400).json({ errors: v.errors });
     const job = updateJob(db, req.params.id, v.ok ? v.job : { enabled: false });
     scheduler.reload(job.id);
@@ -152,9 +171,14 @@ export function createApp({
     req.on('close', cleanup);
   });
 
+  // `{next, unknown}` — `unknown` means an afterReset entry whose reset time
+  // isn't known yet, which is a state to report, not an error.
   app.post('/api/schedule/preview', (req, res) => {
     try {
-      res.json({ next: previewSchedule(req.body?.schedules ?? req.body?.schedule, 3) });
+      res.json(previewSchedule(req.body?.schedules ?? req.body?.schedule, 3, {
+        windows: windows(),
+        jobId: req.body?.jobId ?? '',
+      }));
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
@@ -223,6 +247,65 @@ export function createApp({
     res.json({ snapshots: listUsageSnapshots(db, { limit, okOnly: req.query.okOnly === '1' }) });
   });
 
+  // Budget guard: what it would do to a scheduled fire right now, and whether
+  // it's enforcing at all. `enforcing: false` is a normal state (guard off, or
+  // usage unreadable and therefore failing open) that the UI must surface.
+  app.get('/api/budget', (req, res) => {
+    const job = req.query.job ? getJob(db, req.query.job) : null;
+    if (req.query.job && !job) return res.status(404).json({ error: 'not found' });
+    res.json(policy.explain(job));
+  });
+
+  // Burn-down preview. Never writes: the slots come back for the user to confirm.
+  app.post('/api/budget/plan', (req, res) => {
+    const b = req.body || {};
+    const result = policy.plan({
+      window: b.window,
+      targetPct: Number(b.targetPct),
+      deadline: b.deadline || null,
+      jobIds: Array.isArray(b.jobIds) ? b.jobIds : [b.jobIds].filter(Boolean),
+      minGapMin: Number(b.minGapMin) || undefined,
+      maxConcurrent: Number(b.maxConcurrent) || undefined,
+    });
+    res.status(result.ok ? 200 : 400).json(result);
+  });
+
+  // Confirmed plan → `once` entries on the named jobs. The slots are re-checked
+  // here rather than trusted: a preview left open for an hour is stale, and
+  // materialising fire times that have already passed would be silent no-ops.
+  app.post('/api/budget/plan/apply', (req, res) => {
+    const slots = Array.isArray(req.body?.slots) ? req.body.slots : [];
+    if (!slots.length) return res.status(400).json({ errors: ['slots required'] });
+    if (slots.length > PLAN_SLOT_MAX) return res.status(400).json({ errors: [`at most ${PLAN_SLOT_MAX} slots`] });
+
+    const byJob = new Map();
+    for (const s of slots) {
+      const at = new Date(s?.at ?? '');
+      if (Number.isNaN(at.getTime())) return res.status(400).json({ errors: [`invalid slot time: ${s?.at}`] });
+      if (at <= new Date()) return res.status(400).json({ errors: ['this plan has expired — re-plan and confirm again'] });
+      const job = getJob(db, s?.jobId);
+      if (!job) return res.status(404).json({ errors: [`unknown job: ${s?.jobId}`] });
+      if (!byJob.has(job.id)) byJob.set(job.id, { job, ats: [] });
+      byJob.get(job.id).ats.push(at.toISOString());
+    }
+
+    const enabled = [];
+    const jobs = [];
+    for (const { job, ats } of byJob.values()) {
+      const schedules = [...scheduleEntries(job.schedule), ...ats.map((at) => ({ type: 'once', at }))];
+      const v = validateJob({ ...job, schedules }, extensions, { windows: windows() });
+      if (!v.ok) return res.status(400).json({ errors: v.errors });
+      // A confirmed plan is an instruction to run: a disabled job would swallow
+      // every slot silently, so enable it — and say so in the response.
+      if (!job.enabled) enabled.push(job.name);
+      const saved = updateJob(db, job.id, { ...v.job, enabled: true });
+      scheduler.reload(saved.id);
+      jobs.push(decorate(saved));
+    }
+    awake?.refresh();
+    res.json({ ok: true, added: slots.length, jobs, enabled });
+  });
+
   // Settings: core {paused, home} + per-extension blocks from each ext's
   // `settings` field specs (defaults applied on read, validated on write).
   const extSettingsOut = () => Object.fromEntries([...extensions.values()]
@@ -240,6 +323,8 @@ export function createApp({
       usagePollSec: Number(getSetting(db, 'usagePollSec', DEFAULT_POLL_SEC)) || DEFAULT_POLL_SEC,
       usageShow: usageShow(),
       usageWarnPct: usageWarnPct(),
+      awakeResetLeadMin: Number(getSetting(db, 'awakeResetLeadMin', DEFAULT_RESET_LEAD_MIN)) || DEFAULT_RESET_LEAD_MIN,
+      ...policy.settings(),
       extensions: extSettingsOut(),
     });
   });
@@ -265,6 +350,17 @@ export function createApp({
       const n = Number(b.usageWarnPct);
       if (!Number.isFinite(n) || n < 1 || n > 99) return res.status(400).json({ errors: ['usageWarnPct must be 1-99'] });
       setSetting(db, 'usageWarnPct', Math.round(n));
+    }
+    // Budget guard keys — core for the same reason the usage keys are: the guard,
+    // the planner and (later) the backlog all read these same numbers.
+    for (const [key, min, max] of [['reserveFiveHourPct', 1, 100], ['reserveWeeklyPct', 1, 100], ['awakeResetLeadMin', 0, 240]]) {
+      if (!(key in b)) continue;
+      const n = Number(b[key]);
+      if (!Number.isFinite(n) || n < min || n > max) return res.status(400).json({ errors: [`${key} must be ${min}-${max}`] });
+      setSetting(db, key, Math.round(n));
+    }
+    for (const key of ['budgetGuard', 'pauseOnWarning']) {
+      if (key in b) setSetting(db, key, b[key] ? 1 : 0);
     }
     // A new interval takes effect now rather than after the old one elapses —
     // otherwise lowering it from an hour means waiting an hour to find out.
@@ -322,13 +418,14 @@ export async function main() {
   // Created before the runner so runs can be sampled either side; started after
   // the scheduler because the first probe must never delay a fire.
   const usage = createUsageMonitor({ db });
-  const runner = createRunner({ db, extensions, usage });
-  const scheduler = createScheduler({ db, runner });
+  const budget = createBudgetPolicy({ db, usage });
+  const runner = createRunner({ db, extensions, usage, admit: budget.admit });
+  const scheduler = createScheduler({ db, runner, usage });
   scheduler.start();
   usage.start();
-  const awake = createAwake({ db, runner, scheduler });
+  const awake = createAwake({ db, runner, scheduler, usage });
   awake.refresh();
-  const app = createApp({ db, runner, scheduler, extensions, awake, usage });
+  const app = createApp({ db, runner, scheduler, extensions, awake, usage, budget });
   const port = Number(process.env.CS_PORT) || 9099;
   const server = app.listen(port, '127.0.0.1', () => {
     console.log(`claude-scheduler on http://127.0.0.1:${port} · extensions: ${[...extensions.keys()].join(', ')}`);

@@ -4,13 +4,15 @@ import { join } from 'node:path';
 import { tmpData, jobPayload, fakeSpawn, sleep, extensions } from './helpers.js';
 import { ensureDirs } from '../lib/paths.js';
 import { readFileSync } from 'node:fs';
-import { openDb, listRuns, getSetting } from '../lib/db.js';
+import { openDb, listRuns, getSetting, recordRunUsage } from '../lib/db.js';
 import { createRunner } from '../lib/runner.js';
 import { createScheduler } from '../lib/scheduler.js';
 import { createAwake } from '../lib/awake.js';
 import { createUsageMonitor } from '../lib/usage.js';
+import { createBudgetPolicy } from '../lib/budget.js';
 import { createApp } from '../server.js';
 import { removalScript } from '../lib/uninstall.js';
+import { EventEmitter } from 'node:events';
 
 const USAGE_PAYLOAD = JSON.parse(readFileSync(new URL('./fixtures/get-usage-response.json', import.meta.url)))
   .response.response;
@@ -38,6 +40,40 @@ async function boot() {
   await new Promise((r) => server.once('listening', r));
   const base = () => `http://127.0.0.1:${server.address().port}`;
   return { db, spawnFn, caffSpawn, usageSpawn, usage, runner, scheduler, awake, server, base, osaCalls, uninstalls };
+}
+
+// A second boot whose usage monitor is a fixed snapshot rather than a probe: the
+// budget guard, the planner and afterReset arming are all functions of the limit
+// state, so the tests that exercise them need to *state* that limit state. The
+// real monitor (and the recorded fixture, with its fixed timestamps) is exercised
+// by the usage tests above.
+async function bootWithUsage({ fiveHour = 20, sevenDay = 20, buckets = [], resetsIn = 4 * 3600e3 } = {}) {
+  const dir = tmpData();
+  ensureDirs();
+  const db = openDb(join(dir, 'test.db'));
+  const spawnFn = fakeSpawn();
+  const at = new Date().toISOString();
+  const resetsAt = new Date(Date.now() + resetsIn).toISOString();
+  const snap = {
+    capturedAt: at, checkedAt: at, ok: true, error: null, stale: false, available: true,
+    subscriptionType: 'max', pollSec: 180, nextPollAt: null,
+    windows: { five_hour: { percent: fiveHour, resetsAt }, seven_day: { percent: sevenDay, resetsAt } },
+    buckets,
+  };
+  const usage = {
+    events: new EventEmitter(),
+    snapshot: () => snap,
+    window: (n) => snap.windows[n] ?? null,
+    status: () => ({ running: true, pollSec: 180, nextPollAt: null }),
+    refresh: async () => snap,
+  };
+  const budget = createBudgetPolicy({ db, usage });
+  const runner = createRunner({ db, extensions, spawnFn, notifyFn: () => {}, admit: budget.admit });
+  const scheduler = createScheduler({ db, runner, usage });
+  const app = createApp({ db, runner, scheduler, extensions, awake: null, usage, budget });
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((r) => server.once('listening', r));
+  return { db, spawnFn, usage, snap, resetsAt, runner, scheduler, server, base: () => `http://127.0.0.1:${server.address().port}` };
 }
 
 // Answer the probe a request is waiting on, once the route has spawned it.
@@ -202,6 +238,12 @@ test('schedule preview + settings round-trip (per-extension)', async (t) => {
     usagePollSec: 180,
     usageShow: 'banner',
     usageWarnPct: 80,
+    awakeResetLeadMin: 20,
+    // Budget guard defaults ship conservative — see lib/budget.js.
+    budgetGuard: true,
+    reserveFiveHourPct: 80,
+    reserveWeeklyPct: 95,
+    pauseOnWarning: true,
     extensions: { claude: { claudePath: '/opt/claude', maxConcurrent: 4 } },
   });
 
@@ -233,6 +275,155 @@ test('settings: usage keys round-trip and reject out-of-range values', async (t)
   }
   r = await req(base(), 'GET', '/api/settings');
   assert.equal(r.body.usagePollSec, 300, 'a rejected write changes nothing');
+});
+
+test('settings: budget keys round-trip and reject out-of-range values', async (t) => {
+  const { server, base } = await boot();
+  t.after(() => server.close());
+
+  let r = await req(base(), 'PUT', '/api/settings', {
+    budgetGuard: false, reserveFiveHourPct: 60, reserveWeeklyPct: 90, pauseOnWarning: false, awakeResetLeadMin: 45,
+  });
+  assert.equal(r.body.ok, true);
+  r = await req(base(), 'GET', '/api/settings');
+  assert.deepEqual(
+    [r.body.budgetGuard, r.body.reserveFiveHourPct, r.body.reserveWeeklyPct, r.body.pauseOnWarning, r.body.awakeResetLeadMin],
+    [false, 60, 90, false, 45],
+  );
+
+  for (const bad of [{ reserveFiveHourPct: 0 }, { reserveWeeklyPct: 101 }, { reserveFiveHourPct: 'lots' }, { awakeResetLeadMin: 999 }]) {
+    r = await req(base(), 'PUT', '/api/settings', bad);
+    assert.equal(r.status, 400, JSON.stringify(bad));
+  }
+  r = await req(base(), 'GET', '/api/settings');
+  assert.equal(r.body.reserveFiveHourPct, 60, 'a rejected write changes nothing');
+});
+
+test('budget: explain reflects the live snapshot and the guard fails open', async (t) => {
+  const hot = await bootWithUsage({ fiveHour: 88 });
+  t.after(() => hot.server.close());
+
+  let r = await req(hot.base(), 'GET', '/api/budget');
+  assert.equal(r.body.enforcing, true);
+  assert.equal(r.body.blocked, 'reserving 5h headroom (88% used)');
+
+  await req(hot.base(), 'PUT', '/api/settings', { budgetGuard: false });
+  r = await req(hot.base(), 'GET', '/api/budget');
+  assert.equal(r.body.enforcing, false);
+  assert.equal(r.body.why, 'guard is off');
+  assert.equal(r.body.blocked, null);
+
+  // A per-job question is answered against that job's own overrides.
+  const created = await req(hot.base(), 'POST', '/api/jobs', jobPayload({ params: { prompt: 'p', budget: { minHeadroomPct: 50 } } }));
+  await req(hot.base(), 'PUT', '/api/settings', { budgetGuard: true });
+  r = await req(hot.base(), 'GET', `/api/budget?job=${created.body.id}`);
+  assert.equal(r.body.blocked, 'reserving 5h headroom (88% used)');
+  r = await req(hot.base(), 'GET', '/api/budget?job=nope');
+  assert.equal(r.status, 404);
+});
+
+test('budget: a blocked scheduled fire is visible as skipped, with its reason', async (t) => {
+  const { server, base, db, runner, spawnFn } = await bootWithUsage({ fiveHour: 90 });
+  t.after(() => server.close());
+
+  const created = await req(base(), 'POST', '/api/jobs', jobPayload());
+  const job = { ...created.body };
+
+  // A scheduled fire is refused…
+  runner.start({ ...job, params: job.params }, 'schedule');
+  assert.equal(spawnFn.calls.length, 0);
+  let r = await req(base(), 'GET', '/api/runs');
+  assert.equal(r.body.runs[0].status, 'skipped');
+  assert.equal(r.body.runs[0].meta.skipReason, 'reserving 5h headroom (90% used)');
+
+  // …and the jobs list carries the reason so the row can say why.
+  r = await req(base(), 'GET', '/api/jobs');
+  assert.equal(r.body.jobs[0].lastRun.status, 'skipped');
+  assert.equal(r.body.jobs[0].lastRun.skipReason, 'reserving 5h headroom (90% used)');
+
+  // …while an explicit click always goes ahead.
+  r = await req(base(), 'POST', `/api/jobs/${job.id}/run`);
+  assert.equal(r.body.status, 'running');
+  assert.equal(spawnFn.calls.length, 1);
+  spawnFn.calls[0].child.emit('close', 0);
+  await sleep(30);
+  assert.equal(listRuns(db, { jobId: job.id })[0].status, 'ok');
+});
+
+test('afterReset: job accepted, previewed from live resets, and armed', async (t) => {
+  const { server, base, resetsAt } = await bootWithUsage({ resetsIn: 90 * 60_000 });
+  t.after(() => server.close());
+
+  const entry = { type: 'afterReset', window: 'five_hour', offsetMin: 5, jitterMin: 0 };
+  let r = await req(base(), 'POST', '/api/jobs', jobPayload({ schedule: entry }));
+  assert.equal(r.status, 201);
+  assert.deepEqual(r.body.schedule, entry);
+  // nextFire is the computed fire time — armed against the live reset.
+  assert.equal(r.body.nextFire, new Date(new Date(resetsAt).getTime() + 5 * 60_000).toISOString());
+
+  r = await req(base(), 'POST', '/api/schedule/preview', { schedule: entry });
+  assert.equal(r.body.unknown, false);
+  assert.deepEqual(r.body.next, [new Date(new Date(resetsAt).getTime() + 5 * 60_000).toISOString()]);
+
+  // A window this account doesn't report is refused rather than silently retargeted.
+  r = await req(base(), 'POST', '/api/jobs', jobPayload({ schedule: { ...entry, window: 'tangelo' } }));
+  assert.equal(r.status, 400);
+});
+
+test('burn-down: plan previews without writing, then materialises as once entries', async (t) => {
+  const { server, base, db } = await bootWithUsage({ fiveHour: 10, resetsIn: 4 * 3600e3 });
+  t.after(() => server.close());
+
+  const created = await req(base(), 'POST', '/api/jobs', jobPayload({ enabled: false }));
+  const jobId = created.body.id;
+  for (let i = 0; i < 3; i++) {
+    recordRunUsage(db, { runId: `r${i}`, jobId, beforePct: { five_hour: 0 }, afterPct: { five_hour: 2 } });
+  }
+
+  let r = await req(base(), 'POST', '/api/budget/plan', { window: 'five_hour', targetPct: 10, jobIds: [jobId], minGapMin: 20 });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.slots.length, 5); // 10% / 2% per run
+  assert.equal(r.body.confidence, 'high');
+  const slots = r.body.slots;
+  // A preview writes nothing.
+  assert.deepEqual((await req(base(), 'GET', `/api/jobs/${jobId}`)).body.schedule, { type: 'cron', expr: '0 9 * * *' });
+
+  r = await req(base(), 'POST', '/api/budget/plan/apply', { slots });
+  assert.equal(r.body.added, 5);
+  assert.deepEqual(r.body.enabled, ['test job'], 'a confirmed plan enables the job it plans for');
+  const after = (await req(base(), 'GET', `/api/jobs/${jobId}`)).body;
+  assert.equal(after.enabled, true);
+  assert.equal(after.schedule.length, 6); // the original cron + 5 one-shots
+  assert.equal(after.schedule.filter((s) => s.type === 'once').length, 5);
+
+  // A plan the guard would refuse is refused at preview time instead.
+  const spent = await bootWithUsage({ fiveHour: 85 });
+  t.after(() => spent.server.close());
+  r = await req(spent.base(), 'POST', '/api/budget/plan', { window: 'five_hour', targetPct: 10, jobIds: [jobId] });
+  assert.equal(r.status, 400);
+  assert.match(r.body.reason, /reserves everything past 80%/);
+});
+
+test('burn-down: apply validates its slots rather than trusting the client', async (t) => {
+  const { server, base } = await bootWithUsage();
+  t.after(() => server.close());
+  const created = await req(base(), 'POST', '/api/jobs', jobPayload());
+  const jobId = created.body.id;
+  const at = new Date(Date.now() + 3600e3).toISOString();
+
+  for (const [body, status] of [
+    [{ slots: [] }, 400],
+    [{ slots: [{ jobId, at: 'whenever' }] }, 400],
+    // A stale preview must not silently schedule fires in the past.
+    [{ slots: [{ jobId, at: '2020-01-01T00:00:00Z' }] }, 400],
+    [{ slots: [{ jobId: 'ghost', at }] }, 404],
+    [{ slots: Array.from({ length: 201 }, () => ({ jobId, at })) }, 400],
+  ]) {
+    const r = await req(base(), 'POST', '/api/budget/plan/apply', body);
+    assert.equal(r.status, status, JSON.stringify(body).slice(0, 60));
+  }
+  // None of the rejects touched the schedule.
+  assert.deepEqual((await req(base(), 'GET', `/api/jobs/${jobId}`)).body.schedule, { type: 'cron', expr: '0 9 * * *' });
 });
 
 test('usage: pending snapshot, throttled refresh, history', async (t) => {

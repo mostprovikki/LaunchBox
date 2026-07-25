@@ -10,8 +10,19 @@ let logRun = null;
 let home = '';
 let jobSearch = '';
 let runStatusFilter = '';
+let usageData = null; // last /api/usage body — the window list the pickers offer
 
 const extById = (id) => exts.find((e) => e.id === id);
+
+// Windows an afterReset entry can anchor to: whatever the live snapshot reports,
+// falling back to the two every plan has so the builder still works before the
+// first probe lands.
+const RESET_WINDOW_LABELS = { five_hour: '5-hour', seven_day: 'weekly' };
+const resetWindows = () => {
+  const live = Object.keys(usageData?.windows ?? {});
+  return live.length ? live : ['five_hour', 'seven_day'];
+};
+const resetWindowLabel = (k) => RESET_WINDOW_LABELS[k] ?? k.replace(/_/g, ' ');
 
 // ---------- schedule text ----------
 function cronToPreset(expr) {
@@ -25,6 +36,9 @@ function cronToPreset(expr) {
 }
 function entryText(s) {
   if (s.type === 'once') return `once, ${new Date(s.at).toLocaleString()}`;
+  if (s.type === 'afterReset') {
+    return `after ${resetWindowLabel(s.window)} reset +${s.offsetMin}m${s.jitterMin ? `±${s.jitterMin}` : ''}`;
+  }
   const p = cronToPreset(s.expr);
   return {
     daily: `daily ${p.time}`,
@@ -86,6 +100,7 @@ function renderJobs() {
           <span>${esc(scheduleText(j.schedule))}</span>
           <span title="${esc(fullTime(j.nextFire))}">${j.nextFire ? 'next ' + relTime(j.nextFire) : j.enabled ? '' : 'disabled'}</span>
           ${j.lastRun ? `<span class="linkish" data-act="last" title="${esc(fullTime(j.lastRun.finishedAt || j.lastRun.startedAt))}">last: ${statusHtml(j.lastRun.status)}</span>` : ''}
+          ${j.lastRun?.skipReason ? `<span class="skip-chip" title="${esc(j.lastRun.skipReason)}">⛔ skipped</span>` : ''}
         </div>
       </div>
       <div class="actions">
@@ -122,7 +137,8 @@ async function refreshJobs() {
 // Polled even when the display is `off` — M2 wants the state regardless.
 async function refreshUsage() {
   try {
-    renderUsage(await api('GET', '/api/usage'));
+    usageData = await api('GET', '/api/usage');
+    renderUsage(usageData);
   } catch { /* 501 without a monitor, or the daemon blinked — leave the last render */ }
 }
 
@@ -183,6 +199,7 @@ const PRESETS = {
   daily: { time: true }, weekdays: { time: true },
   hours: { n: true }, minutes: { n: true },
   once: { once: true }, custom: { cron: true },
+  reset: { reset: true },
 };
 const PRESET_OPTS = `
   <option value="daily">Daily at…</option>
@@ -190,6 +207,7 @@ const PRESET_OPTS = `
   <option value="hours">Every N hours</option>
   <option value="minutes">Every N minutes</option>
   <option value="once">Once at…</option>
+  <option value="reset">After limit reset…</option>
   <option value="custom">Custom cron</option>`;
 
 function addSchedRow(entry = null) {
@@ -201,6 +219,9 @@ function addSchedRow(entry = null) {
     <input class="sr-n" type="number" min="1" value="2" hidden>
     <input class="sr-once" type="datetime-local" hidden>
     <input class="sr-cron" placeholder="0 9 * * *" hidden>
+    <select class="sr-window" hidden>${resetWindows().map((w) => `<option value="${esc(w)}">${esc(resetWindowLabel(w))} window</option>`).join('')}</select>
+    <input class="sr-offset" type="number" min="0" max="240" value="3" title="Minutes after the reset" hidden>
+    <input class="sr-jitter" type="number" min="0" max="60" value="2" title="Spread: up to this many extra minutes (same every time for this job)" hidden>
     <button type="button" class="icon sr-del" title="Remove this time">✕</button>`;
   const sel = row.querySelector('.sr-preset');
 
@@ -208,6 +229,17 @@ function addSchedRow(entry = null) {
     sel.value = 'once';
     const d = new Date(entry.at);
     row.querySelector('.sr-once').value = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  } else if (entry?.type === 'afterReset') {
+    sel.value = 'reset';
+    // A window the live snapshot no longer reports still has to be shown, or
+    // editing the job would silently retarget it.
+    const wsel = row.querySelector('.sr-window');
+    if (![...wsel.options].some((o) => o.value === entry.window)) {
+      wsel.insertAdjacentHTML('beforeend', `<option value="${esc(entry.window)}">${esc(resetWindowLabel(entry.window))} window</option>`);
+    }
+    wsel.value = entry.window;
+    row.querySelector('.sr-offset').value = entry.offsetMin ?? 3;
+    row.querySelector('.sr-jitter').value = entry.jitterMin ?? 2;
   } else if (entry) {
     const p = cronToPreset(entry.expr);
     sel.value = p.preset;
@@ -222,9 +254,10 @@ function addSchedRow(entry = null) {
     row.querySelector('.sr-n').hidden = !p.n;
     row.querySelector('.sr-once').hidden = !p.once;
     row.querySelector('.sr-cron').hidden = !p.cron;
+    for (const c of ['.sr-window', '.sr-offset', '.sr-jitter']) row.querySelector(c).hidden = !p.reset;
   };
   sel.addEventListener('change', () => { sync(); updatePreview(); });
-  row.querySelectorAll('input').forEach((i) => i.addEventListener('input', updatePreview));
+  row.querySelectorAll('input, select.sr-window').forEach((i) => i.addEventListener('input', updatePreview));
   row.querySelector('.sr-del').addEventListener('click', () => { row.remove(); syncSchedDels(); updatePreview(); });
   sync();
   $('#sched-rows').appendChild(row);
@@ -249,6 +282,12 @@ function rowSchedule(row) {
       const v = row.querySelector('.sr-once').value;
       return { type: 'once', at: v ? new Date(v).toISOString() : '' };
     }
+    case 'reset': return {
+      type: 'afterReset',
+      window: row.querySelector('.sr-window').value,
+      offsetMin: Number(row.querySelector('.sr-offset').value),
+      jitterMin: Number(row.querySelector('.sr-jitter').value),
+    };
     default: return { type: 'cron', expr: row.querySelector('.sr-cron').value.trim() };
   }
 }
@@ -261,11 +300,19 @@ let previewTimer = null;
 function updatePreview() {
   clearTimeout(previewTimer);
   previewTimer = setTimeout(async () => {
+    const schedules = buildSchedules();
     try {
-      const { next } = await api('POST', '/api/schedule/preview', { schedules: buildSchedules() });
-      $('#f-preview').textContent = next.length
-        ? 'Next: ' + next.map((d) => new Date(d).toLocaleString()).join('  ·  ')
-        : 'Never fires';
+      // The jitter is a hash of the job's id, so an existing job previews its
+      // exact fire time. A job that doesn't exist yet has no id to hash — say
+      // the spread is coming rather than show a time it won't fire at.
+      const { next, unknown } = await api('POST', '/api/schedule/preview', { schedules, jobId: editingId ?? '' });
+      const parts = next.map((d) => new Date(d).toLocaleString());
+      // An unresolved afterReset entry is a state, not a failure: it will fire,
+      // we just can't say when until usage reports the next reset.
+      if (unknown) parts.push('after the next limit reset (depends on live usage)');
+      const spread = editingId ? 0 : Math.max(0, ...schedules.filter((s) => s.type === 'afterReset').map((s) => s.jitterMin || 0));
+      $('#f-preview').textContent = (parts.length ? 'Next: ' + parts.join('  ·  ') : 'Never fires')
+        + (spread ? ` — reset fires get a fixed spread of up to ${spread}m once saved` : '');
     } catch (e) {
       $('#f-preview').textContent = e.data?.error || 'Invalid schedule';
     }
@@ -292,8 +339,15 @@ function buildTypeSeg() {
   $$('#f-type button').forEach((b) => b.addEventListener('click', () => setJobType(b.dataset.value, collectParams())));
 }
 
+// `budget` is a core block inside params (the guard is core, not per-type), so it
+// is collected here rather than by an extension's field specs. Always sent, even
+// empty: that's how unticking the opt-out clears a stored override.
 function collectParams() {
-  return { ...collectFields($('#ext-fields')), ...collectFields($('#ext-fields-adv')) };
+  const budget = {};
+  if ($('#f-ignoreGuard').checked) budget.ignoreGuard = true;
+  const head = $('#f-minHeadroomPct').value;
+  if (head !== '') budget.minHeadroomPct = Number(head);
+  return { ...collectFields($('#ext-fields')), ...collectFields($('#ext-fields-adv')), budget };
 }
 
 function advancedSummary(job) {
@@ -306,6 +360,9 @@ function advancedSummary(job) {
   }
   parts.push(`${job?.timeoutMin ?? 60}m timeout`);
   if (job?.retryCount) parts.push(`${job.retryCount} retries`);
+  // Worth surfacing on the collapsed summary: it opts out of the guard.
+  if (job?.params?.budget?.ignoreGuard) parts.push('ignores budget guard');
+  if (job?.params?.budget?.minHeadroomPct) parts.push(`needs ${job.params.budget.minHeadroomPct}% headroom`);
   $('#advanced-summary').textContent = '— ' + parts.join(' · ');
 }
 
@@ -320,6 +377,8 @@ function openDialog(job = null, clone = false) {
   $('#f-retryCount').value = job?.retryCount ?? 0;
   $('#f-retryDelayMin').value = job?.retryDelayMin ?? 5;
   $('#f-notify').value = job?.notify ?? 'failure';
+  $('#f-ignoreGuard').checked = !!job?.params?.budget?.ignoreGuard;
+  $('#f-minHeadroomPct').value = job?.params?.budget?.minHeadroomPct ?? '';
   $('#advanced').open = false;
   advancedSummary(job);
 
@@ -354,6 +413,85 @@ async function saveJob(ev) {
     const box = $('#form-errors');
     box.hidden = false;
     box.textContent = (e.data?.errors || [e.data?.error || 'save failed']).join(' · ');
+  }
+}
+
+// ---------- burn-down planner ----------
+// A preview the user confirms. The server plans and re-checks on confirm; this
+// only ever displays what came back — no client-side arithmetic that could
+// disagree with the policy that produced the slots.
+let planned = null;
+
+function openPlanDialog() {
+  planned = null;
+  $('#plan-errors').hidden = true;
+  $('#plan-result').hidden = true;
+  $('#plan-confirm').hidden = true;
+  $('#p-window').innerHTML = resetWindows()
+    .map((w) => `<option value="${esc(w)}">${esc(resetWindowLabel(w))} window</option>`).join('');
+  const soon = new Date(Date.now() + 6 * 3600e3);
+  $('#p-deadline').value = new Date(soon.getTime() - soon.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  $('#p-jobs').innerHTML = jobs.length
+    ? jobs.map((j) => `<label><input type="checkbox" value="${esc(j.id)}">${esc(j.name)}${j.enabled ? '' : ' (disabled)'}</label>`).join('')
+    : '<p class="muted">No jobs to plan with yet.</p>';
+  $('#plan-dialog').showModal();
+}
+
+function planBody() {
+  return {
+    window: $('#p-window').value,
+    targetPct: Number($('#p-targetPct').value),
+    deadline: $('#p-deadline').value ? new Date($('#p-deadline').value).toISOString() : null,
+    minGapMin: Number($('#p-minGapMin').value),
+    maxConcurrent: Number($('#p-maxConcurrent').value),
+    jobIds: $$('#p-jobs input:checked').map((i) => i.value),
+  };
+}
+
+function renderPlan(p) {
+  const name = (id) => jobs.find((j) => j.id === id)?.name ?? id.slice(0, 8);
+  // The policy labels jobs by id prefix (it has no reason to know names) and
+  // windows by key. Both are for machines; swap in what the user calls them.
+  const humanise = (s) => jobs.reduce((t, j) => t.replaceAll(j.id.slice(0, 8), j.name), s)
+    .replaceAll(p.window, resetWindowLabel(p.window));
+  $('#plan-result').hidden = false;
+  $('#plan-confirm').hidden = false;
+  $('#plan-summary').innerHTML = `<strong>${p.slots.length}</strong> fire${p.slots.length === 1 ? '' : 's'}`
+    + ` · about <strong>${p.estTotalPct}%</strong> of the ${esc(resetWindowLabel(p.window))} window (of ${p.usablePct}% usable)`
+    + ` · confidence <span class="conf-${p.confidence}">${p.confidence}</span>`
+    + (p.confidence === 'low' ? ' — cost per run is an estimate from fewer than 3 measured runs, so treat the count as a guess.' : '');
+  $('#plan-assumptions').innerHTML = p.assumptions.map((a) => `<li>${esc(humanise(a))}</li>`).join('');
+  $('#plan-slots').innerHTML = p.slots
+    .map((s) => `<div><span>${esc(new Date(s.at).toLocaleString())}</span><span>${esc(name(s.jobId))}</span><span>~${s.estPct}%</span></div>`).join('');
+}
+
+async function previewPlan() {
+  const errors = $('#plan-errors');
+  errors.hidden = true;
+  $('#plan-result').hidden = true;
+  $('#plan-confirm').hidden = true;
+  planned = null;
+  try {
+    planned = await api('POST', '/api/budget/plan', planBody());
+    renderPlan(planned);
+  } catch (e) {
+    errors.hidden = false;
+    errors.textContent = e.data?.reason || (e.data?.errors || []).join(' · ') || e.data?.error || 'could not plan';
+  }
+}
+
+async function confirmPlan() {
+  if (!planned?.slots?.length) return;
+  try {
+    const r = await api('POST', '/api/budget/plan/apply', { slots: planned.slots });
+    $('#plan-dialog').close();
+    toast(`Scheduled ${r.added} fire${r.added === 1 ? '' : 's'}`
+      + (r.enabled.length ? ` · enabled ${r.enabled.join(', ')}` : ''), 'ok');
+    refreshJobs();
+  } catch (e) {
+    const errors = $('#plan-errors');
+    errors.hidden = false;
+    errors.textContent = (e.data?.errors || [e.data?.error || 'could not schedule']).join(' · ');
   }
 }
 
@@ -404,6 +542,7 @@ async function refreshRuns() {
             <span>${r.trigger}</span>
             <span title="${esc(fullTime(r.startedAt || r.createdAt))}">${relTime(r.startedAt || r.createdAt)}</span>
             <span>${duration(r.durationMs)}</span>
+            ${r.meta?.skipReason ? `<span class="skip-chip" title="Why this fire didn't run">${esc(r.meta.skipReason)}</span>` : ''}
           </div>
         </div>
         <div class="actions">
@@ -508,6 +647,22 @@ function renderExtSettings(values) {
   if (!wrap.children.length) wrap.innerHTML = '<p class="muted">No extension settings.</p>';
 }
 
+// Whether the guard is actually enforcing right now — it fails open, so
+// "not enforcing" is normal and has to be said out loud rather than implied.
+async function renderBudgetState() {
+  const el = $('#budget-state');
+  if (!el) return;
+  try {
+    const b = await api('GET', '/api/budget');
+    el.classList.toggle('warn', !b.enforcing);
+    el.textContent = b.enforcing
+      ? `Enforcing. A scheduled fire right now would ${b.blocked ? `be skipped — ${b.blocked}` : 'be allowed'}.`
+      : `Not enforcing — ${b.why}. Every scheduled fire is being allowed through.`;
+  } catch {
+    el.textContent = '';
+  }
+}
+
 async function loadSettings() {
   try {
     const s = await api('GET', '/api/settings');
@@ -516,8 +671,14 @@ async function loadSettings() {
     $('#s-usageShow').value = s.usageShow;
     $('#s-usagePollSec').value = s.usagePollSec;
     $('#s-usageWarnPct').value = s.usageWarnPct;
+    $('#s-budgetGuard').checked = !!s.budgetGuard;
+    $('#s-reserveFiveHourPct').value = s.reserveFiveHourPct;
+    $('#s-reserveWeeklyPct').value = s.reserveWeeklyPct;
+    $('#s-pauseOnWarning').checked = !!s.pauseOnWarning;
+    $('#s-awakeResetLeadMin').value = s.awakeResetLeadMin;
     $('#pause-all').checked = s.paused;
     $('#paused-banner').hidden = !s.paused;
+    renderBudgetState();
   } catch { /* daemon briefly down */ }
 }
 
@@ -531,10 +692,16 @@ async function saveSettings(ev) {
       usageShow: $('#s-usageShow').value,
       usagePollSec: Number($('#s-usagePollSec').value),
       usageWarnPct: Number($('#s-usageWarnPct').value),
+      budgetGuard: $('#s-budgetGuard').checked,
+      reserveFiveHourPct: Number($('#s-reserveFiveHourPct').value),
+      reserveWeeklyPct: Number($('#s-reserveWeeklyPct').value),
+      pauseOnWarning: $('#s-pauseOnWarning').checked,
+      awakeResetLeadMin: Number($('#s-awakeResetLeadMin').value),
     });
     $('#settings-msg').textContent = 'saved ✓';
     setTimeout(() => { $('#settings-msg').textContent = ''; }, 2000);
     refreshUsage(); // a display-mode change should be visible without a reload
+    renderBudgetState();
 
   } catch (e) {
     $('#settings-msg').textContent = (e.data?.errors || [e.data?.error || 'save failed']).join(' · ');
@@ -547,6 +714,10 @@ $('#job-form').addEventListener('submit', saveJob);
 $('#dialog-cancel').addEventListener('click', () => $('#job-dialog').close());
 $('#add-sched').addEventListener('click', () => { addSchedRow(); updatePreview(); });
 $('#job-search').addEventListener('input', (ev) => { jobSearch = ev.target.value; renderJobs(); });
+$('#plan-burndown').addEventListener('click', openPlanDialog);
+$('#plan-preview').addEventListener('click', previewPlan);
+$('#plan-confirm').addEventListener('click', confirmPlan);
+$('#plan-cancel').addEventListener('click', () => $('#plan-dialog').close());
 $('#history-job').addEventListener('change', refreshRuns);
 $$('#status-chips .chip').forEach((c) => c.addEventListener('click', () => { setStatusChip(c.dataset.status); refreshRuns(); }));
 $('#log-close').addEventListener('click', closeLog);

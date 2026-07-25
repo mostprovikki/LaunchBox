@@ -8,13 +8,13 @@ import { openDb, createJob, getRun, listRuns, setSetting, getRunUsage, avgDeltaF
 import { createRunner } from '../lib/runner.js';
 import { shouldNotify } from '../lib/notify.js';
 
-function setup({ minuteMs = 60_000, usage = null } = {}) {
+function setup({ minuteMs = 60_000, usage = null, admit } = {}) {
   const dir = tmpData();
   ensureDirs();
   const db = openDb(join(dir, 'test.db'));
   const spawnFn = fakeSpawn();
   const notifications = [];
-  const runner = createRunner({ db, extensions, spawnFn, notifyFn: (t, m) => notifications.push(m), minuteMs, usage });
+  const runner = createRunner({ db, extensions, spawnFn, notifyFn: (t, m) => notifications.push(m), minuteMs, usage, admit });
   return { dir, db, spawnFn, notifications, runner };
 }
 
@@ -122,6 +122,66 @@ test('concurrency: claude runs queue FIFO at maxConcurrent, commands exempt', as
   spawnFn.calls[2].child.emit('close', 0);
   await sleep(30);
   assert.equal(getRun(db, queued.id).status, 'ok');
+});
+
+test('admit: a blocked fire is a skipped run carrying its reason, and never spawns', async () => {
+  const seen = [];
+  const { db, spawnFn, runner } = setup({
+    admit: (job, trigger) => { seen.push({ name: job.name, trigger }); return trigger === 'manual' ? null : 'reserving 5h headroom (85% used)'; },
+  });
+  const job = createJob(db, validJob({ notify: 'always' }));
+
+  const run = runner.start(job, 'schedule');
+  assert.equal(run.status, 'skipped');
+  assert.equal(run.meta.skipReason, 'reserving 5h headroom (85% used)');
+  assert.ok(run.finishedAt);
+  assert.equal(spawnFn.calls.length, 0); // the whole point: nothing was launched
+  assert.deepEqual(seen, [{ name: 'test job', trigger: 'schedule' }]);
+
+  // The guard is consulted per fire, so the same job admitted later does launch.
+  runner.start(job, 'manual');
+  assert.equal(spawnFn.calls.length, 1);
+  spawnFn.calls[0].child.emit('close', 0);
+  await sleep(30);
+});
+
+test('admit: a run that queued on capacity is not re-judged when it launches', async () => {
+  // Admission is a decision about starting, made once. Re-checking it in
+  // drainQueue would let a limit that moved while the run waited strand it.
+  let allow = true;
+  const { db, spawnFn, runner } = setup({ admit: () => (allow ? null : 'reserving 5h headroom') });
+  setSetting(db, 'maxConcurrent', 1);
+  const j1 = createJob(db, validJob({ name: 'j1' }));
+  const j2 = createJob(db, validJob({ name: 'j2' }));
+
+  runner.start(j1, 'schedule');
+  const queued = runner.start(j2, 'schedule');
+  assert.equal(queued.status, 'queued');
+
+  allow = false; // the account gets hot while j2 waits its turn
+  spawnFn.calls[0].child.emit('close', 0);
+  await sleep(30);
+  assert.equal(spawnFn.calls.length, 2);
+  assert.equal(getRun(db, queued.id).status, 'running');
+  spawnFn.calls[1].child.emit('close', 0);
+  await sleep(30);
+});
+
+test('admit: the overlap check runs first, so an overlapping fire is never judged', async () => {
+  let calls = 0;
+  const { db, spawnFn, runner } = setup({ admit: () => { calls++; return null; } });
+  const job = createJob(db, validJob());
+
+  runner.start(job, 'schedule');
+  assert.equal(calls, 1);
+  // A job already running is skipped for overlap; attributing that to the budget
+  // guard would misreport why nothing happened.
+  const overlap = runner.start(job, 'schedule');
+  assert.equal(overlap.status, 'skipped');
+  assert.equal(overlap.meta, null);
+  assert.equal(calls, 1);
+  spawnFn.calls[0].child.emit('close', 0);
+  await sleep(30);
 });
 
 test('timeout: SIGTERM then status timeout', async () => {
