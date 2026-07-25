@@ -81,3 +81,77 @@ export function fakeSpawn() {
 }
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Fake `child_process.execFile` standing in for the `bd` binary. No test may
+// shell out to the real thing — same rule as "no test spawns the real claude" —
+// so every measured bd behaviour is reproduced here instead.
+//
+// `handlers` is keyed by subcommand (`ready`, `close`, `where`, `update`,
+// `--version`), with a `default` fallback. A handler is either a reply object or
+// a function of `{args, opts, calls}` returning one:
+//
+//   { stdout, stderr, code }   code defaults to 0 (success)
+//   { timeout: true }          the contention case: node kills the child, so the
+//                              error carries killed/signal and no exit code
+//   { spawnError: 'ENOENT' }   binary missing — a string `code`, not a number
+export function fakeBd(handlers = {}) {
+  const calls = [];
+  const fn = (cmd, args, opts, cb) => {
+    calls.push({ cmd, args, opts, env: opts?.env ?? {}, sub: args[0] });
+    const h = handlers[args[0]] ?? handlers.default ?? { stdout: '' };
+    const reply = typeof h === 'function' ? h({ args, opts, calls }) : h;
+    const stdout = reply.stdout ?? '';
+    const stderr = reply.stderr ?? '';
+    process.nextTick(() => {
+      if (reply.timeout) {
+        // What node reports when `options.timeout` fires: the child was killed,
+        // so there is a signal and no useful exit status.
+        const err = new Error('spawnSync ETIMEDOUT');
+        err.killed = true;
+        err.signal = 'SIGTERM';
+        err.code = null;
+        cb(err, stdout, stderr);
+        return;
+      }
+      if (reply.spawnError) {
+        const err = new Error(`spawn ${reply.spawnError}`);
+        err.code = reply.spawnError; // string code = spawn failure
+        cb(err, '', '');
+        return;
+      }
+      const code = reply.code ?? 0;
+      if (code !== 0) {
+        const err = new Error(`Command failed: bd ${args.join(' ')}`);
+        err.code = code; // number code = exit status
+        cb(err, stdout, stderr);
+        return;
+      }
+      cb(null, stdout, stderr);
+    });
+    return { on() {} };
+  };
+  fn.calls = calls;
+  return fn;
+}
+
+// A `bd ready --json` row in bd 1.1.0's real shape: snake_case, `issue_type`
+// rather than `type`, and — unless labels are given — NO `labels` key at all.
+export function bdReadyRow(overrides = {}) {
+  const { labels, ...rest } = overrides;
+  const row = {
+    id: 'sp-abc',
+    title: 'a ready bead',
+    status: 'open',
+    priority: 2,
+    issue_type: 'task',
+    created_at: '2026-07-25T00:00:00Z',
+    updated_at: '2026-07-25T00:00:00Z',
+    dependency_count: 0,
+    dependent_count: 0,
+    comment_count: 0,
+    ...rest,
+  };
+  // Deliberately omit the key when there are no labels — the measured trap.
+  if (labels !== undefined) row.labels = labels;
+  return row;
+}

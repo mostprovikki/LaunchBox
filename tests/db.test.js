@@ -9,6 +9,9 @@ import {
   getSetting, setSetting, cleanupAll,
   insertUsageSnapshot, listUsageSnapshots, latestUsageSnapshot, pruneUsageSnapshots,
   recordRunUsage, getRunUsage, avgDeltaForJob,
+  createProject, listProjects, getProject, getProjectByPath, updateProject, deleteProject,
+  acquireLease, getLease, listLeases, releaseLease, completeLease, attachLeaseRun,
+  releaseOrphanLeases,
 } from '../lib/db.js';
 
 function freshDb() {
@@ -232,4 +235,113 @@ test('migration: v1 flat-column db folds into params + meta', () => {
   db.close();
   const again = openDb(path);
   assert.deepEqual(getJob(again, 'j1').params.model, 'sonnet');
+});
+
+// --- projects + task_leases (M4a) ---------------------------------------
+
+test('project CRUD round-trip: config parsed, state defaults to the pending airlock', () => {
+  const db = freshDb();
+  const p = createProject(db, { name: 'repo', path: '/repos/one', config: { autoLabel: 'unattended' } });
+
+  // Discovery may only ever produce 'pending'; nothing polls or runs until a
+  // human activates it. The default is the safety property, so assert it.
+  assert.equal(p.state, 'pending');
+  assert.deepEqual(p.config, { autoLabel: 'unattended' });
+  assert.equal(p.beadsDir, null, 'beadsDir stays unknown until bd where reports it');
+  assert.equal(p.lastPollOk, null);
+
+  const upd = updateProject(db, p.id, {
+    state: 'active', beadsDir: '/repos/one/.beads', bdVersion: 'bd version 1.1.0 (Homebrew)',
+    lastPollOk: true, config: { autoLabel: 'unattended', maxConcurrent: 2 },
+  });
+  assert.equal(upd.state, 'active');
+  assert.equal(upd.beadsDir, '/repos/one/.beads');
+  assert.equal(upd.lastPollOk, true);
+  assert.equal(upd.config.maxConcurrent, 2);
+
+  assert.equal(getProjectByPath(db, '/repos/one').id, p.id);
+  assert.equal(listProjects(db, { state: 'active' }).length, 1);
+  assert.equal(listProjects(db, { state: 'pending' }).length, 0);
+
+  deleteProject(db, p.id);
+  assert.equal(getProject(db, p.id), null);
+});
+
+test('lease is the lock: two poll cycles cannot both take one bead', () => {
+  const db = freshDb();
+  const p = createProject(db, { name: 'r', path: '/r' });
+
+  assert.equal(acquireLease(db, { projectId: p.id, beadId: 'sp-1' }), true);
+  // The second caller must lose. This — not `bd update --claim` — is what
+  // actually prevents double-running a bead.
+  assert.equal(acquireLease(db, { projectId: p.id, beadId: 'sp-1' }), false);
+  assert.equal(getLease(db, p.id, 'sp-1').state, 'held');
+
+  // A different bead is unaffected, and so is the same bead in another project.
+  assert.equal(acquireLease(db, { projectId: p.id, beadId: 'sp-2' }), true);
+  const other = createProject(db, { name: 'r2', path: '/r2' });
+  assert.equal(acquireLease(db, { projectId: other.id, beadId: 'sp-1' }), true);
+});
+
+test('a released lease is retryable; a done one does not resurrect', () => {
+  const db = freshDb();
+  const p = createProject(db, { name: 'r', path: '/r' });
+
+  acquireLease(db, { projectId: p.id, beadId: 'sp-1' });
+  // A failed / stopped / never-launched run frees the bead for a later poll.
+  releaseLease(db, p.id, 'sp-1');
+  assert.equal(getLease(db, p.id, 'sp-1').state, 'released');
+  assert.ok(getLease(db, p.id, 'sp-1').releasedAt);
+  assert.equal(acquireLease(db, { projectId: p.id, beadId: 'sp-1' }), true, 'retry after failure');
+
+  completeLease(db, p.id, 'sp-1');
+  assert.equal(getLease(db, p.id, 'sp-1').state, 'done');
+  // A closed bead stops appearing in `bd ready`, so re-acquiring is harmless and
+  // is the right answer if it ever were reopened.
+  assert.equal(acquireLease(db, { projectId: p.id, beadId: 'sp-1' }), true);
+});
+
+test('runId is attached after launch, since the lease is taken before it exists', () => {
+  const db = freshDb();
+  const p = createProject(db, { name: 'r', path: '/r' });
+  acquireLease(db, { projectId: p.id, beadId: 'sp-1' });
+  assert.equal(getLease(db, p.id, 'sp-1').runId, null);
+
+  attachLeaseRun(db, p.id, 'sp-1', 'run-9');
+  assert.equal(getLease(db, p.id, 'sp-1').runId, 'run-9');
+  assert.equal(listLeases(db, { projectId: p.id, state: 'held' }).length, 1);
+});
+
+test('a daemon crash leaves held leases; boot releases them', () => {
+  const db = freshDb();
+  const p = createProject(db, { name: 'r', path: '/r' });
+  acquireLease(db, { projectId: p.id, beadId: 'sp-1' });
+  acquireLease(db, { projectId: p.id, beadId: 'sp-2' });
+  completeLease(db, p.id, 'sp-2');
+
+  // Same role as failOrphanRuns: a held lease with no live run would otherwise
+  // wedge that bead forever.
+  assert.equal(releaseOrphanLeases(db), 1);
+  assert.equal(getLease(db, p.id, 'sp-1').state, 'released');
+  assert.equal(getLease(db, p.id, 'sp-2').state, 'done', 'finished leases are left alone');
+});
+
+test('deleting a project takes its leases with it', () => {
+  const db = freshDb();
+  const p = createProject(db, { name: 'r', path: '/r' });
+  acquireLease(db, { projectId: p.id, beadId: 'sp-1' });
+  deleteProject(db, p.id);
+  assert.equal(listLeases(db, { projectId: p.id }).length, 0);
+});
+
+test('cleanupAll wipes projects and leases too', () => {
+  const db = freshDb();
+  const p = createProject(db, { name: 'r', path: '/r' });
+  acquireLease(db, { projectId: p.id, beadId: 'sp-1' });
+  setSetting(db, 'keepMe', 'yes');
+
+  cleanupAll(db);
+  assert.equal(listProjects(db).length, 0);
+  assert.equal(listLeases(db).length, 0);
+  assert.equal(getSetting(db, 'keepMe'), 'yes', 'settings survive a cleanup');
 });

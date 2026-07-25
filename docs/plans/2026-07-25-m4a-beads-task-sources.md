@@ -383,11 +383,23 @@ it cannot protect them from this.
 
 So the promise "we never touch your checkout" needs one honest asterisk: **a scheduled close
 leaves one appended audit line as an uncommitted modification in the human's working tree.** We
-should not paper over it. Options, in preference order: (a) leave it — it is intended to be
-committed, and one appended line will not conflict; (b) surface it in the Projects tab as expected
-noise so it never reads as corruption; (c) commit it ourselves, which makes us a writer of the
-human's git history and is worse. **Leaning (a) + (b).** What we must *not* do is claim silence we
-do not have.
+should not paper over it.
+
+**Decided (2026-07-25, with the user): (a) + (b).**
+
+- **(a) Leave the line.** It is intended to be committed, it is append-only, and one line per
+  completed job will not conflict with the human's own edits. We do not try to suppress it.
+- **(b) Surface it in the Projects tab as *expected* noise** — a plain-language note that a
+  completed scheduled bead leaves one appended audit line in `.beads/interactions.jsonl`, so it
+  never reads as corruption or as the scheduler having gone rogue in the checkout.
+- **(c) Committing it ourselves is rejected** — it would make the scheduler a writer of the human's
+  git history, a far bigger promise to break than a dirty file.
+- **(d) Documented per-project escape hatch:** a project that does not want the audit trail
+  versioned can `git rm --cached .beads/interactions.jsonl` and gitignore it. That is the only
+  thing that achieves actual silence, and it is deliberately **the repo owner's call, not ours** —
+  the scheduler never does this to someone's repo. (Mechanically obvious; not spike-verified.)
+
+What we must *not* do is claim silence we do not have.
 
 ## 4a.7 Cost attribution — the unsolved bit worth naming
 
@@ -395,12 +407,23 @@ do not have.
 (reaped per §4.3). So burst planning would forget what a bead costs the moment its job is
 reaped — the learned-cost feature would silently degrade to the default estimate forever.
 
-Options, to be decided in the spike: key `run_usage` additionally by `(projectId, beadId)`; or
-aggregate per `(projectId, bead type/label)` which generalises better across one-off beads; or
-write the measured cost back to the bead's `Metadata` blob, which keeps it with the task but
-makes us a writer of task data. **Leaning to per-`(projectId, beadId)` plus a per-project
-median fallback**, since most beads run once and the project-level median is what a fresh bead
-actually needs.
+Options considered: key `run_usage` additionally by `(projectId, beadId)`; aggregate per
+`(projectId, bead type/label)`; or write the measured cost back to the bead's `Metadata` blob,
+which keeps it with the task but makes us a writer of task data.
+
+**RESOLVED while implementing (2026-07-25) — the premise was the bug, and no new table is
+needed.** The problem only existed because §4.3 assumed the materialised job row is *reaped*
+after each run. It doesn't have to be. `lib/projects.js` materialises **one job row per bead,
+reused on every run of that bead** (looked up via `findJobByBead`, which matches
+`json_extract(params,'$._beadId')`). Because `run_usage` already keys by `jobId`, that stable row
+makes `avgDeltaForJob` accumulate the bead's real observed cost across runs for free — no schema
+change, no second aggregation path, and the existing median-not-mean logic applies unchanged.
+
+The cost is a few hundred bytes of `jobs` row per bead ever run, which also gives the user a
+visible history of that bead's runs. Reaping, if it is ever wanted, becomes a pruning policy over
+old rows rather than something on the hot path — and the burst planner's per-project median
+fallback is still available for a bead that has never run. Covered by a test asserting the job row
+is reused and the learned delta survives into the next run.
 
 ## 4a.8 API & UI
 
