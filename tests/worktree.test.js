@@ -15,6 +15,33 @@ const fakeGit = fakeBd;
 const PROJECT = { id: 'abcdef1234567890', name: 'my repo', path: '/repo' };
 const listing = (paths) => ({ stdout: paths.map((p) => `worktree ${p}\nHEAD abc\n`).join('\n') });
 
+// Per-bead naming (M4). The separator is `--` rather than `/` on purpose: git
+// refuses a branch `a/b` when branch `a` exists, and M4a installs already have
+// per-project `scheduler/<proj>` branches — so nesting would break on exactly the
+// repos that have been running longest. A nested path would also plant the bead's
+// worktree inside the project's old one, which then reports it as untracked.
+test('a bead gets its own worktree path and branch, never nested under the project\'s', () => {
+  assert.equal(worktreeName(PROJECT, 'sp-1'), 'my-repo-abcdef12--sp-1');
+  assert.equal(branchFor(PROJECT, 'sp-1'), 'scheduler/my-repo-abcdef12--sp-1');
+  // No slash beyond the single `scheduler/` namespace, or git's ref directory/file
+  // conflict comes back.
+  assert.equal(branchFor(PROJECT, 'sp-1').split('/').length, 2);
+  assert.ok(!worktreeName(PROJECT, 'sp-1').includes('/'), 'one path segment, so it cannot nest');
+
+  // Prefix pairs are distinct directories — equality is what matters here, unlike
+  // the completion-marker check where a substring test was the bug.
+  assert.notEqual(worktreeName(PROJECT, 'sp-1'), worktreeName(PROJECT, 'sp-12'));
+
+  // Two ids that sanitise to the same string must NOT collapse onto one checkout —
+  // two beads sharing a worktree is the exact collision this change removes.
+  assert.notEqual(worktreeName(PROJECT, 'sp/1'), worktreeName(PROJECT, 'sp-1'));
+  for (const id of ['../escape', 'sp/1', '', '..', 'a b']) {
+    const n = worktreeName(PROJECT, id);
+    assert.ok(!n.includes('/'), `${JSON.stringify(id)} -> ${n} must be a single segment`);
+    assert.equal(join('/root', n), `/root/${n}`, 'must not escape the worktree root');
+  }
+});
+
 test('worktree name is filesystem-safe and disambiguated by project id', () => {
   assert.equal(worktreeName({ id: 'abcdef1234567890', name: 'my repo' }), 'my-repo-abcdef12');
   assert.equal(branchFor(PROJECT), 'scheduler/my-repo-abcdef12');
@@ -112,8 +139,15 @@ test('remove tolerates an already-absent worktree', async () => {
 
 // --- the poller's use of it -------------------------------------------
 
-function pollerSetup({ gitHandlers, worktreeRoot = '/outside' } = {}) {
-  const db = openDb(join(tmpData(), 'test.db'));
+// `db`/`project` can be passed in to simulate a restart against the same state —
+// the reaping tests need a second daemon over a database that already has a held
+// lease. `runnerStarts: false` makes the runner decline, which is a give-up path
+// *after* the worktree was created.
+function pollerSetup({
+  gitHandlers, worktreeRoot = '/outside', db: existingDb = null,
+  project: existingProject = null, runnerStarts = true,
+} = {}) {
+  const db = existingDb ?? openDb(join(tmpData(), 'test.db'));
   const bd = fakeBd({
     '--version': { stdout: 'bd version 1.1.0 (Homebrew)' },
     where: { stdout: JSON.stringify({ path: '/repo/.beads', database_path: '/repo/.beads/db' }) },
@@ -126,11 +160,17 @@ function pollerSetup({ gitHandlers, worktreeRoot = '/outside' } = {}) {
     'show-ref': { code: 1 },
   });
   const starts = [];
+  let n = 0;
   const runner = {
     events: new EventEmitter(),
-    start(job, trigger) { starts.push(job); return { id: 'run-1', jobId: job.id, status: 'running', trigger }; },
+    start(job, trigger) {
+      if (!runnerStarts) return null;
+      starts.push(job);
+      return { id: `run-${++n}`, jobId: job.id, status: 'running', trigger };
+    },
   };
-  const project = createProject(db, {
+  runner.events.setMaxListeners(50);
+  const project = existingProject ?? createProject(db, {
     name: 'repo', path: '/repo', state: 'active', beadsDir: '/repo/.beads',
     config: { autoLabel: 'unattended', maxConcurrent: 1, defaults: { timeoutMin: 30, model: 'default', notify: 'failure' } },
   });
@@ -139,7 +179,7 @@ function pollerSetup({ gitHandlers, worktreeRoot = '/outside' } = {}) {
     db, beads: createBeads({ execFileFn: bd }), runner,
     worktrees: createWorktrees({ execFileFn: git }),
   });
-  return { db, projects, project, starts, git };
+  return { db, projects, project, starts, git, runner };
 }
 
 test('scheduled work runs in the worktree, not the human\'s checkout', async () => {
@@ -147,8 +187,10 @@ test('scheduled work runs in the worktree, not the human\'s checkout', async () 
   const r = await projects.pollProject(project.id);
 
   assert.equal(r.started.length, 1);
-  // The project id is a uuid, so assert the shape rather than a literal path.
-  assert.match(starts[0].cwd, /^\/outside\/repo-[0-9a-f]{8}$/, `expected a worktree cwd, got ${starts[0].cwd}`);
+  // The project id is a uuid, so assert the shape rather than a literal path. The
+  // `--sp-1` suffix is the per-bead part (M4): one checkout per bead, so two of our
+  // own runs cannot edit each other's files.
+  assert.match(starts[0].cwd, /^\/outside\/repo-[0-9a-f]{8}--sp-1$/, `expected a per-bead worktree cwd, got ${starts[0].cwd}`);
   assert.ok(!starts[0].cwd.startsWith('/repo'), 'never the primary checkout');
 });
 
@@ -173,4 +215,74 @@ test('with no worktreeRoot configured the work falls back to the project path', 
   const { projects, project, starts } = pollerSetup({ worktreeRoot: null });
   await projects.pollProject(project.id);
   assert.equal(starts[0].cwd, '/repo');
+});
+
+// --- reaping (mandatory once worktrees are per bead) -----------------------
+// Before M4 there was one worktree per project, reused forever, so forgetting to
+// reap cost nothing — `worktree.remove` had no production caller at all. Per bead
+// it is one directory per bead that ever ran, so a missed reap is an unbounded
+// disk leak.
+
+const removals = (git) => git.calls
+  .filter((c) => c.args[0] === 'worktree' && c.args[1] === 'remove')
+  .map((c) => c.args[c.args.length - 1]);
+
+test('a bead\'s worktree is reaped when its run finishes, whatever the outcome', async () => {
+  for (const status of ['ok', 'fail', 'stopped', 'killed']) {
+    const { projects, project, git, runner } = pollerSetup();
+    const r = await projects.pollProject(project.id);
+    assert.equal(r.started.length, 1, status);
+    assert.deepEqual(removals(git), [], 'not reaped while the run is still going');
+
+    runner.events.emit(`done:${r.started[0].runId}`, status);
+    await new Promise((res) => setTimeout(res, 30));
+    assert.deepEqual(removals(git), [`/outside/repo-${project.id.slice(0, 8)}--sp-1`],
+      `a ${status} run must still release its checkout`);
+  }
+});
+
+test('a bead abandoned after its worktree was made does not leak the directory', async () => {
+  // The runner declines, which is a give-up path *after* `ensure` succeeded — the
+  // shape that leaks if reaping is only wired into the completion handler.
+  const { projects, project, git } = pollerSetup({ runnerStarts: false });
+  const r = await projects.pollProject(project.id);
+  assert.equal(r.started.length, 0);
+  assert.deepEqual(removals(git), [`/outside/repo-${project.id.slice(0, 8)}--sp-1`],
+    'the worktree was created, so giving up has to clean it up');
+});
+
+test('a crash leaves no orphan worktree: recoverOrphans sweeps them', async () => {
+  const { db, projects, project, git } = pollerSetup();
+  const r = await projects.pollProject(project.id);
+  assert.equal(r.started.length, 1);
+  // The daemon dies here: the lease is still held and nothing will ever fire
+  // `done:` for that run, so the completion handler cannot be what reaps it.
+  const fresh = pollerSetup({ db, project });
+  await fresh.projects.recoverOrphans();
+  assert.deepEqual(removals(fresh.git), [`/outside/repo-${project.id.slice(0, 8)}--sp-1`]);
+});
+
+test('a failed reap is reported, never fatal to the run\'s outcome', async () => {
+  const { projects, project, runner } = pollerSetup({
+    gitHandlers: {
+      worktree: ({ args }) => {
+        if (args[1] === 'list') return listing(['/repo']);
+        if (args[1] === 'remove') return { code: 1, stderr: 'fatal: cannot remove\n' };
+        return { stdout: '' };
+      },
+      'show-ref': { code: 1 },
+    },
+  });
+  const failures = [];
+  projects.events.on('reap-failed', (e) => failures.push(e));
+  const finished = [];
+  projects.events.on('finished', (e) => finished.push(e));
+
+  const r = await projects.pollProject(project.id);
+  runner.events.emit(`done:${r.started[0].runId}`, 'fail');
+  await new Promise((res) => setTimeout(res, 30));
+
+  assert.equal(failures.length, 1, 'a leak must be reported rather than swallowed');
+  assert.equal(failures[0].beadId, 'sp-1');
+  assert.equal(finished.length, 1, 'and it must not change what happened to the bead');
 });

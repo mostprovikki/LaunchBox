@@ -1028,7 +1028,12 @@ test('the declaration is re-read from disk each poll, so a fixed typo takes effe
   assert.equal(getProject(db, project.id).config.autoLabel, 'unattended');
 });
 
-test('a project sharing one worktree runs a single bead at a time', async () => {
+// Inverted deliberately in M4. This used to assert the clamp: with one worktree
+// per project, two concurrent beads shared a checkout and a branch and edited each
+// other's files, so effective concurrency was forced to 1. Worktrees are now per
+// bead, so `maxConcurrent` means what it says — and the thing to pin is that each
+// bead gets its OWN checkout, because that is what makes the concurrency safe.
+test('with per-bead worktrees a project may run several beads at once, each in its own checkout', async () => {
   const { db, project, runner, beads } = setup({
     config: { ...CONFIG, maxConcurrent: 4 },
     bdHandlers: {
@@ -1043,13 +1048,22 @@ test('a project sharing one worktree runs a single bead at a time', async () => 
     },
   });
   setSetting(db, 'worktreeRoot', '/tmp/wt');
-  const worktrees = { ensure: async () => ({ path: '/tmp/wt/repo', created: false }) };
+  const asked = [];
+  const worktrees = {
+    ensure: async (p, { beadId }) => {
+      asked.push(beadId);
+      return { path: `/tmp/wt/repo--${beadId}`, created: true };
+    },
+    remove: async () => ({ removed: true }),
+  };
   const projects = createProjects({ db, beads, runner, worktrees });
 
   const r = await projects.pollProject(project.id);
 
-  // One worktree per project: two concurrent beads would share a checkout and a
-  // branch and edit each other's files.
-  assert.equal(r.started.length, 1);
-  assert.match(r.reasons.join(' '), /share a single git worktree/);
+  assert.equal(r.started.length, 2, 'both ready beads ran');
+  assert.deepEqual(asked.sort(), ['sp-1', 'sp-2'], 'a worktree was requested per bead, not per project');
+  const cwds = runner.starts.map((s) => s.job.cwd).sort();
+  assert.deepEqual(cwds, ['/tmp/wt/repo--sp-1', '/tmp/wt/repo--sp-2'],
+    'two concurrent beads must not share a checkout — that was the collision the clamp existed to prevent');
+  assert.equal(r.reasons.join(' ').includes('share a single git worktree'), false, 'the clamp explanation is gone');
 });
