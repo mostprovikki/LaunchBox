@@ -314,3 +314,176 @@ test('usage calibration: a skipped run is not sampled', async () => {
   assert.equal(getRunUsage(db, skipped.id), null);
   assert.equal(spawnFn.calls.length, 1);
 });
+
+// --- M3: graceful stop ------------------------------------------------------
+// The ladder is SIGINT → SIGTERM → SIGKILL. Rung 1 is SIGINT rather than an
+// `interrupt` control request because the M3 spike measured them as
+// behaviourally identical against the real CLI — see the plan's §3.3.
+
+test('requestStop: a well-behaved child stops at SIGINT and is recorded `stopped`', async () => {
+  const { db, spawnFn, runner } = setup();
+  const job = createJob(db, validJob());
+  const run = runner.start(job, 'manual');
+  const child = spawnFn.calls[0].child;
+
+  // A real claude child answers SIGINT by emitting its final result and exiting 0.
+  child.stdout.emit('data', INIT + '\n');
+  runner.requestStop(run.id, { reason: 'paused (soft)' });
+  await sleep(30);
+
+  assert.deepEqual(child.signals, ['SIGINT'], 'asked politely, and only once');
+  const after = getRun(db, run.id);
+  assert.equal(after.status, 'stopped');
+  assert.equal(after.meta.stopReason, 'paused (soft)');
+  assert.equal(after.meta.stopRung, 'SIGINT');
+  // The whole point of a graceful stop: the session survives to be resumed.
+  assert.equal(after.meta.sessionId, 'sess-9', 'stop metadata must not clobber the sessionId');
+  assert.match(readFileSync(after.logPath, 'utf8'), /winding down at the next safe point/);
+});
+
+test('requestStop: exit code 0 does not make a stopped run look successful', async () => {
+  // The CLI exits 0 under SIGINT while reporting the turn as an error. Neither
+  // signal is trustworthy, so `stopped` comes from having asked — nothing else.
+  const { db, spawnFn, runner } = setup();
+  const job = createJob(db, validJob());
+  const run = runner.start(job, 'manual');
+  runner.requestStop(run.id);
+  await sleep(30);
+  assert.equal(spawnFn.calls[0].child.killedWith, 'SIGINT');
+  assert.equal(getRun(db, run.id).exitCode, 0, 'the child really did exit 0');
+  assert.equal(getRun(db, run.id).status, 'stopped', 'and it is still not "ok"');
+});
+
+test('requestStop: a deaf child is escalated SIGINT → SIGTERM → SIGKILL', async () => {
+  const { db, spawnFn, runner } = setup();
+  setSetting(db, 'softGraceMs', 40); // 120s by default; the ladder is what's under test
+  const job = createJob(db, validJob());
+  const run = runner.start(job, 'manual');
+  const child = spawnFn.calls[0].child;
+  child.deaf = true; // ignores everything short of SIGKILL
+
+  runner.requestStop(run.id, { reason: 'paused (soft)' });
+  assert.deepEqual(child.signals, ['SIGINT']);
+  assert.equal(getRun(db, run.id).status, 'running', 'still running — it was asked, not killed');
+
+  await sleep(90);
+  assert.deepEqual(child.signals, ['SIGINT', 'SIGTERM'], 'escalated after the grace window');
+  assert.equal(getRun(db, run.id).meta.stopRung, 'SIGTERM', 'and the log/meta says which rung');
+
+  // KILL_GRACE_MS is a fixed 10s, so drive the last rung directly rather than
+  // making the suite wait for it.
+  assert.equal(getRun(db, run.id).status, 'running');
+  const rungs = readFileSync(getRun(db, run.id).logPath, 'utf8');
+  assert.match(rungs, /still running after 0s — SIGTERM/);
+});
+
+test('requestStop is idempotent and does not restart the ladder', async () => {
+  const { db, spawnFn, runner } = setup();
+  setSetting(db, 'softGraceMs', 10_000);
+  const job = createJob(db, validJob());
+  const run = runner.start(job, 'manual');
+  const child = spawnFn.calls[0].child;
+  child.deaf = true;
+  runner.requestStop(run.id);
+  runner.requestStop(run.id);
+  runner.requestStop(run.id);
+  assert.deepEqual(child.signals, ['SIGINT'], 'asking three times sends one signal');
+});
+
+test('a stopped run is never retried and never notified as a failure', async () => {
+  const { db, spawnFn, notifications, runner } = setup({ minuteMs: 10 });
+  // retryCount 2 would rerun a `fail`; an intentional stop must not come back.
+  const job = createJob(db, validJob({ retryCount: 2, retryDelayMin: 1, notify: 'failure' }));
+  const run = runner.start(job, 'manual');
+  runner.requestStop(run.id);
+  await sleep(60);
+
+  assert.equal(getRun(db, run.id).status, 'stopped');
+  assert.deepEqual(notifications, [], 'an intentional stop is not a failure');
+  assert.equal(spawnFn.calls.length, 1, 'and it is not retried');
+  assert.equal(listRuns(db, { jobId: job.id }).length, 1);
+  // 'always' would still mention it — it is neither success nor failure.
+  assert.equal(shouldNotify('failure', 'stopped'), false);
+  assert.equal(shouldNotify('always', 'stopped'), true);
+});
+
+test('requestStop on a queued run stops it without ever launching it', async () => {
+  const { db, spawnFn, runner } = setup();
+  setSetting(db, 'maxConcurrent', 1);
+  const j1 = createJob(db, validJob({ name: 'a' }));
+  const j2 = createJob(db, validJob({ name: 'b' }));
+  runner.start(j1, 'manual');
+  const queued = runner.start(j2, 'manual');
+  assert.equal(queued.status, 'queued');
+
+  const stopped = runner.requestStop(queued.id);
+  assert.equal(stopped.status, 'stopped');
+  assert.equal(stopped.meta.stopRung, 'dequeued');
+  assert.equal(spawnFn.calls.length, 1, 'it must not be launched by the drain');
+
+  // And the job is free to run again — the dead queue entry does not hold its slot.
+  spawnFn.calls[0].child.emit('close', 0);
+  await sleep(30);
+  assert.equal(runner.start(j2, 'manual').status, 'running');
+});
+
+test('gracefulStop: false skips the polite rung entirely', async () => {
+  const { db, spawnFn, runner } = setup();
+  // A job type that declares it has no safe stopping point.
+  const exts = new Map(extensions);
+  exts.set('blunt', { ...exts.get('command'), id: 'blunt', gracefulStop: false });
+  const runner2 = createRunner({ db, extensions: exts, spawnFn, notifyFn: () => {} });
+  const job = createJob(db, { ...validJob({ type: 'command', command: 'sleep 1' }), type: 'blunt' });
+  const run = runner2.start(job, 'manual');
+  const child = spawnFn.calls[0].child;
+  child.deaf = true;
+
+  runner2.requestStop(run.id, { reason: 'paused (soft)' });
+  assert.deepEqual(child.signals, ['SIGTERM'], 'no SIGINT — it was told there is no safe point');
+  await sleep(20); // the log is a write stream; let it reach disk
+  assert.match(readFileSync(getRun(db, run.id).logPath, 'utf8'), /no safe stopping point/);
+});
+
+test('clearQueue drops queued work with a reason; stopping() lists the winding-down', async () => {
+  const { db, spawnFn, runner } = setup();
+  setSetting(db, 'softGraceMs', 10_000);
+  setSetting(db, 'maxConcurrent', 1);
+  const j1 = createJob(db, validJob({ name: 'a' }));
+  const j2 = createJob(db, validJob({ name: 'b' }));
+  const running = runner.start(j1, 'manual');
+  const queued = runner.start(j2, 'manual');
+  spawnFn.calls[0].child.deaf = true;
+
+  assert.deepEqual(runner.stopping(), []);
+  assert.deepEqual(runner.clearQueue('paused (soft)'), [queued.id]);
+  assert.equal(getRun(db, queued.id).status, 'skipped');
+  assert.equal(getRun(db, queued.id).meta.skipReason, 'paused (soft)');
+
+  assert.deepEqual(runner.requestStopAll('paused (soft)'), [running.id]);
+  assert.deepEqual(runner.stopping(), [running.id]);
+  assert.equal(spawnFn.calls.length, 1, 'a cleared queue entry is not launched');
+});
+
+test('killAll can record what actually happened to in-flight runs', async () => {
+  const { db, spawnFn, runner } = setup();
+  const job = createJob(db, validJob());
+  const run = runner.start(job, 'manual');
+  runner.killAll({ status: 'killed' });
+  await sleep(20);
+  assert.equal(getRun(db, run.id).status, 'killed');
+  assert.equal(spawnFn.calls[0].child.killedWith, 'SIGKILL');
+});
+
+test('kill outranks a wind-down already in progress', async () => {
+  const { db, spawnFn, runner } = setup();
+  setSetting(db, 'softGraceMs', 10_000);
+  const job = createJob(db, validJob());
+  const run = runner.start(job, 'manual');
+  // Ignores the polite ask but not the SIGTERM that follows it.
+  spawnFn.calls[0].child.deaf = ['SIGINT'];
+  runner.requestStop(run.id);
+  runner.kill(run.id); // impatient: SIGTERM now
+  await sleep(20);
+  assert.deepEqual(spawnFn.calls[0].child.signals, ['SIGINT', 'SIGTERM']);
+  assert.equal(getRun(db, run.id).status, 'killed', 'an explicit kill is not reported as a clean stop');
+});

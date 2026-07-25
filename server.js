@@ -11,9 +11,10 @@ import {
 } from './lib/db.js';
 import { validateJob, previewSchedule, scheduleEntries } from './lib/validate.js';
 import { loadExtensions, manifest, validateFields } from './lib/extensions.js';
-import { createRunner } from './lib/runner.js';
+import { createRunner, DEFAULT_SOFT_GRACE_MS } from './lib/runner.js';
 import { createScheduler } from './lib/scheduler.js';
 import { createAwake, DEFAULT_RESET_LEAD_MIN } from './lib/awake.js';
+import { createPauseController, PAUSE_MODES } from './lib/pause.js';
 import { createUsageMonitor, POLL_FLOOR_SEC, DEFAULT_POLL_SEC, USAGE_SHOW_MODES } from './lib/usage.js';
 import { createBudgetPolicy } from './lib/budget.js';
 import { startUninstall } from './lib/uninstall.js';
@@ -25,7 +26,7 @@ const ROOT = dirname(fileURLToPath(import.meta.url));
 const PLAN_SLOT_MAX = 200;
 
 export function createApp({
-  db, runner, scheduler, extensions, awake, usage = null, budget = null,
+  db, runner, scheduler, extensions, awake, usage = null, budget = null, pause = null,
   execFileFn = execFile, uninstallFn = startUninstall,
   usageRefreshFloorMs = POLL_FLOOR_SEC * 1000,
 }) {
@@ -58,7 +59,14 @@ export function createApp({
   });
 
   app.get('/api/jobs', (req, res) => {
-    res.json({ jobs: listJobs(db).map(decorate), running: runner.runningCount(), awake: awake?.status() ?? null });
+    res.json({
+      jobs: listJobs(db).map(decorate),
+      running: runner.runningCount(),
+      awake: awake?.status() ?? null,
+      // Rides this tick so the pause banner (and its winding-down count) stays
+      // live without a second poller.
+      pause: pause?.status() ?? null,
+    });
   });
 
   app.post('/api/jobs', (req, res) => {
@@ -99,10 +107,11 @@ export function createApp({
     res.json({ ok: true });
   });
 
+  // `force` is the confirmed override of a soft pause — the UI asks first.
   app.post('/api/jobs/:id/run', (req, res) => {
     const job = getJob(db, req.params.id);
     if (!job) return res.status(404).json({ error: 'not found' });
-    res.status(202).json(runner.start(job, 'manual'));
+    res.status(202).json(runner.start(job, 'manual', 0, { force: !!req.body?.force }));
   });
 
   app.post('/api/runs/:id/kill', (req, res) => {
@@ -112,6 +121,17 @@ export function createApp({
     const killed = runner.kill(run.id);
     if (!killed) return res.status(409).json({ error: 'run is not active' });
     res.status(202).json(killed);
+  });
+
+  // The soft counterpart to /kill: ask this run to wind down at its next safe
+  // point. 202 because it is a request — the run keeps going until it reaches one.
+  app.post('/api/runs/:id/stop', (req, res) => {
+    const run = getRun(db, req.params.id);
+    if (!run) return res.status(404).json({ error: 'not found' });
+    if (!['running', 'queued'].includes(run.status)) return res.status(409).json({ error: 'run is not active' });
+    const stopped = runner.requestStop(run.id, { reason: 'stop requested' });
+    if (!stopped) return res.status(409).json({ error: 'run is not active' });
+    res.status(202).json(stopped);
   });
 
   // Extension-defined per-run actions (e.g. claude's "Resume in Terminal").
@@ -179,6 +199,28 @@ export function createApp({
         windows: windows(),
         jobId: req.body?.jobId ?? '',
       }));
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Pause modes. `blocking` says what the mode is actually stopping and
+  // `stopping` lists runs mid-wind-down, so the UI never has to infer either from
+  // the mode name.
+  app.get('/api/pause', (req, res) => {
+    if (!pause) return res.status(501).json({ error: 'pause controller not available' });
+    res.json(pause.status());
+  });
+
+  app.put('/api/pause', (req, res) => {
+    if (!pause) return res.status(501).json({ error: 'pause controller not available' });
+    try {
+      const out = pause.set({
+        mode: req.body?.mode,
+        minutes: req.body?.minutes != null ? Number(req.body.minutes) : undefined,
+      });
+      awake?.refresh();
+      res.json(out);
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
@@ -318,7 +360,10 @@ export function createApp({
 
   app.get('/api/settings', (req, res) => {
     res.json({
-      paused: getSetting(db, 'paused', '0') === '1',
+      // `paused` is the v1 alias, true for any mode other than off.
+      paused: pause ? pause.mode() !== 'off' : getSetting(db, 'paused', '0') === '1',
+      pauseMode: pause?.mode() ?? (getSetting(db, 'paused', '0') === '1' ? 'hold' : 'off'),
+      softGraceMs: Number(getSetting(db, 'softGraceMs', DEFAULT_SOFT_GRACE_MS)) || DEFAULT_SOFT_GRACE_MS,
       home: process.env.HOME || '',
       usagePollSec: Number(getSetting(db, 'usagePollSec', DEFAULT_POLL_SEC)) || DEFAULT_POLL_SEC,
       usageShow: usageShow(),
@@ -378,7 +423,26 @@ export function createApp({
         for (const s of specs) setSetting(db, s.key, params[s.key]);
       }
     }
-    if ('paused' in b) setSetting(db, 'paused', b.paused ? '1' : '0');
+    // How long a run gets to wind down before the ladder escalates to SIGTERM.
+    if ('softGraceMs' in b) {
+      const n = Number(b.softGraceMs);
+      if (!Number.isFinite(n) || n < 1000 || n > 600_000) {
+        return res.status(400).json({ errors: ['softGraceMs must be 1000-600000'] });
+      }
+      setSetting(db, 'softGraceMs', Math.round(n));
+    }
+    // The v1 alias, kept working: `paused: true` means what it always meant, which
+    // is `hold`. Routed through the controller so both keys stay in step.
+    if ('paused' in b) {
+      const wanted = b.paused ? 'hold' : 'off';
+      // Don't demote a stronger mode: PUT {paused:true} while soft/hard is active
+      // would otherwise quietly weaken the pause.
+      if (pause) {
+        if (!(b.paused && pause.mode() !== 'off')) pause.set({ mode: wanted });
+      } else {
+        setSetting(db, 'paused', b.paused ? '1' : '0');
+      }
+    }
     awake?.refresh();
     res.json({ ok: true });
   });
@@ -386,6 +450,7 @@ export function createApp({
   app.post('/api/cleanup', (req, res) => {
     runner.killAll();
     scheduler.stop();
+    pause?.stop();
     for (const p of cleanupAll(db)) {
       try { unlinkSync(p); } catch {}
     }
@@ -397,6 +462,7 @@ export function createApp({
   app.post('/api/uninstall', (req, res) => {
     res.status(202).json({ ok: true, message: 'uninstalling — daemon will exit' });
     awake?.stop();
+    pause?.stop();
     uninstallFn({ runner, server: app.locals.server });
   });
 
@@ -419,13 +485,26 @@ export async function main() {
   // the scheduler because the first probe must never delay a fire.
   const usage = createUsageMonitor({ db });
   const budget = createBudgetPolicy({ db, usage });
-  const runner = createRunner({ db, extensions, usage, admit: budget.admit });
-  const scheduler = createScheduler({ db, runner, usage });
+  // The pause controller needs the runner (to drain it) and the runner needs the
+  // controller (to refuse work) — so admit reads `pause` late, through the
+  // closure, rather than the two being built in an impossible order.
+  let pause = null;
+  const runner = createRunner({
+    db,
+    extensions,
+    usage,
+    // Being paused outranks any budget reason, and is the more useful thing to
+    // tell the user.
+    admit: (job, trigger, opts) => pause?.gate(job, trigger, opts) ?? budget.admit(job, trigger, opts),
+  });
+  pause = createPauseController({ db, runner });
+  pause.refresh(); // a timed pause that lapsed while the daemon was down ends now
+  const scheduler = createScheduler({ db, runner, usage, pause });
   scheduler.start();
   usage.start();
-  const awake = createAwake({ db, runner, scheduler, usage });
+  const awake = createAwake({ db, runner, scheduler, usage, pause });
   awake.refresh();
-  const app = createApp({ db, runner, scheduler, extensions, awake, usage, budget });
+  const app = createApp({ db, runner, scheduler, extensions, awake, usage, budget, pause });
   const port = Number(process.env.CS_PORT) || 9099;
   const server = app.listen(port, '127.0.0.1', () => {
     console.log(`claude-scheduler on http://127.0.0.1:${port} · extensions: ${[...extensions.keys()].join(', ')}`);

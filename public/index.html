@@ -30,12 +30,15 @@
         <button data-mode="on">Indefinitely</button>
       </div>
     </div>
-    <label class="switch small" title="Pause all schedules">
-      <input type="checkbox" id="pause-all"><i></i><span>Pause</span>
-    </label>
+    <div class="seg pause-seg" id="pause-seg">
+      <button type="button" data-mode="off" title="Nothing is blocked">Off</button>
+      <button type="button" data-mode="hold" title="Hold the schedule — scheduled fires are dropped, but you can still run jobs by hand and anything already running is left alone">Hold</button>
+      <button type="button" data-mode="soft" title="Drain — nothing new starts, and running jobs are asked to wind down at their next safe point">Soft</button>
+      <button type="button" data-mode="hard" title="Stop everything now — running jobs are killed immediately">Hard</button>
+    </div>
   </div>
 </header>
-<div id="paused-banner" class="banner" hidden>⏸ All schedules paused — nothing fires until you unpause.</div>
+<div id="paused-banner" class="banner" hidden></div>
 
 <main>
   <section id="tab-jobs">
@@ -61,6 +64,7 @@
         <button class="chip" data-status="active">Active</button>
         <button class="chip" data-status="ok">OK</button>
         <button class="chip" data-status="fail">Failed</button>
+        <button class="chip" data-status="stopped">Stopped</button>
       </div>
     </div>
     <div id="runs-list" class="list"></div>
@@ -96,6 +100,11 @@
         <label>Wake this Mac before a reset-anchored fire (min) <input id="s-awakeResetLeadMin" type="number" min="0" max="240"></label>
         <div id="budget-state" class="note"></div>
       </fieldset>
+      <fieldset>
+        <legend>⏸ Pausing</legend>
+        <p class="muted note">A <strong>soft</strong> pause asks running jobs to wind down at their next safe point rather than killing them — a Claude run stops between tool calls, so nothing is left half-done and the session can be resumed. This is how long it waits before escalating.</p>
+        <label>Give a run this long to wind down (sec) <input id="s-softGraceSec" type="number" min="1" max="600"></label>
+      </fieldset>
       <h3>Extensions</h3>
       <div id="ext-settings"></div>
       <div class="row right"><span id="settings-msg" class="muted"></span><button class="primary">Save</button></div>
@@ -115,7 +124,8 @@
     <strong id="log-title"></strong>
     <span id="log-progress" class="muted"></span>
     <span class="spacer"></span>
-    <button id="log-kill" class="danger-btn" hidden>■ Stop</button>
+    <button id="log-stop" hidden title="Ask this run to wind down at its next safe point">⤓ Wind down</button>
+    <button id="log-kill" class="danger-btn" hidden>■ Stop now</button>
     <span id="run-actions"></span>
     <button id="log-close" class="icon" title="Close">✕</button>
   </div>

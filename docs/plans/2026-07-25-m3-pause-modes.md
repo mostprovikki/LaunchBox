@@ -45,6 +45,31 @@ Non-`claude` extensions (e.g. `command`) have no notion of a turn boundary: for 
 
 ## 3.3 Prerequisite spike — the stdin control channel
 
+**RUN 2026-07-25 against the real CLI (2.1.211, `--model haiku`, ~$0.06 total). All four questions answered — and the headline is that the control channel turned out to be _unnecessary_ for soft pause.**
+
+**The finding that reshapes this section: plain `SIGINT` on the *current* argv path is behaviourally identical to the `interrupt` control request, and exits more cleanly.** Both stop at a safe point — the in-flight tool call is denied with `tool_result: "The user doesn't want to proceed with this tool use"`, so the tool never runs — both emit a final `result` event, and both leave a fully resumable session whose history correctly reflects that the denied step did not happen (verified by resuming each and asking what the last command was: "`echo step1`" and "`sleep 3 && echo step2` (which you rejected)"). Measured:
+
+| stop mechanism | in-flight tool | final `result` event | exit | resumable |
+|---|---|---|---|---|
+| `interrupt` via stdin control channel | denied at safe point | `subtype=error_during_execution`, `is_error=true` | **1** (after `stdin.end()`) | yes ✓ |
+| **SIGINT, argv path** | denied at safe point | `subtype=error_during_execution`, `is_error=true` | **0**, in ~930ms | yes ✓ |
+| SIGTERM, argv path | abandoned | **none emitted** | 143, in ~920ms | yes, but no closing record |
+
+So rung 1 buys nothing over rung 2 for stopping a run, while carrying the entire regression risk of changing how every claude job is invoked. **The ladder collapses to SIGINT → SIGTERM → SIGKILL.**
+
+**The trap this exposes, and the real work in §3.4:** a graceful stop reports itself as a *failure*. `result.subtype` is `error_during_execution` with `is_error: true`, and `error_during_execution` is not distinguishable from a genuine mid-run error. The control-channel path is worse still — exit code `1`. Therefore **`stopped` can only be derived from the fact that we asked for the stop**, exactly as `killed` and `timeout` already are (`entry.killed` / `timedOut` in `launch()`); the child's own exit reporting must not be trusted for it. The claude formatter must also not mark an interrupted run as errored.
+
+Answers to the four questions as originally posed:
+
+1. **Envelope confirmed:** `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"…"}]}}` is accepted as-is.
+2. **Confirmed, and it is a hazard:** with stdin held open the child does **not** exit after the turn — still alive 33s after `result`, and after an interrupt still alive 81s later. It exits ~1s after `stdin.end()`. Any control-channel implementation *must* close stdin on the `result` event, and needs a watchdog, or every run hangs forever.
+3. **Yes:** `interrupt` is acked in ~6ms with `{"subtype":"success","request_id":…,"response":{"still_queued":[]}}`, stops at a safe point, and leaves a resumable session. But the `result` subtype is **not** cleanly distinguishable (see the trap above), and the exit code is 1.
+4. **No difference in the run itself** — identical event-type stream on both paths (`system/init`, `system/thinking_tokens`, `assistant`, `user`, `rate_limit_event`, `result`); `--dangerously-skip-permissions` behaves the same; only `rate_limit_event` ordering floats, which is nondeterministic anyway.
+
+**Decision: the stdin control channel is deferred out of M3** — no `stdin: 'control'`, no `control: {send, endInput}` on the output handler, no `claude:controlChannel` setting. M3's `claude` invocation is untouched, which retires the milestone's top risk entirely. The channel's remaining value is *not* stopping runs but the other verified subtypes (`set_model` for the model-scoped routing the M2 findings call for, `get_usage` in-session); it should be built when that feature needs it, starting from the facts above. The ladder's rung 1 slot stays in the extension contract as `gracefulStop: 'signal' | false` so a future `'control'` value slots in without a redesign.
+
+Original spike brief, kept for the record:
+
 **This is the risky part and it gets verified before it gets built.**
 
 Current invocation: `['-p', prompt, '--output-format','stream-json','--verbose']`, stdin ignored.

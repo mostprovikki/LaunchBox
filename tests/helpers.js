@@ -54,10 +54,24 @@ export function fakeSpawn() {
     };
     child.pid = 4242;
     child.unref = () => {};
+    // Exit codes mirror what the real CLI does, measured in the M3 spike: SIGINT
+    // is handled — the process winds down and exits 0 — while SIGTERM is not,
+    // giving the shell's 128+15.
+    const codeFor = { SIGKILL: 137, SIGTERM: 143, SIGINT: 0 };
+    // Every signal is recorded, in order, so a test can assert the ladder walked
+    // the rungs it should have. `child.deaf = true` models a child that ignores
+    // everything it's asked; `child.deaf = ['SIGINT']` one that ignores only some
+    // — which is the interesting case for escalation.
+    child.signals = [];
+    const ignores = (sig) => sig !== 'SIGKILL' // nothing survives SIGKILL
+      && (child.deaf === true || (Array.isArray(child.deaf) && child.deaf.includes(sig)));
     child.kill = (sig = 'SIGTERM') => {
       child.killedWith = sig;
-      child.emit('close', sig === 'SIGKILL' ? 137 : 143);
-      child.emit('exit', sig === 'SIGKILL' ? 137 : 143);
+      child.signals.push(sig);
+      if (ignores(sig)) return;
+      const code = codeFor[sig] ?? 143;
+      child.emit('close', code);
+      child.emit('exit', code);
     };
     calls.push({ cmd, args, opts, child });
     return child;

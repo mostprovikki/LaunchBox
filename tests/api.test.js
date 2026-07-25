@@ -4,12 +4,13 @@ import { join } from 'node:path';
 import { tmpData, jobPayload, fakeSpawn, sleep, extensions } from './helpers.js';
 import { ensureDirs } from '../lib/paths.js';
 import { readFileSync } from 'node:fs';
-import { openDb, listRuns, getSetting, recordRunUsage } from '../lib/db.js';
+import { openDb, listRuns, getSetting, setSetting, recordRunUsage } from '../lib/db.js';
 import { createRunner } from '../lib/runner.js';
 import { createScheduler } from '../lib/scheduler.js';
 import { createAwake } from '../lib/awake.js';
 import { createUsageMonitor } from '../lib/usage.js';
 import { createBudgetPolicy } from '../lib/budget.js';
+import { createPauseController } from '../lib/pause.js';
 import { createApp } from '../server.js';
 import { removalScript } from '../lib/uninstall.js';
 import { EventEmitter } from 'node:events';
@@ -25,13 +26,20 @@ async function boot() {
   const caffSpawn = fakeSpawn();
   const usageSpawn = fakeSpawn();
   const usage = createUsageMonitor({ db, spawnFn: usageSpawn, getClaudePath: () => '/fake/claude' });
-  const runner = createRunner({ db, extensions, spawnFn, notifyFn: () => {}, usage });
-  const scheduler = createScheduler({ db, runner });
-  const awake = createAwake({ db, runner, scheduler, spawnFn: caffSpawn });
+  // Wired exactly as main() does, including the late-bound `pause` in admit —
+  // the API's pause behaviour is only meaningful with the real controller behind it.
+  let pause = null;
+  const runner = createRunner({
+    db, extensions, spawnFn, notifyFn: () => {}, usage,
+    admit: (job, trigger, opts) => pause?.gate(job, trigger, opts) ?? null,
+  });
+  pause = createPauseController({ db, runner });
+  const scheduler = createScheduler({ db, runner, pause });
+  const awake = createAwake({ db, runner, scheduler, pause, spawnFn: caffSpawn });
   const osaCalls = [];
   const uninstalls = [];
   const app = createApp({
-    db, runner, scheduler, extensions, awake, usage,
+    db, runner, scheduler, extensions, awake, usage, pause,
     usageRefreshFloorMs: 5_000,
     execFileFn: (cmd, args, cb) => { osaCalls.push({ cmd, args }); cb(null); },
     uninstallFn: (opts) => uninstalls.push(opts),
@@ -39,7 +47,7 @@ async function boot() {
   const server = app.listen(0, '127.0.0.1');
   await new Promise((r) => server.once('listening', r));
   const base = () => `http://127.0.0.1:${server.address().port}`;
-  return { db, spawnFn, caffSpawn, usageSpawn, usage, runner, scheduler, awake, server, base, osaCalls, uninstalls };
+  return { db, spawnFn, caffSpawn, usageSpawn, usage, runner, scheduler, awake, pause, server, base, osaCalls, uninstalls };
 }
 
 // A second boot whose usage monitor is a fixed snapshot rather than a probe: the
@@ -200,6 +208,121 @@ test('kill endpoint: 202 active, 409 finished, 404 unknown', async (t) => {
   assert.equal(r.status, 404);
 });
 
+// --- M3: pause modes & graceful stop ---------------------------------------
+
+test('stop endpoint: 202 active, 409 finished, 404 unknown', async (t) => {
+  const { spawnFn, server, base } = await boot();
+  t.after(() => server.close());
+
+  const { body: job } = await req(base(), 'POST', '/api/jobs', jobPayload());
+  const { body: run } = await req(base(), 'POST', `/api/jobs/${job.id}/run`);
+
+  let r = await req(base(), 'POST', `/api/runs/${run.id}/stop`);
+  assert.equal(r.status, 202);
+  assert.equal(r.body.status, 'stopped');
+  assert.equal(r.body.meta.stopRung, 'SIGINT');
+  assert.equal(spawnFn.calls[0].child.killedWith, 'SIGINT');
+
+  // A `stopped` run is finished — not active for the kill guard, the stop guard,
+  // or the SSE live check.
+  r = await req(base(), 'POST', `/api/runs/${run.id}/stop`);
+  assert.equal(r.status, 409);
+  r = await req(base(), 'POST', `/api/runs/${run.id}/kill`);
+  assert.equal(r.status, 409);
+  r = await req(base(), 'POST', '/api/runs/nope/stop');
+  assert.equal(r.status, 404);
+
+  const sse = await fetch(`${base()}/api/runs/${run.id}/tail`);
+  const text = await sse.text();
+  assert.match(text, /event: done\ndata: stopped/, 'the tail closes rather than hanging open');
+
+  // And it is reachable under its own history filter.
+  r = await req(base(), 'GET', '/api/runs?status=stopped');
+  assert.deepEqual(r.body.runs.map((x) => x.id), [run.id]);
+});
+
+test('GET/PUT /api/pause: modes, what they block, and the runs winding down', async (t) => {
+  const { db, spawnFn, server, base } = await boot();
+  t.after(() => server.close());
+  setSetting(db, 'softGraceMs', 10_000); // no escalation mid-test
+
+  let r = await req(base(), 'GET', '/api/pause');
+  assert.deepEqual(r.body, { mode: 'off', until: null, blocking: { schedule: false, manual: false }, stopping: [] });
+
+  const { body: job } = await req(base(), 'POST', '/api/jobs', jobPayload());
+  const { body: run } = await req(base(), 'POST', `/api/jobs/${job.id}/run`);
+  spawnFn.calls[0].child.deaf = ['SIGINT'];
+
+  r = await req(base(), 'PUT', '/api/pause', { mode: 'soft' });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.mode, 'soft');
+  assert.deepEqual(r.body.blocking, { schedule: true, manual: true });
+  assert.deepEqual(r.body.stopped, [run.id]);
+  assert.deepEqual(r.body.stopping, [run.id]);
+
+  // The banner reads this off the jobs tick rather than needing its own poller.
+  r = await req(base(), 'GET', '/api/jobs');
+  assert.equal(r.body.pause.mode, 'soft');
+  assert.deepEqual(r.body.pause.stopping, [run.id]);
+
+  // Overlap-skip is judged *before* admission, so re-running the job that is
+  // still winding down reports the overlap (correctly — it is still running) and
+  // carries no reason. The pause refusal needs a job that isn't already busy.
+  r = await req(base(), 'POST', `/api/jobs/${job.id}/run`);
+  assert.equal(r.body.status, 'skipped');
+  assert.equal(r.body.meta, null, 'already-running wins, and it has no skipReason to give');
+
+  const { body: other } = await req(base(), 'POST', '/api/jobs', jobPayload({ name: 'idle job' }));
+  r = await req(base(), 'POST', `/api/jobs/${other.id}/run`);
+  assert.equal(r.body.status, 'skipped');
+  assert.equal(r.body.meta.skipReason, 'paused (soft)', 'the reason the UI offers to override');
+  // ...and the confirmed override goes through.
+  r = await req(base(), 'POST', `/api/jobs/${other.id}/run`, { force: true });
+  assert.equal(r.body.status, 'running');
+
+  r = await req(base(), 'PUT', '/api/pause', { mode: 'nope' });
+  assert.equal(r.status, 400);
+});
+
+test('pause: the legacy settings alias still works and cannot weaken a stronger mode', async (t) => {
+  const { server, base } = await boot();
+  t.after(() => server.close());
+
+  // v1 clients only know this key.
+  await req(base(), 'PUT', '/api/settings', { paused: true });
+  let r = await req(base(), 'GET', '/api/pause');
+  assert.equal(r.body.mode, 'hold', 'paused:true means what it always meant');
+  r = await req(base(), 'GET', '/api/settings');
+  assert.equal(r.body.paused, true);
+  assert.equal(r.body.pauseMode, 'hold');
+
+  // A stale client re-asserting paused:true must not quietly downgrade a hard pause.
+  await req(base(), 'PUT', '/api/pause', { mode: 'hard' });
+  await req(base(), 'PUT', '/api/settings', { paused: true });
+  r = await req(base(), 'GET', '/api/pause');
+  assert.equal(r.body.mode, 'hard', 'still hard');
+
+  // Clearing it is unambiguous, so it is honoured.
+  await req(base(), 'PUT', '/api/settings', { paused: false });
+  r = await req(base(), 'GET', '/api/pause');
+  assert.equal(r.body.mode, 'off');
+});
+
+test('settings: softGraceMs round-trips and rejects out-of-range values', async (t) => {
+  const { server, base } = await boot();
+  t.after(() => server.close());
+
+  let r = await req(base(), 'PUT', '/api/settings', { softGraceMs: 45_000 });
+  assert.equal(r.status, 200);
+  r = await req(base(), 'GET', '/api/settings');
+  assert.equal(r.body.softGraceMs, 45_000);
+
+  for (const bad of [999, 600_001, 'soon']) {
+    r = await req(base(), 'PUT', '/api/settings', { softGraceMs: bad });
+    assert.equal(r.status, 400, `${bad} must be rejected`);
+  }
+});
+
 test('SSE tail streams history + done for finished run', async (t) => {
   const { spawnFn, server, base } = await boot();
   t.after(() => server.close());
@@ -234,6 +357,9 @@ test('schedule preview + settings round-trip (per-extension)', async (t) => {
   r = await req(base(), 'GET', '/api/settings');
   assert.deepEqual(r.body, {
     paused: true,
+    // The legacy `paused: true` alias means what it always meant: hold.
+    pauseMode: 'hold',
+    softGraceMs: 120_000,
     home: process.env.HOME || '',
     usagePollSec: 180,
     usageShow: 'banner',
