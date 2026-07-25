@@ -39,6 +39,12 @@ export default {
   // Queue runs beyond maxConcurrent instead of running them all at once.
   concurrency: { settingKey: 'maxConcurrent', default: 2 },
 
+  // Measured, not assumed (M3 spike): SIGINT makes the CLI stop at a turn/tool
+  // boundary — the in-flight tool call is denied before it runs, a final result
+  // event is emitted, the process exits 0, and `--resume <sessionId>` picks the
+  // session back up with history that correctly shows the denied step never ran.
+  gracefulStop: 'signal',
+
   // Auto-detect the claude binary on first boot (launchd PATH is bare).
   init({ getSetting, setSetting }) {
     if (getSetting('claudePath')) return;

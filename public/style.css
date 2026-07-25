@@ -2,6 +2,9 @@
   --bg: #0c0f13; --panel: #141920; --panel2: #1b222b; --border: #252e39;
   --text: #e3eaf2; --muted: #7f8fa1; --accent: #e0784a; --accent-dim: #b35c37;
   --ok: #46b980; --fail: #e0605d; --warn: #d9a441; --queued: #7d8fdb; --killed: #a08bd0;
+  /* `stopped` is an intentional, clean stop — deliberately cool and calm, so it
+     never reads as the failure the underlying tool reports it as. */
+  --stopped: #5fa8b8;
   --radius: 10px;
 }
 * { box-sizing: border-box; }
@@ -36,6 +39,17 @@ header {
   padding: 3px 12px; font-weight: 600; font-size: 12px; cursor: pointer;
 }
 .banner { background: var(--warn); color: #201a08; padding: 6px 20px; font-weight: 600; }
+/* Hard pause killed work rather than letting it finish — that earns the alarm
+   colour; the softer modes must not borrow it. */
+.banner.hard { background: var(--fail); color: #fff; }
+
+/* Pause modes: compact enough for the header, and the active mode is coloured by
+   how forceful it is, so the state is readable without reading the label. */
+.pause-seg { margin: 0; padding: 2px; }
+.pause-seg button { padding: 3px 9px; font-size: 12px; }
+.pause-seg button[data-mode="hold"].active { background: var(--warn); color: #201a08; font-weight: 600; }
+.pause-seg button[data-mode="soft"].active { background: var(--stopped); color: #06141a; font-weight: 600; }
+.pause-seg button[data-mode="hard"].active { background: var(--fail); color: #fff; font-weight: 600; }
 
 /* ---------- layout ---------- */
 main { padding: 24px 20px 340px; max-width: 880px; margin: 0 auto; }
@@ -125,13 +139,27 @@ header .switch.small input:checked ~ span { color: var(--warn); }
 .dot.queued { background: var(--queued); }
 .dot.skipped { background: var(--muted); }
 .dot.killed { background: var(--killed); }
+.dot.stopped { background: var(--stopped); }
 .st-ok { color: var(--ok); } .st-fail, .st-timeout { color: var(--fail); }
 .st-running { color: var(--accent); } .st-queued { color: var(--queued); }
 .st-skipped { color: var(--muted); } .st-killed { color: var(--killed); }
+.st-stopped { color: var(--stopped); }
 @keyframes pulse { 50% { opacity: .3; } }
 
-.run-btn { color: var(--ok); font-weight: 700; }
-.stop-btn { color: var(--fail); font-weight: 700; }
+/* A run that has been asked to wind down is still running — the chip says the
+   ladder is walking, and which rung it reached. */
+.stopping-chip {
+  border-radius: 999px; padding: 1px 8px; font-size: 11.5px; cursor: help;
+  background: color-mix(in srgb, var(--stopped) 18%, transparent); color: var(--stopped);
+}
+
+/* `button.icon` sets colour at specificity 0,1,1, so a bare `.run-btn` (0,1,0)
+   silently lost to it — the run button's green and the kill button's red have
+   never actually rendered in the lists. Qualify all three so intent wins. Same
+   trap as the `[hidden]` one settled at the top of this file. */
+button.icon.run-btn { color: var(--ok); font-weight: 700; }
+button.icon.stop-btn { color: var(--fail); font-weight: 700; }
+button.icon.soft-stop-btn { color: var(--stopped); font-weight: 700; }
 
 /* ---------- log drawer ---------- */
 #log-drawer {

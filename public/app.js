@@ -11,6 +11,7 @@ let home = '';
 let jobSearch = '';
 let runStatusFilter = '';
 let usageData = null; // last /api/usage body — the window list the pickers offer
+let pauseState = null; // last /api/pause body (rides the jobs tick)
 
 const extById = (id) => exts.find((e) => e.id === id);
 
@@ -105,7 +106,10 @@ function renderJobs() {
       </div>
       <div class="actions">
         ${live
-          ? '<button class="icon stop-btn" data-act="kill" title="Stop this run">■</button>'
+          // ⤓ not ⏹: next to ■ the two squares are indistinguishable at 12px,
+          // and these two buttons do very different things to your work.
+          ? `<button class="icon soft-stop-btn" data-act="stop" title="Wind down — let this run stop at its next safe point">⤓</button>
+             <button class="icon stop-btn" data-act="kill" title="Stop this run now">■</button>`
           : '<button class="icon run-btn" data-act="run" title="Run once now (even if disabled)">▶</button>'}
         <label class="switch" title="${j.enabled ? 'Disable schedule' : 'Enable schedule'}"><input type="checkbox" data-act="toggle" ${j.enabled ? 'checked' : ''}><i></i></label>
         <button class="icon" data-act="edit" title="Edit">✎</button>
@@ -127,6 +131,7 @@ async function refreshJobs() {
     badge.hidden = data.running === 0;
     badge.textContent = `◐ ${data.running} running`;
     renderAwake(data.awake);
+    renderPause(data.pause);
     renderJobs();
   } catch { /* daemon briefly down — next poll retries */ }
   refreshUsage();
@@ -142,17 +147,35 @@ async function refreshUsage() {
   } catch { /* 501 without a monitor, or the daemon blinked — leave the last render */ }
 }
 
+// A soft/hard pause refuses manual runs too, and the reason it gives is the
+// exact string lib/pause.js produces. Matched precisely rather than by prefix:
+// the budget guard's reasons also begin with "paused", and offering to override
+// the wrong one would be a lie about what the click does.
+const PAUSE_REFUSAL = /^paused \((soft|hard)\)$/;
+
 async function onJobAction(job, act, el) {
   try {
     if (act === 'run') {
-      const run = await api('POST', `/api/jobs/${job.id}/run`);
-      if (run.status === 'skipped') return toast(`"${job.name}" is already running`, 'err');
+      let run = await api('POST', `/api/jobs/${job.id}/run`);
+      if (run.status === 'skipped' && PAUSE_REFUSAL.test(run.meta?.skipReason ?? '')) {
+        if (!confirm(`Everything is ${run.meta.skipReason} — that's why this didn't start.\n\n`
+          + `Run "${job.name}" anyway, just this once?`)) {
+          return toast(`Not started — ${run.meta.skipReason}`, 'err');
+        }
+        run = await api('POST', `/api/jobs/${job.id}/run`, { force: true });
+      }
+      if (run.status === 'skipped') {
+        return toast(run.meta?.skipReason ? `Not started — ${run.meta.skipReason}` : `"${job.name}" is already running`, 'err');
+      }
       toast(`Started "${job.name}"${run.status === 'queued' ? ' (queued)' : ''}`, 'ok');
       location.hash = `#history?job=${job.id}`;
       openLog(run, job.name);
     } else if (act === 'kill') {
       await api('POST', `/api/runs/${job.lastRun.id}/kill`);
       toast(`Stopped "${job.name}"`, 'ok');
+    } else if (act === 'stop') {
+      await api('POST', `/api/runs/${job.lastRun.id}/stop`);
+      toast(`"${job.name}" will stop at its next safe point`, 'ok');
     } else if (act === 'toggle') {
       await api('PUT', `/api/jobs/${job.id}`, { enabled: el.checked });
     } else if (act === 'edit') {
@@ -171,6 +194,62 @@ async function onJobAction(job, act, el) {
     apiErr(e, `${act} failed`);
   }
   refreshJobs();
+}
+
+// ---------- pause modes ----------
+// Four modes because the old `paused` behaviour had to survive under a name:
+// `hold` is exactly it. The banner says what is actually blocked rather than
+// leaving the user to infer it from a mode name.
+const PAUSE_TEXT = {
+  hold: 'Schedules are on hold — nothing fires automatically, but you can still run jobs by hand.',
+  soft: 'Paused — nothing new starts, and running jobs are winding down at their next safe point.',
+  hard: 'Hard paused — nothing runs, and anything that was in flight was stopped immediately.',
+};
+const PAUSE_TOAST = {
+  off: 'Schedules resumed',
+  hold: 'Schedules on hold — manual runs still work',
+  soft: 'Soft pause — nothing new will start',
+  hard: 'Hard pause — everything stopped',
+};
+
+function renderPause(p) {
+  if (!p) return;
+  pauseState = p;
+  $$('#pause-seg button').forEach((b) => b.classList.toggle('active', b.dataset.mode === p.mode));
+  const banner = $('#paused-banner');
+  banner.hidden = p.mode === 'off';
+  banner.classList.toggle('hard', p.mode === 'hard');
+  if (p.mode === 'off') return;
+  const n = p.stopping?.length ?? 0;
+  banner.textContent = `⏸ ${PAUSE_TEXT[p.mode]}`
+    + (n ? ` ${n} run${n === 1 ? '' : 's'} still winding down.` : '')
+    + (p.until ? ` Until ${new Date(p.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.` : '');
+}
+
+async function setPauseMode(mode) {
+  if (mode === pauseState?.mode) return;
+  // Hard pause destroys in-flight work — the one mode that needs asking first.
+  if (mode === 'hard') {
+    const n = pauseState?.stopping?.length ?? 0;
+    if (!confirm('Hard pause kills every running job immediately — work in progress is lost, '
+      + 'and Claude sessions stop wherever they happen to be.\n\nUse Soft to let them finish cleanly instead.'
+      + (n ? `\n\n${n} run(s) are already winding down gracefully; hard pause will cut them short.` : '')
+      + '\n\nStop everything now?')) return;
+  }
+  try {
+    const out = await api('PUT', '/api/pause', { mode });
+    renderPause(out);
+    // ' · ' rather than a second em-dash: the mode line already contains one,
+    // and "wind down — 1 winding down" read as a stutter.
+    const extra = [
+      out.stopped?.length ? `${out.stopped.length} run${out.stopped.length === 1 ? '' : 's'} winding down` : '',
+      out.clearedQueue?.length ? `${out.clearedQueue.length} queued dropped` : '',
+    ].filter(Boolean).join(' · ');
+    toast(PAUSE_TOAST[mode] + (extra ? ` · ${extra}` : ''), mode === 'off' ? 'ok' : '');
+    refreshJobs();
+  } catch (e) {
+    apiErr(e, 'could not change pause mode');
+  }
 }
 
 // ---------- keep awake ----------
@@ -543,10 +622,12 @@ async function refreshRuns() {
             <span title="${esc(fullTime(r.startedAt || r.createdAt))}">${relTime(r.startedAt || r.createdAt)}</span>
             <span>${duration(r.durationMs)}</span>
             ${r.meta?.skipReason ? `<span class="skip-chip" title="Why this fire didn't run">${esc(r.meta.skipReason)}</span>` : ''}
+            ${live && r.meta?.stopRung ? `<span class="stopping-chip" title="${esc(r.meta.stopReason ?? 'stopping')} — currently at ${esc(r.meta.stopRung)}">stopping…</span>` : ''}
           </div>
         </div>
         <div class="actions">
-          ${live ? '<button class="icon stop-btn" data-act="kill" title="Stop">■</button>' : ''}
+          ${live && !r.meta?.stopRung ? '<button class="icon soft-stop-btn" data-act="stop" title="Wind down at the next safe point">⤓</button>' : ''}
+          ${live ? '<button class="icon stop-btn" data-act="kill" title="Stop now">■</button>' : ''}
           <button class="icon" data-act="log" title="View log">☰</button>
         </div>`;
       el.addEventListener('click', () => openLog(r, name(r.jobId)));
@@ -559,6 +640,14 @@ async function refreshRuns() {
           refreshRuns();
         } catch (e) { apiErr(e, 'kill failed'); }
       });
+      el.querySelector('[data-act="stop"]')?.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        try {
+          await api('POST', `/api/runs/${r.id}/stop`);
+          toast('Winding down at the next safe point', 'ok');
+          refreshRuns();
+        } catch (e) { apiErr(e, 'stop failed'); }
+      });
       list.appendChild(el);
     }
   } catch { /* daemon briefly down */ }
@@ -566,14 +655,25 @@ async function refreshRuns() {
 
 // ---------- log drawer ----------
 function setLogKill(run) {
+  const live = ['running', 'queued'].includes(run.status);
   const btn = $('#log-kill');
-  btn.hidden = !['running', 'queued'].includes(run.status);
+  btn.hidden = !live;
   btn.onclick = async () => {
     try {
       await api('POST', `/api/runs/${run.id}/kill`);
       btn.hidden = true;
       toast('Run stopped', 'ok');
     } catch (e) { apiErr(e, 'kill failed'); }
+  };
+  // Only offered while the ladder hasn't started — asking twice does nothing.
+  const soft = $('#log-stop');
+  soft.hidden = !live || !!run.meta?.stopRung;
+  soft.onclick = async () => {
+    try {
+      await api('POST', `/api/runs/${run.id}/stop`);
+      soft.hidden = true;
+      toast('Winding down at the next safe point', 'ok');
+    } catch (e) { apiErr(e, 'stop failed'); }
   };
 }
 
@@ -616,6 +716,7 @@ function openLog(run, jobName = '') {
   logSource.addEventListener('done', async (ev) => {
     $('#log-title').textContent = `${jobName || 'run'} · ${ev.data}`;
     $('#log-kill').hidden = true;
+    $('#log-stop').hidden = true;
     logSource.close();
     // meta (e.g. sessionId) may have landed during the run — re-check actions
     try { renderRunActions(await api('GET', `/api/runs?limit=100`).then((d) => d.runs.find((r) => r.id === run.id)) ?? run); } catch {}
@@ -676,8 +777,7 @@ async function loadSettings() {
     $('#s-reserveWeeklyPct').value = s.reserveWeeklyPct;
     $('#s-pauseOnWarning').checked = !!s.pauseOnWarning;
     $('#s-awakeResetLeadMin').value = s.awakeResetLeadMin;
-    $('#pause-all').checked = s.paused;
-    $('#paused-banner').hidden = !s.paused;
+    $('#s-softGraceSec').value = Math.round(s.softGraceMs / 1000);
     renderBudgetState();
   } catch { /* daemon briefly down */ }
 }
@@ -697,6 +797,7 @@ async function saveSettings(ev) {
       reserveWeeklyPct: Number($('#s-reserveWeeklyPct').value),
       pauseOnWarning: $('#s-pauseOnWarning').checked,
       awakeResetLeadMin: Number($('#s-awakeResetLeadMin').value),
+      softGraceMs: Number($('#s-softGraceSec').value) * 1000,
     });
     $('#settings-msg').textContent = 'saved ✓';
     setTimeout(() => { $('#settings-msg').textContent = ''; }, 2000);
@@ -757,11 +858,7 @@ $$('#awake-menu button[data-mode]').forEach((b) => b.addEventListener('click', a
   } catch (e) { apiErr(e, 'failed to set'); }
 }));
 
-$('#pause-all').addEventListener('change', async (ev) => {
-  await api('PUT', '/api/settings', { paused: ev.target.checked });
-  $('#paused-banner').hidden = !ev.target.checked;
-  toast(ev.target.checked ? 'All schedules paused' : 'Schedules resumed');
-});
+$$('#pause-seg button').forEach((b) => b.addEventListener('click', () => setPauseMode(b.dataset.mode)));
 
 $('#cleanup-btn').addEventListener('click', async () => {
   if ($('#cleanup-confirm').value !== 'cleanup') return toast('Type "cleanup" to confirm.', 'err');
