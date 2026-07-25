@@ -7,7 +7,7 @@ import { ensureDirs } from '../lib/paths.js';
 import { readFileSync, mkdtempSync, writeFileSync } from 'node:fs';
 import {
   openDb, listRuns, getSetting, setSetting, recordRunUsage,
-  createProject, getProject, acquireLease, listJobsByProject,
+  createProject, getProject, acquireLease, listJobsByProject, createJob, getJob, findJobByBead,
 } from '../lib/db.js';
 import { createBeads } from '../lib/beads.js';
 import { createProjects } from '../lib/projects.js';
@@ -563,6 +563,66 @@ test('burn-down: apply validates its slots rather than trusting the client', asy
   }
   // None of the rejects touched the schedule.
   assert.deepEqual((await req(base(), 'GET', `/api/jobs/${jobId}`)).body.schedule, { type: 'cron', expr: '0 9 * * *' });
+});
+
+// A bead's job row is disabled on purpose so only its project can launch it —
+// with a lease, a claim, and a close that only happens on an asserted completion.
+// The burn-down planner force-enables every job in a confirmed plan, so before
+// this it could arm a bead row and have the cron scheduler fire it with none of
+// those three, racing the poller for the same bead.
+test('burn-down: a bead-backed job row cannot be planned or armed', async (t) => {
+  const { server, base, db } = await bootWithUsage({ fiveHour: 10, resetsIn: 4 * 3600e3 });
+  t.after(() => server.close());
+
+  // Built the way materialise() builds it: directly, because validateFields drops
+  // unknown params keys, so `_beadId` cannot survive the public POST /api/jobs.
+  const bead = createJob(db, {
+    name: 'proj: do the thing',
+    type: 'claude',
+    params: { prompt: 'work on sp-1', permMode: 'acceptEdits', _beadId: 'sp-1', _projectId: 'p1' },
+    schedule: { type: 'once', at: new Date().toISOString() },
+    enabled: false,
+    cwd: tmpdir(),
+  });
+  const ordinary = (await req(base(), 'POST', '/api/jobs', jobPayload())).body;
+
+  // Preview refuses, and says why rather than returning an empty plan.
+  let r = await req(base(), 'POST', '/api/budget/plan', { window: 'five_hour', targetPct: 10, jobIds: [bead.id] });
+  assert.equal(r.status, 400);
+  assert.match(r.body.reason, /bead-backed jobs cannot be planned/);
+
+  // Mixed in with a legitimate job it still refuses — rejecting wholesale rather
+  // than quietly planning for one of the two jobs the user picked.
+  r = await req(base(), 'POST', '/api/budget/plan', { window: 'five_hour', targetPct: 10, jobIds: [ordinary.id, bead.id] });
+  assert.equal(r.status, 400);
+
+  // And apply() is checked independently of preview: this is the call that enables.
+  const at = new Date(Date.now() + 3600e3).toISOString();
+  r = await req(base(), 'POST', '/api/budget/plan/apply', { slots: [{ jobId: bead.id, at }] });
+  assert.equal(r.status, 400);
+  assert.match(r.body.errors[0], /bead-backed jobs cannot be planned/);
+
+  // The row is untouched: still disabled, still carrying only its spent one-shot.
+  const after = getJob(db, bead.id);
+  assert.equal(after.enabled, false, 'a refused plan must not enable a bead row');
+  assert.equal(after.schedule.type, 'once');
+  // The sharper consequence, and the reason this is permanent rather than
+  // self-healing: apply() round-trips the row through validateJob, and
+  // validateFields drops keys the extension doesn't declare — so an applied plan
+  // strips `_beadId`, detaching the row from its bead. findJobByBead then stops
+  // matching, so the poller can no longer heal or reuse the row: it mints a second
+  // one and loses the cost history, while the orphan keeps firing the bead's
+  // prompt with no lease, claim or close. Reproduced live before fixing.
+  assert.equal(after.params._beadId, 'sp-1', 'the row must stay attached to its bead');
+  assert.equal(after.params._projectId, 'p1');
+  assert.ok(findJobByBead(db, 'p1', 'sp-1'), 'the poller must still be able to find this row');
+
+  // A slot list that hides the bead behind a valid job must not be applied in part.
+  r = await req(base(), 'POST', '/api/budget/plan/apply', { slots: [{ jobId: ordinary.id, at }, { jobId: bead.id, at }] });
+  assert.equal(r.status, 400);
+  assert.equal(getJob(db, ordinary.id).enabled, true, 'the ordinary job was created enabled');
+  assert.deepEqual((await req(base(), 'GET', `/api/jobs/${ordinary.id}`)).body.schedule, { type: 'cron', expr: '0 9 * * *' },
+    'the valid half of a rejected plan must not be armed');
 });
 
 test('usage: pending snapshot, throttled refresh, history', async (t) => {
