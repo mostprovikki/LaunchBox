@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { tmpData, fakeBd, bdReadyRow } from './helpers.js';
-import { openDb, createProject, getProject, updateProject, listProjects, getLease, listJobs, acquireLease, getRunUsage, recordRunUsage, avgDeltaForJob } from '../lib/db.js';
+import { openDb, createProject, getProject, updateProject, listProjects, getLease, listJobs, acquireLease, getRunUsage, recordRunUsage, avgDeltaForJob, setSetting } from '../lib/db.js';
 import { createBeads } from '../lib/beads.js';
 import { createProjects, parseProjectConfig, completionMarker, beadPrompt } from '../lib/projects.js';
 
@@ -852,4 +852,174 @@ test('a bead that cannot be re-read on restart is reported, not guessed at', asy
 
   assert.equal(out[0].handedBack, false);
   assert.equal(unresolved.length, 1, 'a bead we could not check may stay hidden — say so');
+});
+
+// --- races and lost updates (found by code review, verified here) --------
+// A poll holds bd calls that each block for up to BD_TIMEOUT_MS, so tens of
+// seconds can separate reading the project row from writing the poll result.
+// Anything captured before those awaits and written after is a lost update.
+
+test('a Pause landing mid-poll is not overwritten by the poll result', async () => {
+  const { db, project, runner, beads } = setup({
+    bdHandlers: {
+      // The human pauses the project while this call is in flight.
+      ready: () => {
+        updateProject(db, project.id, { state: 'paused' });
+        return { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', labels: ['unattended'] })]) };
+      },
+      show: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', labels: ['unattended'] })]) },
+      update: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1' })]) },
+    },
+  });
+  const projects = createProjects({ db, beads, runner });
+
+  await projects.pollProject(project.id);
+
+  // Echoing the pre-await state back would re-activate the project and then launch
+  // every ready bead — the airlock and the pause both defeated by a stale write.
+  assert.equal(getProject(db, project.id).state, 'paused');
+});
+
+test('a poll failure does not stamp `error` over a human\'s pause', async () => {
+  const { db, project, runner, beads } = setup({
+    bdHandlers: {
+      where: () => {
+        updateProject(db, project.id, { state: 'paused' });
+        return { code: 1, stderr: 'boom' };
+      },
+    },
+  });
+  const projects = createProjects({ db, beads, runner });
+
+  await projects.pollProject(project.id);
+
+  // `error` is a POLLED_STATE, so stamping it here would resume polling something
+  // the human switched off — and the next poll would promote it back to active.
+  assert.equal(getProject(db, project.id).state, 'paused');
+});
+
+test('a recovered project still leaves `error` on its own', async () => {
+  const { db, project, runner, beads } = setup({
+    state: 'error',
+    bdHandlers: { ready: { stdout: '[]' } },
+  });
+  const projects = createProjects({ db, beads, runner });
+  await projects.pollProject(project.id);
+  assert.equal(getProject(db, project.id).state, 'active', 'self-healing must survive the lost-update fix');
+});
+
+test('a Hold landing between beads stops the rest of the loop', async () => {
+  let seen = 0;
+  const { db, project, runner, beads } = setup({
+    config: { ...CONFIG, maxConcurrent: 5 },
+    bdHandlers: {
+      ready: {
+        stdout: JSON.stringify([
+          bdReadyRow({ id: 'sp-1', labels: ['unattended'] }),
+          bdReadyRow({ id: 'sp-2', labels: ['unattended'] }),
+          bdReadyRow({ id: 'sp-3', labels: ['unattended'] }),
+        ]),
+      },
+      show: ({ args }) => ({ stdout: JSON.stringify([bdReadyRow({ id: args[1], labels: ['unattended'] })]) }),
+      update: ({ args }) => ({ stdout: JSON.stringify([bdReadyRow({ id: args[1] })]) }),
+    },
+  });
+  // Paused after the first bead has been launched.
+  let mode = 'off';
+  const pause = { mode: () => mode, blocksSchedule: () => mode !== 'off' };
+  const projects = createProjects({ db, beads, runner, pause });
+  runner.events.on('x', () => {});
+  const origStart = runner.start;
+  runner.start = (job, trigger) => { if (++seen === 1) mode = 'hold'; return origStart(job, trigger); };
+
+  const r = await projects.pollProject(project.id);
+
+  assert.equal(r.started.length, 1, 'the rest must not launch after the pause lands');
+  assert.match(r.reasons.join(' '), /paused \(hold\)/);
+});
+
+test('recoverOrphans releases only the leases it enumerated', async () => {
+  const { db, project, runner, beads } = setup({
+    bdHandlers: { show: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-old', status: 'in_progress', assignee: 'claude-scheduler' })]) } },
+  });
+  const projects = createProjects({ db, beads, runner });
+  acquireLease(db, { projectId: project.id, beadId: 'sp-old' }); // the orphan
+
+  const p = projects.recoverOrphans(); // synchronous prefix captures + releases
+  // A live lease taken by a poll that started *after* recovery began must survive:
+  // a blanket `WHERE state='held'` release freed these, and if the bead's advisory
+  // claim had failed it would then be leased and run a second time.
+  acquireLease(db, { projectId: project.id, beadId: 'sp-live' });
+  await p;
+
+  assert.equal(getLease(db, project.id, 'sp-old').state, 'released');
+  assert.equal(getLease(db, project.id, 'sp-live').state, 'held', 'a live lease must not be swept up');
+});
+
+test('a run that is already finished when start() returns does not leak a lease', async () => {
+  const { db, project, runner, beads } = setup({
+    // The runner reports a run that already failed (a synchronous spawn throw).
+    runnerOpts: { status: 'fail' },
+    bdHandlers: {
+      ready: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', labels: ['unattended'] })]) },
+      show: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', labels: ['unattended'] })]) },
+      update: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1' })]) },
+    },
+  });
+  const projects = createProjects({ db, beads, runner });
+
+  const r = await projects.pollProject(project.id);
+
+  // `once('done:…')` attaching after the emit would wait forever: lease held and
+  // bead in_progress, with no symptom at all.
+  assert.equal(r.started.length, 0);
+  assert.equal(getLease(db, project.id, 'sp-1').state, 'released');
+});
+
+test('the declaration is re-read from disk each poll, so a fixed typo takes effect', async () => {
+  const db = freshDb();
+  const bd = fakeBd({
+    '--version': { stdout: 'bd version 1.1.0 (Homebrew)' },
+    where: { stdout: JSON.stringify({ path: '/repo/.beads', database_path: '/repo/.beads/db' }) },
+    ready: { stdout: '[]' },
+  });
+  // Registered by hand with no autoLabel; the file on disk has since been fixed.
+  const project = createProject(db, { name: 'repo', path: '/repo', state: 'active', config: { enabled: true } });
+  const projects = createProjects({
+    db, beads: createBeads({ execFileFn: bd }), runner: fakeRunner({ db }),
+    fsx: { readdir: async () => [], readFile: async () => JSON.stringify({ autoLabel: 'unattended' }) },
+  });
+
+  const r = await projects.pollProject(project.id);
+
+  // Only discover() used to re-read the file, and discovery only walks
+  // projectRoots — so a hand-registered repo could never be repaired.
+  assert.equal(r.ok, true);
+  assert.equal(getProject(db, project.id).config.autoLabel, 'unattended');
+});
+
+test('a project sharing one worktree runs a single bead at a time', async () => {
+  const { db, project, runner, beads } = setup({
+    config: { ...CONFIG, maxConcurrent: 4 },
+    bdHandlers: {
+      ready: {
+        stdout: JSON.stringify([
+          bdReadyRow({ id: 'sp-1', labels: ['unattended'] }),
+          bdReadyRow({ id: 'sp-2', labels: ['unattended'] }),
+        ]),
+      },
+      show: ({ args }) => ({ stdout: JSON.stringify([bdReadyRow({ id: args[1], labels: ['unattended'] })]) }),
+      update: ({ args }) => ({ stdout: JSON.stringify([bdReadyRow({ id: args[1] })]) }),
+    },
+  });
+  setSetting(db, 'worktreeRoot', '/tmp/wt');
+  const worktrees = { ensure: async () => ({ path: '/tmp/wt/repo', created: false }) };
+  const projects = createProjects({ db, beads, runner, worktrees });
+
+  const r = await projects.pollProject(project.id);
+
+  // One worktree per project: two concurrent beads would share a checkout and a
+  // branch and edit each other's files.
+  assert.equal(r.started.length, 1);
+  assert.match(r.reasons.join(' '), /share a single git worktree/);
 });
