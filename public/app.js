@@ -1,6 +1,7 @@
 import { renderFields, collectFields } from './fields.js';
 import { $, $$, api, apiErr, esc, toast, relTime, fullTime, duration } from './util.js';
 import { renderUsage } from './usage.js';
+import { refreshProjects } from './projects.js';
 
 let exts = []; // extension manifests from /api/extensions
 let jobs = [];
@@ -61,7 +62,7 @@ function hashParts() {
 }
 function showTab() {
   const { tab, query } = hashParts();
-  for (const s of ['jobs', 'history', 'settings']) {
+  for (const s of ['jobs', 'history', 'projects', 'settings']) {
     $(`#tab-${s}`).hidden = s !== tab;
     document.querySelector(`.tabs a[data-tab="${s}"]`).classList.toggle('active', s === tab);
   }
@@ -71,6 +72,7 @@ function showTab() {
     if (query.toString()) history.replaceState(null, '', '#history');
     refreshRuns();
   }
+  if (tab === 'projects') refreshProjects();
   if (tab === 'settings') loadSettings();
 }
 window.addEventListener('hashchange', showTab);
@@ -778,6 +780,12 @@ async function loadSettings() {
     $('#s-pauseOnWarning').checked = !!s.pauseOnWarning;
     $('#s-awakeResetLeadMin').value = s.awakeResetLeadMin;
     $('#s-softGraceSec').value = Math.round(s.softGraceMs / 1000);
+    // Stored as one string; the textarea is just a friendlier editor for it, so
+    // commas from an older value are shown as the lines they mean.
+    $('#s-projectRoots').value = (s.projectRoots ?? '').split(/[,\n]/).map((r) => r.trim()).filter(Boolean).join('\n');
+    $('#s-beadsPollSec').value = s.beadsPollSec;
+    $('#s-bdPath').value = s.bdPath ?? '';
+    $('#s-worktreeRoot').value = s.worktreeRoot ?? '';
     renderBudgetState();
   } catch { /* daemon briefly down */ }
 }
@@ -798,6 +806,10 @@ async function saveSettings(ev) {
       pauseOnWarning: $('#s-pauseOnWarning').checked,
       awakeResetLeadMin: Number($('#s-awakeResetLeadMin').value),
       softGraceMs: Number($('#s-softGraceSec').value) * 1000,
+      projectRoots: $('#s-projectRoots').value.trim(),
+      beadsPollSec: Number($('#s-beadsPollSec').value),
+      bdPath: $('#s-bdPath').value.trim(),
+      worktreeRoot: $('#s-worktreeRoot').value.trim(),
     });
     $('#settings-msg').textContent = 'saved ✓';
     setTimeout(() => { $('#settings-msg').textContent = ''; }, 2000);

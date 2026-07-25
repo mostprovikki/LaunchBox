@@ -25,7 +25,10 @@ test('parses init/tool/text/result events into readable lines', () => {
   f.write(TEXT + '\n' + RESULT + '\n');
   f.flush();
 
-  assert.deepEqual(metas, [{ sessionId: 'sess-1' }]);
+  // `resultText` is persisted because exit status does not say whether the task
+  // was done — a run can finish `success` while reporting it achieved nothing.
+  // The beads poller reads this to decide whether to close a bead.
+  assert.deepEqual(metas, [{ sessionId: 'sess-1' }, { resultText: 'All done.' }]);
   assert.ok(lines[0].includes('sess-1'));
   assert.ok(lines[1].startsWith('⚙ Bash'));
   assert.ok(lines[1].includes('ls -la'));

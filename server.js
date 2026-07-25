@@ -1,13 +1,16 @@
 import express from 'express';
 import { execFile } from 'node:child_process';
-import { existsSync, readFileSync, unlinkSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { existsSync, readFileSync, statSync, unlinkSync } from 'node:fs';
+import { join, dirname, isAbsolute, resolve as resolvePath } from 'node:path';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { ensureDirs, dbPath } from './lib/paths.js';
 import {
   openDb, createJob, listJobs, getJob, updateJob, deleteJob,
   insertRun, getRun, listRuns, lastRun, failOrphanRuns,
   getSetting, setSetting, cleanupAll, listUsageSnapshots,
+  listProjects, getProject, getProjectByPath, createProject, updateProject, deleteProject,
+  listLeases, releaseOrphanLeases, listJobsByProject,
 } from './lib/db.js';
 import { validateJob, previewSchedule, scheduleEntries } from './lib/validate.js';
 import { loadExtensions, manifest, validateFields } from './lib/extensions.js';
@@ -17,6 +20,12 @@ import { createAwake, DEFAULT_RESET_LEAD_MIN } from './lib/awake.js';
 import { createPauseController, PAUSE_MODES } from './lib/pause.js';
 import { createUsageMonitor, POLL_FLOOR_SEC, DEFAULT_POLL_SEC, USAGE_SHOW_MODES } from './lib/usage.js';
 import { createBudgetPolicy } from './lib/budget.js';
+import { createBeads } from './lib/beads.js';
+import { createWorktrees } from './lib/worktree.js';
+import {
+  createProjects, parseProjectConfig, CONFIG_FILE,
+  DEFAULT_POLL_SEC as BEADS_DEFAULT_POLL_SEC, POLL_FLOOR_SEC as BEADS_POLL_FLOOR_SEC,
+} from './lib/projects.js';
 import { startUninstall } from './lib/uninstall.js';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
@@ -25,8 +34,34 @@ const ROOT = dirname(fileURLToPath(import.meta.url));
 // well past anything worth confirming in one click.
 const PLAN_SLOT_MAX = 200;
 
+// The one honest asterisk on "the scheduler never touches your checkout" (M4a
+// §4a.6, decision (b) settled with the user). `bd close` appends to a git-tracked
+// file, it cannot be suppressed, and the worktree does not shield the primary
+// from it. Concealing that would make a completed task look like the scheduler
+// had gone rogue in someone's repo, so the Projects tab states it up front.
+// No backticks: this string is rendered as plain text, and markdown that never
+// gets parsed just makes the one note nobody should skim look like debug output.
+const AUDIT_NOTE = 'Expect .beads/interactions.jsonl to show up as modified. bd records status changes in '
+  + 'that file and keeps it under git on purpose: closing a finished bead appends one line, and handing an '
+  + 'unfinished one back appends two. Claiming a bead and reading the backlog append nothing. It cannot be '
+  + 'turned off (there is no bd setting for it), and it lands in the repo\'s primary checkout even when the '
+  + 'work itself ran in a separate worktree. The scheduler leaves those lines uncommitted and never commits '
+  + 'on your behalf. If you would rather not version the audit trail at all, that is your repo\'s call: '
+  + 'git rm --cached .beads/interactions.jsonl, then ignore it.';
+
+// A human may activate or pause. `pending` belongs to discovery and `error` to the
+// poller, so neither is settable here — accepting them would let a client
+// hand-wave a project into a state the daemon uses to mean something specific.
+const PROJECT_SETTABLE_STATES = ['active', 'paused'];
+
+// How long a *failed* `bd --version` is remembered. Success is cached inside the
+// adapter for the daemon's life; this exists so a missing binary doesn't mean a
+// spawn attempt on every render of the Projects tab.
+const BD_INFO_TTL_MS = 30_000;
+
 export function createApp({
   db, runner, scheduler, extensions, awake, usage = null, budget = null, pause = null,
+  projects = null, beads = null,
   execFileFn = execFile, uninstallFn = startUninstall,
   usageRefreshFloorMs = POLL_FLOOR_SEC * 1000,
 }) {
@@ -348,6 +383,229 @@ export function createApp({
     res.json({ ok: true, added: slots.length, jobs, enabled });
   });
 
+  // ---------------------------------------------------------------- projects
+  // Registered repos whose tasks live in their own `.beads/` (M4a). Two safety
+  // gates run through these routes and both are load-bearing:
+  //   1. `autoLabel` in the repo's own `.scheduler.json` — opt-in, never opt-out.
+  //   2. human activation — nothing here may activate a project as a side effect.
+  // An agent may write `.scheduler.json` and file beads; only a human may click
+  // Activate. If one actor could do both, an agent could arrange for arbitrary
+  // unattended work to run on this machine.
+
+  const projectRoots = () => String(getSetting(db, 'projectRoots', '') || '')
+    .split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
+  const bdPathSetting = () => getSetting(db, 'bdPath', 'bd') || 'bd';
+  const worktreeRootSetting = () => getSetting(db, 'worktreeRoot', '') || null;
+  const beadsPollSec = () => Number(getSetting(db, 'beadsPollSec', BEADS_DEFAULT_POLL_SEC)) || BEADS_DEFAULT_POLL_SEC;
+
+  // `~` is what a human types; every path we store is absolute so that
+  // `getProjectByPath` can't be fooled into registering one repo twice.
+  const expandPath = (p) => {
+    const s = String(p ?? '').trim();
+    if (!s) return '';
+    return resolvePath(s.startsWith('~') ? join(homedir(), s.slice(1)) : s);
+  };
+
+  let bdInfo = { at: 0, version: null, error: null };
+  async function bdStatus() {
+    if (!beads) return { version: null, error: 'beads adapter not available', path: bdPathSetting() };
+    if (bdInfo.at && Date.now() - bdInfo.at < BD_INFO_TTL_MS) return { ...bdInfo, at: undefined, path: bdPathSetting() };
+    try {
+      bdInfo = { at: Date.now(), version: await beads.version(), error: null };
+    } catch (err) {
+      bdInfo = { at: Date.now(), version: null, error: err?.message ?? String(err) };
+    }
+    return { version: bdInfo.version, error: bdInfo.error, path: bdPathSetting() };
+  }
+
+  // Everything the Projects tab needs about one project WITHOUT touching the
+  // beads database: a list render must not cost one blocking `bd` call per row.
+  // `reasons` is the "contributing nothing must never be silent" contract — a
+  // project that will never do anything says why, in plain language.
+  const decorateProject = (p) => {
+    const parsed = parseProjectConfig(p.config ?? {});
+    return {
+      ...p,
+      configErrors: parsed.errors,
+      reasons: projects ? projects.explain(p, { config: parsed.config }) : [],
+      warnings: projects?.warningsFor(p.id) ?? [],
+      busyStreak: projects?.busyStreakFor(p.id) ?? 0,
+      ready: projects?.readyFor(p.id) ?? { count: null, at: null },
+      leases: { held: listLeases(db, { projectId: p.id, state: 'held' }).length },
+    };
+  };
+
+  // 501 rather than 404: the routes exist, the engine behind them wasn't wired
+  // in — a distinction worth keeping for anything embedding createApp directly.
+  const needProjects = (res) => {
+    if (projects && beads) return true;
+    res.status(501).json({ error: 'project task sources are not available in this instance' });
+    return false;
+  };
+
+  app.get('/api/projects', async (req, res) => {
+    res.json({
+      projects: listProjects(db).map(decorateProject),
+      bd: await bdStatus(),
+      roots: projectRoots(),
+      worktreeRoot: worktreeRootSetting(),
+      pollSec: projects?.pollSec() ?? beadsPollSec(),
+      auditNote: AUDIT_NOTE,
+    });
+  });
+
+  // Register one path by hand. Creates `pending` and NOTHING else — `state` is
+  // deliberately not read from the body, so no payload can register-and-activate
+  // in one call.
+  app.post('/api/projects', async (req, res) => {
+    if (!needProjects(res)) return;
+    const path = expandPath(req.body?.path);
+    if (!path) return res.status(400).json({ error: 'path required' });
+    try {
+      if (!statSync(path).isDirectory()) return res.status(400).json({ error: `${path} is not a directory` });
+    } catch {
+      return res.status(400).json({ error: `${path} does not exist` });
+    }
+    if (getProjectByPath(db, path)) return res.status(409).json({ error: 'that path is already registered' });
+    let raw;
+    try {
+      raw = readFileSync(join(path, CONFIG_FILE), 'utf8');
+    } catch {
+      return res.status(400).json({
+        error: `no ${CONFIG_FILE} at ${path} — a project declares itself with a committed ${CONFIG_FILE} `
+          + 'naming the label a bead must carry to be eligible ({"autoLabel": "unattended"})',
+      });
+    }
+    const parsed = parseProjectConfig(raw);
+    const project = createProject(db, {
+      name: parsed.config?.name || path.split('/').filter(Boolean).pop() || path,
+      path,
+      state: 'pending',
+      config: parsed.config ?? {},
+    });
+    // Learn where the database actually is now rather than at first poll, so the
+    // tab can show the truth before anyone is asked to activate anything.
+    let health = null;
+    try { health = await projects.refreshHealth(project.id); } catch (err) { health = { ok: false, busy: false, reason: err?.message ?? String(err) }; }
+    res.status(201).json({ project: decorateProject(getProject(db, project.id)), errors: parsed.errors, health });
+  });
+
+  // Scan `projectRoots` for `.scheduler.json`. Writes `pending` only; finding a
+  // repo is not consent to run it.
+  app.post('/api/projects/discover', async (req, res) => {
+    if (!needProjects(res)) return;
+    const roots = projectRoots();
+    if (!roots.length) {
+      return res.status(400).json({ error: 'no projectRoots configured — set them under Task sources in Settings' });
+    }
+    try {
+      const found = await projects.discover();
+      res.json({
+        found: found.map((f) => ({ project: decorateProject(getProject(db, f.project.id)), created: f.created, errors: f.errors })),
+        roots,
+      });
+    } catch (err) {
+      res.status(500).json({ error: err?.message ?? String(err) });
+    }
+  });
+
+  // THE AIRLOCK. The only route that can make a project eligible to run work,
+  // and it does exactly one thing so that it can never happen incidentally.
+  app.put('/api/projects/:id', async (req, res) => {
+    if (!needProjects(res)) return;
+    const project = getProject(db, req.params.id);
+    if (!project) return res.status(404).json({ error: 'not found' });
+    const state = req.body?.state;
+    if (!PROJECT_SETTABLE_STATES.includes(state)) {
+      return res.status(400).json({
+        error: `state must be one of ${PROJECT_SETTABLE_STATES.join('|')} — "pending" is written by discovery `
+          + 'and "error" by the poller',
+      });
+    }
+    // Probe before flipping the state so the response can say what activating
+    // just signed up for, including a beads dir that doesn't resolve.
+    let health = null;
+    try { health = await projects.refreshHealth(project.id); } catch (err) { health = { ok: false, busy: false, reason: err?.message ?? String(err) }; }
+    const updated = updateProject(db, project.id, { state });
+    const parsed = parseProjectConfig(updated.config ?? {});
+    res.json({
+      project: decorateProject(updated),
+      health,
+      reasons: projects.explain(updated, { config: parsed.config, health }),
+      warnings: projects.warningsFor(updated.id),
+    });
+  });
+
+  // Un-register. A held lease means a bead of this project is running right now,
+  // so the default is to refuse and name it rather than orphan a live run.
+  app.delete('/api/projects/:id', (req, res) => {
+    if (!needProjects(res)) return;
+    const project = getProject(db, req.params.id);
+    if (!project) return res.status(404).json({ error: 'not found' });
+    const held = listLeases(db, { projectId: project.id, state: 'held' });
+    if (held.length && !req.body?.force) {
+      return res.status(409).json({
+        error: `${held.length} bead${held.length === 1 ? '' : 's'} of this project ${held.length === 1 ? 'is' : 'are'} still leased to a run`,
+        held: held.map((l) => l.beadId),
+      });
+    }
+    // A bead's job row is kept across runs to preserve its learned cost (§4a.7),
+    // which means un-registering has to clear them deliberately — otherwise the
+    // Jobs list keeps rows pointing at a project id that no longer resolves.
+    const beadJobs = listJobsByProject(db, project.id);
+    for (const job of beadJobs) {
+      for (const p of deleteJob(db, job.id)) {
+        try { unlinkSync(p); } catch {}
+      }
+      scheduler.reload(job.id);
+    }
+    deleteProject(db, project.id);
+    awake?.refresh();
+    res.json({ ok: true, removedJobs: beadJobs.length });
+  });
+
+  // Live `bd ready` passthrough for one project — human-initiated, so it is
+  // allowed to be slow. Works on a `pending` project too: seeing what *would*
+  // run is exactly what you want before deciding whether to activate.
+  app.get('/api/projects/:id/ready', async (req, res) => {
+    if (!needProjects(res)) return;
+    const project = getProject(db, req.params.id);
+    if (!project) return res.status(404).json({ error: 'not found' });
+    const parsed = parseProjectConfig(project.config ?? {});
+    const autoLabel = parsed.config?.autoLabel || null;
+    const health = await beads.healthy(project);
+    // Busy is not broken — and it short-circuits, because `ready` would then
+    // block on the same lock and double the wait the browser is sitting through.
+    if (health.busy) {
+      return res.json({ beads: [], busy: true, reasons: [health.reason], health, autoLabel });
+    }
+    if (!health.ok) return res.json({ beads: [], busy: false, reasons: [health.reason], health, autoLabel });
+    if (!autoLabel) {
+      return res.json({ beads: [], busy: false, reasons: parsed.errors, health, autoLabel: null });
+    }
+    try {
+      const rows = await beads.ready(project, { label: autoLabel });
+      res.json({ beads: rows, busy: false, reasons: [], health, autoLabel });
+    } catch (err) {
+      if (err?.busy) return res.json({ beads: [], busy: true, reasons: [err.message], health, autoLabel });
+      res.status(502).json({ error: err?.message ?? String(err) });
+    }
+  });
+
+  // Poll one project now. This can start runs — which is what an active project
+  // means — but it changes no state, so it is not a back door around the airlock:
+  // a `pending` project answers `skipped` with the reason.
+  app.post('/api/projects/:id/poll', async (req, res) => {
+    if (!needProjects(res)) return;
+    if (!getProject(db, req.params.id)) return res.status(404).json({ error: 'not found' });
+    try {
+      const out = await projects.pollProject(req.params.id);
+      res.json({ projectId: req.params.id, ...out, project: decorateProject(getProject(db, req.params.id)) });
+    } catch (err) {
+      res.status(500).json({ error: err?.message ?? String(err) });
+    }
+  });
+
   // Settings: core {paused, home} + per-extension blocks from each ext's
   // `settings` field specs (defaults applied on read, validated on write).
   const extSettingsOut = () => Object.fromEntries([...extensions.values()]
@@ -369,6 +627,13 @@ export function createApp({
       usageShow: usageShow(),
       usageWarnPct: usageWarnPct(),
       awakeResetLeadMin: Number(getSetting(db, 'awakeResetLeadMin', DEFAULT_RESET_LEAD_MIN)) || DEFAULT_RESET_LEAD_MIN,
+      // Task sources (M4a). `bdPath` is pinned deliberately: bd shipped ~93
+      // releases in 9 months with a breaking change, so which binary we talk to
+      // is a setting, not a lookup.
+      projectRoots: getSetting(db, 'projectRoots', ''),
+      beadsPollSec: beadsPollSec(),
+      bdPath: bdPathSetting(),
+      worktreeRoot: getSetting(db, 'worktreeRoot', ''),
       ...policy.settings(),
       extensions: extSettingsOut(),
     });
@@ -423,6 +688,48 @@ export function createApp({
         for (const s of specs) setSetting(db, s.key, params[s.key]);
       }
     }
+    // Task sources (M4a).
+    if ('beadsPollSec' in b) {
+      const n = Number(b.beadsPollSec);
+      if (!Number.isFinite(n) || n < BEADS_POLL_FLOOR_SEC || n > 3600) {
+        return res.status(400).json({ errors: [`beadsPollSec must be ${BEADS_POLL_FLOOR_SEC}-3600`] });
+      }
+      setSetting(db, 'beadsPollSec', Math.round(n));
+    }
+    // Stored expanded and absolute. `~/dev` is what a human types (and what the
+    // field suggests), but discovery hands these straight to readdir, which would
+    // look for a directory literally named `~` and find nothing — and discovery
+    // treats an absent root as "not an error", so the failure would be silent.
+    if ('projectRoots' in b) {
+      setSetting(db, 'projectRoots', String(b.projectRoots ?? '')
+        .split(/[\n,]/).map((s) => expandPath(s)).filter(Boolean).join('\n'));
+    }
+    if ('bdPath' in b) {
+      const p = String(b.bdPath ?? '').trim() || 'bd';
+      // A different binary may be a different version, and the adapter caches the
+      // answer for the daemon's life — so forget it, or the mismatch banner would
+      // keep reporting the binary we used to be pointed at.
+      if (p !== bdPathSetting()) beads?.resetVersion();
+      setSetting(db, 'bdPath', p);
+    }
+    if ('worktreeRoot' in b) {
+      // Expanded for the same reason as projectRoots, and additionally because
+      // `git worktree add` would happily create a directory called `~` in the cwd.
+      const root = expandPath(b.worktreeRoot);
+      // The spike measured this: a worktree created inside the primary checkout
+      // shows up as `?? .worktrees/` in the human's `git status` — littering the
+      // very checkout the worktree exists to keep clean. Cheap to catch here for
+      // any repo we already know about.
+      const inside = root && listProjects(db).find((p) => root === p.path || root.startsWith(p.path + '/'));
+      if (inside) {
+        return res.status(400).json({
+          errors: [`worktreeRoot must live outside every registered repo — ${root} is inside ${inside.path}, `
+            + 'so the worktree would show up as untracked noise in that repo\'s git status'],
+        });
+      }
+      setSetting(db, 'worktreeRoot', root);
+    }
+    if ('beadsPollSec' in b) projects?.restart();
     // How long a run gets to wind down before the ladder escalates to SIGTERM.
     if ('softGraceMs' in b) {
       const n = Number(b.softGraceMs);
@@ -504,7 +811,55 @@ export async function main() {
   usage.start();
   const awake = createAwake({ db, runner, scheduler, usage, pause });
   awake.refresh();
-  const app = createApp({ db, runner, scheduler, extensions, awake, usage, budget, pause });
+
+  // Task sources (M4a). `bdPath` is read through a closure on every call so a
+  // settings change takes effect without a restart.
+  const beads = createBeads({ db, bdPath: () => getSetting(db, 'bdPath', 'bd') || 'bd' });
+  const worktrees = createWorktrees();
+  const projects = createProjects({ db, beads, runner, worktrees, pause });
+  // A daemon that swallows these is a daemon that polls silently and tells nobody
+  // why nothing ran. Busy is logged as the routine event it is, not as a fault.
+  projects.events.on('busy', ({ projectId, consecutive }) =>
+    console.log(`beads: ${projectId} database busy (${consecutive} in a row) — retrying next poll`));
+  projects.events.on('warning', ({ projectId, message }) => console.warn(`beads: ${projectId} — ${message}`));
+  projects.events.on('error', ({ projectId, message }) => console.error(`beads: ${projectId} — ${message}`));
+  projects.events.on('started', ({ beadId, runId }) => console.log(`beads: started ${beadId} as run ${runId}`));
+  projects.events.on('abandoned', ({ beadId, reason }) => console.log(`beads: skipped ${beadId} — ${reason}`));
+  projects.events.on('claim-failed', ({ beadId, reason }) => console.warn(`beads: claim of ${beadId} failed — ${reason} (running anyway: our lease is the lock)`));
+  projects.events.on('held', ({ mode, ready }) => console.log(`beads: schedule paused (${mode}) — ${ready} ready bead(s) left untouched`));
+  projects.events.on('handed-back', ({ beadId, reason }) => console.log(`beads: handed ${beadId} back to the backlog — ${reason}`));
+  // The loud one. A bead left in_progress is excluded from `bd ready` forever, so
+  // this is the difference between "will retry" and "silently gone".
+  projects.events.on('unclaim-failed', ({ beadId, reason, busy }) => console.error(
+    `beads: COULD NOT hand ${beadId} back (${reason}) — it stays in_progress, which means bd ready will not `
+    + `offer it again until someone runs: bd update ${beadId} --status open --assignee ""`
+    + `${busy ? ' (the database was busy — worth retrying)' : ''}`));
+  projects.events.on('close-failed', ({ beadId, reason }) => console.warn(`beads: could not close ${beadId} — ${reason}`));
+  projects.events.on('finished', ({ beadId, status, closed }) =>
+    console.log(`beads: ${beadId} finished ${status}${closed ? ' — closed' : ' — left open for retry'}`));
+  projects.events.on('unfinished', ({ beadId, runId }) => console.log(
+    `beads: ${beadId} — run ${runId} exited ok but never signalled completion, so the bead was returned to the backlog with a note`));
+  projects.events.on('orphan-unresolved', ({ beadId, reason }) => console.warn(
+    `beads: could not check orphaned bead ${beadId} after the restart (${reason}) — it may still be in_progress and hidden from bd ready`));
+
+  // Same role as failOrphanRuns: a daemon that died mid-run left leases with no
+  // live run behind them. Recovery FIRST, while the leases still say which beads
+  // were ours — releasing the lease alone would leave the bead `in_progress` and
+  // therefore invisible to `bd ready` forever. Deliberately not awaited before the
+  // server listens: it makes `bd` calls that can block on a busy database, and the
+  // UI should come up regardless.
+  projects.recoverOrphans()
+    .then((out) => {
+      for (const r of out.filter((x) => x.handedBack)) console.log(`beads: returned ${r.beadId} to the backlog after a restart`);
+      releaseOrphanLeases(db);
+    })
+    .catch((err) => {
+      console.error(`beads: orphan recovery failed (${err?.message ?? err})`);
+      releaseOrphanLeases(db);
+    });
+  projects.start();
+
+  const app = createApp({ db, runner, scheduler, extensions, awake, usage, budget, pause, projects, beads });
   const port = Number(process.env.CS_PORT) || 9099;
   const server = app.listen(port, '127.0.0.1', () => {
     console.log(`claude-scheduler on http://127.0.0.1:${port} · extensions: ${[...extensions.keys()].join(', ')}`);

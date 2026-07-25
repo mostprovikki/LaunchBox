@@ -288,3 +288,68 @@ legend { color: var(--muted); padding: 0 6px; font-size: 12.5px; }
 .usage-chip { background: var(--panel2); color: var(--text); font-variant-numeric: tabular-nums; }
 .usage-chip.warn, .usage-chip.fail, .usage-chip.accent { color: #16110a; }
 .usage-chip.stale { opacity: .55; }
+
+/* ---------- projects (beads task sources) ---------- */
+#project-path { width: 340px; }
+#projects-roots a { color: var(--accent); }
+/* The audit line is disclosure, not decoration: boxed so it reads as a standing
+   statement about the user's checkout rather than as a hint they can skim. */
+.audit-note {
+  border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  border-radius: 8px; padding: 8px 12px; background: var(--panel);
+  margin: 10px 0 16px; max-width: 880px;
+}
+/* `.item` centres its children; a project row grows downwards (reasons, ready
+   list) so it has to align to the top or the actions drift away from the title. */
+.project-item { align-items: flex-start; }
+.project-item .title { flex-wrap: wrap; }
+.project-item .ppath { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }
+.project-item .actions { padding-top: 1px; }
+.project-item .actions button { font-size: 12.5px; }
+
+/* A state chip on a span gets no border from button styles — give it its own. */
+.chip.pstate { border: 1px solid var(--border); font-size: 11.5px; padding: 1px 9px; font-weight: 600; cursor: help; }
+.chip.pstate-active { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.chip.pstate-pending { color: var(--muted); background: var(--panel2); }
+.chip.pstate-paused { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); background: color-mix(in srgb, var(--warn) 12%, transparent); }
+.chip.pstate-error { color: var(--fail); border-color: color-mix(in srgb, var(--fail) 45%, transparent); background: color-mix(in srgb, var(--fail) 12%, transparent); }
+/* Only a real fault gets the alarm edge — a pending or busy project is fine. */
+.pstate-row-error { border-color: color-mix(in srgb, var(--fail) 40%, transparent); }
+
+/* Why this project is contributing nothing, verbatim from the server. Plain and
+   readable rather than tucked into a tooltip: an invisible reason is the failure
+   mode this whole tab exists to prevent. */
+.p-reason { color: var(--muted); font-size: 12.5px; margin-top: 4px; }
+.p-reason.p-warn { color: var(--warn); }
+.p-reason.p-fault { color: var(--fail); }
+/* A missing autoLabel means this repo can never run anything — it needs to look
+   like it wants attention, not like a note. */
+.p-reason.p-config-error {
+  color: var(--fail); border-left: 2px solid var(--fail); padding-left: 8px; font-weight: 500;
+}
+.activate-btn { border-color: color-mix(in srgb, var(--ok) 45%, transparent); color: var(--ok); font-weight: 600; }
+.activate-btn:hover { background: color-mix(in srgb, var(--ok) 14%, transparent); border-color: var(--ok); }
+
+/* Busy means a human is using `bd` in the same repo. Cool and calm on purpose —
+   it is a collision the scheduler is built to wait out, never an error. */
+.busy-chip {
+  border-radius: 999px; padding: 1px 8px; font-size: 11.5px; cursor: help;
+  background: color-mix(in srgb, var(--stopped) 18%, transparent); color: var(--stopped);
+}
+.busy-line { color: var(--stopped); font-size: 12.5px; margin-top: 4px; }
+
+/* ---------- ready-work list ---------- */
+.ready-panel {
+  margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px;
+}
+.ready-panel .note { margin: 2px 0 6px; }
+.ready-panel code { font-size: 11.5px; }
+.beads { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow-y: auto; }
+.bead { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 12.5px; }
+.bead-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--accent); font-size: 11.5px; }
+.bead-title { color: var(--text); min-width: 0; }
+.bead-meta { color: var(--muted); font-size: 11.5px; }
+.bead-label {
+  border-radius: 999px; padding: 0 7px; font-size: 11px;
+  background: var(--panel2); color: var(--muted);
+}
