@@ -12,6 +12,7 @@
   <nav class="tabs">
     <a href="#jobs" data-tab="jobs">Jobs</a>
     <a href="#history" data-tab="history">History</a>
+    <a href="#projects" data-tab="projects">Projects</a>
     <a href="#settings" data-tab="settings">Settings</a>
   </nav>
   <div class="header-right">
@@ -71,6 +72,25 @@
     <p id="runs-empty" class="empty" hidden>No runs match.</p>
   </section>
 
+  <section id="tab-projects" hidden>
+    <div class="toolbar">
+      <input id="project-path" type="text" placeholder="/path/to/repo with a .scheduler.json" autocomplete="off">
+      <button id="project-register">＋ Register</button>
+      <span class="spacer"></span>
+      <button id="project-discover" title="Scan the configured roots for repos that carry a .scheduler.json">⌕ Discover</button>
+    </div>
+    <p id="projects-roots" class="note"></p>
+    <p id="projects-bd" class="p-reason p-fault" hidden></p>
+    <!-- Permanent and unhidden by design: a completed bead leaves a real change in
+         the user's checkout, and that is disclosed before they ever activate. -->
+    <p id="projects-audit" class="note audit-note"></p>
+    <div id="projects-list" class="list"></div>
+    <div id="projects-empty" class="empty" hidden>
+      <p>No projects registered. Register a repo that has a <code>.scheduler.json</code>, or discover them under your configured roots.</p>
+      <p class="note">Registering only records the repo — a project runs nothing until you activate it.</p>
+    </div>
+  </section>
+
   <section id="tab-settings" hidden>
     <form id="settings-form" class="card">
       <h3>Usage</h3>
@@ -104,6 +124,18 @@
         <legend>⏸ Pausing</legend>
         <p class="muted note">A <strong>soft</strong> pause asks running jobs to wind down at their next safe point rather than killing them — a Claude run stops between tool calls, so nothing is left half-done and the session can be resumed. This is how long it waits before escalating.</p>
         <label>Give a run this long to wind down (sec) <input id="s-softGraceSec" type="number" min="1" max="600"></label>
+      </fieldset>
+      <fieldset>
+        <legend>🧵 Task sources</legend>
+        <p class="muted note">Repos whose <code>bd</code> backlog the scheduler may draw work from. Roots are only used by <strong>Discover</strong> on the Projects tab, and discovery registers projects as <em>pending</em> — a repo runs nothing until you activate it there.</p>
+        <label>Project roots — one path per line
+          <textarea id="s-projectRoots" rows="3" placeholder="~/dev"></textarea>
+        </label>
+        <div class="row">
+          <label>Poll projects every (sec) <input id="s-beadsPollSec" type="number" min="15" max="3600"></label>
+          <label><code>bd</code> command <input id="s-bdPath" placeholder="bd"></label>
+        </div>
+        <label>Worktree root — where scheduled runs get their own checkout <input id="s-worktreeRoot" placeholder="~/.cs-worktrees"></label>
       </fieldset>
       <h3>Extensions</h3>
       <div id="ext-settings"></div>

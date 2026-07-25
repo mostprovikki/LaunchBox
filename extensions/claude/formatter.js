@@ -7,6 +7,12 @@ function short(s, n = 160) {
   return s.length > n ? s.slice(0, n - 1) + '…' : s;
 }
 
+// Keep the end, not the beginning. Newlines survive: unlike `short`, this feeds
+// something a human will read in full.
+function tail(s, n) {
+  return s.length > n ? '…' + s.slice(-n) : s;
+}
+
 export function createFormatter({ onLine, onProgress, onMeta } = {}) {
   let buf = '';
   let toolCalls = 0;
@@ -45,6 +51,14 @@ export function createFormatter({ onLine, onProgress, onMeta } = {}) {
       }
       line(`■ ${ev.subtype ?? 'result'} · ${ev.num_turns ?? '?'} turns${cost}`);
       if (ev.result) line(short(ev.result, 2000));
+      // Persisted because exit status alone does not say whether the *task* was
+      // done: a run can finish `success` having explicitly reported that it could
+      // not do the work. Callers that need the difference (the beads poller's
+      // completion check) have to read what the agent actually concluded.
+      //
+      // The TAIL is kept rather than the head: a closing statement, and any
+      // completion marker a caller asked for, live at the end.
+      if (ev.result) onMeta?.({ resultText: tail(String(ev.result), 8000) });
       progress('done', { turns: ev.num_turns ?? null });
     }
     // other event types (user/tool_result etc.) are noise — skip

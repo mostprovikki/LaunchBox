@@ -5,7 +5,7 @@ import { EventEmitter } from 'node:events';
 import { tmpData, fakeBd, bdReadyRow } from './helpers.js';
 import { openDb, createProject, getProject, updateProject, listProjects, getLease, listJobs, acquireLease, getRunUsage, recordRunUsage, avgDeltaForJob } from '../lib/db.js';
 import { createBeads } from '../lib/beads.js';
-import { createProjects, parseProjectConfig } from '../lib/projects.js';
+import { createProjects, parseProjectConfig, completionMarker, beadPrompt } from '../lib/projects.js';
 
 function freshDb() {
   return openDb(join(tmpData(), 'test.db'));
@@ -13,7 +13,7 @@ function freshDb() {
 
 // A runner stand-in: records starts and lets a test drive completion, which is
 // how the real runner signals outcome (`done:<runId>`).
-function fakeRunner({ status = 'running' } = {}) {
+function fakeRunner({ db = null, status = 'running' } = {}) {
   const events = new EventEmitter();
   events.setMaxListeners(100);
   const starts = [];
@@ -22,11 +22,26 @@ function fakeRunner({ status = 'running' } = {}) {
     events,
     starts,
     start(job, trigger) {
-      const run = { id: `run-${++n}`, jobId: job.id, status, trigger };
+      const id = `run-${++n}`;
+      // A real row, because the poller reads the run's recorded final message to
+      // decide whether the task was actually done — exit status alone is not
+      // evidence of completion.
+      if (db) {
+        db.prepare('INSERT INTO runs (id, jobId, status, trigger, createdAt) VALUES (?, ?, ?, ?, ?)')
+          .run(id, job.id, status, trigger, new Date().toISOString());
+      }
+      const run = { id, jobId: job.id, status, trigger };
       starts.push({ job, trigger, run });
       return run;
     },
-    finish(runId, status) { events.emit(`done:${runId}`, status); },
+    // `said` is the agent's closing message. Completion is something the agent
+    // asserts, so a test that expects a close has to state that it said so.
+    finish(runId, status, { said = null } = {}) {
+      if (db && said != null) {
+        db.prepare('UPDATE runs SET meta = ? WHERE id = ?').run(JSON.stringify({ resultText: said }), runId);
+      }
+      events.emit(`done:${runId}`, status);
+    },
   };
 }
 
@@ -40,7 +55,7 @@ function setup({ bdHandlers = {}, runnerOpts = {}, config = CONFIG, state = 'act
     ...bdHandlers,
   });
   const beads = createBeads({ execFileFn: bd });
-  const runner = fakeRunner(runnerOpts);
+  const runner = fakeRunner({ db, ...runnerOpts });
   const project = createProject(db, { name: 'repo', path: '/repo', state, config, beadsDir: '/repo/.beads' });
   const projects = createProjects({ db, beads, runner });
   return { db, bd, beads, runner, project, projects };
@@ -301,7 +316,8 @@ test('on ok the bead is closed and the lease completes', async () => {
   const { db, bd, projects, project, runner } = successSetup();
   await projects.pollProject(project.id);
   const finished = new Promise((r) => projects.events.once('finished', r));
-  runner.finish('run-1', 'ok');
+  // The marker is the whole point: without it the run is treated as unfinished.
+  runner.finish('run-1', 'ok', { said: `done.\n${completionMarker('sp-1')}` });
   const e = await finished;
 
   assert.equal(e.closed, true);
@@ -354,7 +370,7 @@ test('a close that fails leaves the lease released rather than claiming success'
   });
   await projects.pollProject(project.id);
   const failed = new Promise((r) => projects.events.once('close-failed', r));
-  runner.finish('run-1', 'ok');
+  runner.finish('run-1', 'ok', { said: completionMarker('sp-1') });
   const e = await failed;
 
   assert.equal(e.busy, true);
@@ -485,4 +501,355 @@ test('refreshHealth learns beadsDir from bd where, never by concatenation', asyn
   const after = getProject(db, project.id);
   assert.equal(after.beadsDir, '/elsewhere/.beads');
   assert.equal(after.bdVersion, 'bd version 1.1.0 (Homebrew)');
+});
+
+// --- pause (M3) ---------------------------------------------------------
+// The poller launches runs *directly*, not through the scheduler, so nothing in
+// M3 covered it: `pause.gate()` deliberately admits everything under `hold`
+// (in v1 the only things that could reach the runner were a manual click and an
+// armed retry), and the scheduler is what drops held fires. A bead run is
+// neither, so without an explicit check the button whose entire promise is
+// "nothing fires automatically" would leave the most unattended work in the
+// system running.
+
+// A pause controller stand-in: only `blocksSchedule`/`mode` are consulted here.
+const fakePause = (mode) => ({ mode: () => mode, blocksSchedule: () => mode !== 'off' });
+
+for (const mode of ['hold', 'soft', 'hard']) {
+  test(`a ${mode} pause stops bead pickup — the poller does not bypass the pause`, async () => {
+    const { db, projects: _unused, project, runner, beads } = setup({
+      bdHandlers: { ready: { stdout: JSON.stringify([bdReadyRow({ labels: ['unattended'] })]) } },
+    });
+    const projects = createProjects({ db, beads, runner, pause: fakePause(mode) });
+
+    const r = await projects.pollProject(project.id);
+
+    assert.equal(runner.starts.length, 0, 'nothing may be launched while paused');
+    assert.equal(r.held, true);
+    assert.equal(r.ok, true, 'being paused is not a failure of the project');
+    assert.match(r.reasons.join(' '), new RegExp(mode));
+    // The count still has to be honest: a pause stops launching, not looking, and
+    // the Projects tab exists to say "there is work here and it is being held".
+    assert.equal(r.ready.length, 1);
+    assert.equal(projects.readyFor(project.id).count, 1);
+    // And it must not latch the project into a fault state.
+    assert.notEqual(getProject(db, project.id).state, 'error');
+    assert.equal(getProject(db, project.id).lastPollOk, true);
+  });
+}
+
+test('a lease is not taken while paused, so the bead is still eligible on resume', async () => {
+  const { db, project, runner, beads } = setup({
+    bdHandlers: {
+      ready: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-held', labels: ['unattended'] })]) },
+      show: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-held', labels: ['unattended'] })]) },
+      update: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-held', assignee: 'scheduler' })]) },
+    },
+  });
+  const paused = createProjects({ db, beads, runner, pause: fakePause('hold') });
+  await paused.pollProject(project.id);
+  assert.equal(getLease(db, project.id, 'sp-held'), null, 'a held schedule must not consume the bead');
+
+  // Resuming is all it should take — no manual poke, no released lease to clean up.
+  const live = createProjects({ db, beads, runner, pause: fakePause('off') });
+  await live.pollProject(project.id);
+  assert.equal(runner.starts.length, 1);
+  assert.equal(getLease(db, project.id, 'sp-held').state, 'held');
+});
+
+test('explain() says the schedule is paused, so "nothing is running" is never a mystery', () => {
+  const { db, project, runner, beads } = setup();
+  const projects = createProjects({ db, beads, runner, pause: fakePause('soft') });
+  assert.match(projects.explain(getProject(db, project.id)).join(' '), /paused \(soft\)/);
+
+  const off = createProjects({ db, beads, runner, pause: fakePause('off') });
+  assert.deepEqual(off.explain(getProject(db, project.id)), [], 'an active, healthy project explains nothing');
+});
+
+// --- handing a bead back (found by live-driving, not by reasoning) -------
+// `bd ready` excludes `in_progress`. Our claim sets exactly that, so releasing
+// only our own lease leaves the bead invisible to every future poll: the outcome
+// contract's "fail/stopped/killed leaves it open for retry" would have meant
+// "retired forever, silently". Every path that gives up AFTER a successful claim
+// has to un-claim in beads too.
+
+// Did we ask bd to put the bead back? Measured shape: `update <id> --status open
+// --assignee ""` restores it to `bd ready` in one call.
+const unclaimCalls = (bd) => bd.calls.filter((c) =>
+  c.sub === 'update' && c.args.includes('--status') && c.args.includes('open'));
+
+test('a failed run hands the bead back to open, not just un-leases it', async () => {
+  const { db, bd, projects, project, runner } = setup({
+    bdHandlers: {
+      ready: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', labels: ['unattended'] })]) },
+      show: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', labels: ['unattended'] })]) },
+      update: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', assignee: 'claude-scheduler' })]) },
+    },
+  });
+  await projects.pollProject(project.id);
+  assert.equal(runner.starts.length, 1);
+  assert.equal(unclaimCalls(bd).length, 0, 'nothing is handed back while the run is live');
+
+  runner.finish(runner.starts[0].run.id, 'fail');
+  await new Promise((r) => setImmediate(r));
+
+  assert.equal(unclaimCalls(bd).length, 1, 'a failed run must return the bead to bd ready');
+  assert.deepEqual(unclaimCalls(bd)[0].args, ['update', 'sp-1', '--status', 'open', '--assignee', '']);
+  assert.equal(getLease(db, project.id, 'sp-1').state, 'released');
+});
+
+test('an M3 wind-down hands the bead back too — a stop is not a completion', async () => {
+  const { bd, projects, project, runner } = setup({
+    bdHandlers: {
+      ready: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', labels: ['unattended'] })]) },
+      show: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', labels: ['unattended'] })]) },
+      update: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', assignee: 'claude-scheduler' })]) },
+    },
+  });
+  await projects.pollProject(project.id);
+  runner.finish(runner.starts[0].run.id, 'stopped');
+  await new Promise((r) => setImmediate(r));
+
+  assert.equal(unclaimCalls(bd).length, 1);
+  // And it is emphatically not closed: nobody finished the work.
+  assert.equal(bd.calls.filter((c) => c.sub === 'close').length, 0);
+});
+
+test('a guard-skipped run hands the bead back — a temporary no must not be permanent', async () => {
+  const { bd, projects, project, runner } = setup({
+    runnerOpts: { status: 'skipped' },
+    bdHandlers: {
+      ready: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', labels: ['unattended'] })]) },
+      show: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', labels: ['unattended'] })]) },
+      update: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', assignee: 'claude-scheduler' })]) },
+    },
+  });
+  const r = await projects.pollProject(project.id);
+
+  assert.equal(unclaimCalls(bd).length, 1, 'the budget guard refusing must not retire the bead');
+  assert.equal(r.started.length, 0);
+  // And the poll says why nothing started, per bead.
+  assert.equal(r.skipped.length, 1);
+  assert.match(r.skipped[0].reason, /guard/);
+});
+
+test('a bead claimed by someone else is NEVER un-claimed — that would steal it back', async () => {
+  const { bd, projects, project, runner } = setup({
+    bdHandlers: {
+      ready: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', labels: ['unattended'] })]) },
+      show: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', labels: ['unattended'] })]) },
+      // The measured loser-of-a-race shape: exit 1 naming the winner.
+      update: { code: 1, stderr: 'Error claiming sp-1: issue already claimed by a-human' },
+    },
+  });
+  const r = await projects.pollProject(project.id);
+
+  assert.equal(runner.starts.length, 0);
+  assert.equal(unclaimCalls(bd).length, 0, 'we must not touch a claim we did not place');
+  assert.match(r.skipped[0].reason, /a-human/);
+});
+
+test('a failed un-claim is reported loudly — a stuck bead is otherwise invisible', async () => {
+  const { bd, projects, project, runner } = setup({
+    bdHandlers: {
+      ready: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', labels: ['unattended'] })]) },
+      show: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', labels: ['unattended'] })]) },
+      update: ({ args }) => (args.includes('--claim')
+        ? { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', assignee: 'claude-scheduler' })]) }
+        : { timeout: true }), // the un-claim hits a busy database
+    },
+  });
+  const failures = [];
+  projects.events.on('unclaim-failed', (e) => failures.push(e));
+
+  await projects.pollProject(project.id);
+  runner.finish(runner.starts[0].run.id, 'fail');
+  await new Promise((r) => setImmediate(r));
+
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0].beadId, 'sp-1');
+  assert.equal(failures[0].busy, true, 'busy is distinguishable, so the caller can say "worth retrying"');
+});
+
+test('every bd call identifies the scheduler as the actor, not the repo owner', async () => {
+  const { bd, projects, project } = setup({
+    bdHandlers: { ready: { stdout: '[]' } },
+  });
+  await projects.pollProject(project.id);
+
+  assert.ok(bd.calls.length > 0);
+  // Otherwise `--claim` assigns the bead to the human's own git user.name, and the
+  // notice board says "taken" without being able to say by whom.
+  for (const c of bd.calls) assert.equal(c.env.BEADS_ACTOR, 'claude-scheduler', `actor missing on bd ${c.sub}`);
+});
+
+// --- "ok" is not "done" (found by live-driving) --------------------------
+// Measured against the real CLI: a run whose every write was denied finished
+// `subtype: success`, exit 0, and stated in plain English that it had done
+// nothing — and the bead was closed. Exit status describes the process; it says
+// nothing about the task. So closing now requires the agent to assert completion.
+
+function markerSetup(opts = {}) {
+  return setup({
+    bdHandlers: {
+      ready: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', labels: ['unattended'] })]) },
+      show: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', labels: ['unattended'] })]) },
+      update: ({ args }) => (args.includes('--claim')
+        ? { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', assignee: 'claude-scheduler' })]) }
+        : { stdout: '' }),
+    },
+    ...opts,
+  });
+}
+
+test('a run that exits ok WITHOUT signalling completion does not close the bead', async () => {
+  const { db, bd, projects, project, runner } = markerSetup();
+  await projects.pollProject(project.id);
+  const finished = new Promise((r) => projects.events.once('finished', r));
+  // The exact shape of the live failure: cheerful exit, work not done.
+  runner.finish('run-1', 'ok', { said: 'I need write permission to create the file. This is a blocker.' });
+  const e = await finished;
+
+  assert.equal(e.closed, false, 'an unfinished task must not be marked done');
+  assert.ok(!bd.calls.some((c) => c.sub === 'close'));
+  assert.equal(getLease(db, project.id, 'sp-1').state, 'released', 'retryable');
+  assert.equal(unclaimCalls(bd).length, 1, 'and returned to bd ready');
+});
+
+test('the agent’s closing words are left on the bead, so a retry is not a mystery', async () => {
+  const { bd, projects, project, runner } = markerSetup();
+  await projects.pollProject(project.id);
+  const finished = new Promise((r) => projects.events.once('finished', r));
+  runner.finish('run-1', 'ok', { said: 'Blocked: the API key is missing.' });
+  await finished;
+
+  const note = bd.calls.find((c) => c.sub === 'note');
+  assert.ok(note, 'an unexplained retry is worse than a slow one');
+  assert.equal(note.args[1], 'sp-1');
+  assert.match(note.args[2], /API key is missing/);
+});
+
+test('the marker must name THIS bead — a stray marker cannot close the wrong task', async () => {
+  const { bd, projects, project, runner } = markerSetup();
+  await projects.pollProject(project.id);
+  const finished = new Promise((r) => projects.events.once('finished', r));
+  runner.finish('run-1', 'ok', { said: `all done\n${completionMarker('sp-somebody-else')}` });
+  const e = await finished;
+
+  assert.equal(e.closed, false);
+  assert.ok(!bd.calls.some((c) => c.sub === 'close'));
+});
+
+test('a run that does signal completion closes the bead', async () => {
+  const { db, bd, projects, project, runner } = markerSetup();
+  await projects.pollProject(project.id);
+  const finished = new Promise((r) => projects.events.once('finished', r));
+  runner.finish('run-1', 'ok', { said: `wrote the file.\n${completionMarker('sp-1')}` });
+  const e = await finished;
+
+  assert.equal(e.closed, true);
+  assert.ok(bd.calls.some((c) => c.sub === 'close'));
+  assert.equal(getLease(db, project.id, 'sp-1').state, 'done');
+  assert.equal(unclaimCalls(bd).length, 0, 'a closed bead is not handed back');
+});
+
+test('the prompt tells the agent the marker and what a missing one costs', () => {
+  const text = beadPrompt({ name: 'repo' }, { id: 'sp-1', title: 't' }, { autoLabel: 'unattended' });
+  assert.ok(text.includes(completionMarker('sp-1')), 'asking for a signal nobody was told about is a trap');
+  assert.match(text, /retry|returned to the backlog/i);
+  assert.match(text, /do NOT close the bead/i);
+});
+
+// --- permMode (the reason the live run could not write anything) ---------
+
+test('permMode is declared by the repo, defaults to the fail-closed value', () => {
+  assert.equal(parseProjectConfig({ autoLabel: 'x' }).config.defaults.permMode, 'default',
+    'silence must not grant unattended write access');
+  assert.equal(parseProjectConfig({ autoLabel: 'x', defaults: { permMode: 'auto' } }).config.defaults.permMode, 'auto');
+  assert.equal(parseProjectConfig({ autoLabel: 'x', defaults: { permMode: 'acceptEdits' } }).config.defaults.permMode, 'acceptEdits');
+});
+
+test('an unrecognised permMode is an error, not a silent downgrade', () => {
+  const r = parseProjectConfig({ autoLabel: 'x', defaults: { permMode: 'yolo' } });
+  assert.equal(r.ok, false);
+  assert.match(r.errors.join(' '), /permMode/);
+  // It still resolves to the safe value, so a typo cannot widen permissions.
+  assert.equal(r.config.defaults.permMode, 'default');
+});
+
+test('the materialised job carries permMode — a field default would never apply', async () => {
+  const { projects, project, runner } = setup({
+    config: { ...CONFIG, defaults: { ...CONFIG.defaults, permMode: 'auto' } },
+    bdHandlers: {
+      ready: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', labels: ['unattended'] })]) },
+      show: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', labels: ['unattended'] })]) },
+      update: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1' })]) },
+    },
+  });
+  await projects.pollProject(project.id);
+
+  // materialise() calls createJob directly rather than going through validateJob,
+  // so the extension's own field default is never applied — which is exactly how
+  // every scheduled bead ended up unable to write a file.
+  assert.equal(runner.starts[0].job.params.permMode, 'auto');
+});
+
+// --- restart recovery ---------------------------------------------------
+// A daemon that dies mid-run (or is simply restarted — which happens constantly)
+// leaves a held lease AND a bead sitting `in_progress` from our claim. Releasing
+// the lease is the obvious half; without the un-claim, `bd ready` never offers
+// that bead again, so an ordinary restart silently strands exactly the work that
+// was in flight.
+
+test('a restart returns a bead that was mid-run to the backlog', async () => {
+  const { db, bd, projects, project } = setup({
+    bdHandlers: {
+      show: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', status: 'in_progress', assignee: 'claude-scheduler' })]) },
+    },
+  });
+  acquireLease(db, { projectId: project.id, beadId: 'sp-1' });
+
+  const out = await projects.recoverOrphans();
+
+  assert.deepEqual(out, [{ beadId: 'sp-1', handedBack: true }]);
+  assert.equal(unclaimCalls(bd).length, 1);
+});
+
+test('a restart does NOT take back a bead a human now holds', async () => {
+  const { db, bd, projects, project } = setup({
+    bdHandlers: {
+      // Our claim never landed and someone else took it since.
+      show: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', status: 'in_progress', assignee: 'a-human' })]) },
+    },
+  });
+  acquireLease(db, { projectId: project.id, beadId: 'sp-1' });
+
+  const out = await projects.recoverOrphans();
+
+  assert.equal(out[0].handedBack, false);
+  assert.match(out[0].reason, /a-human/);
+  assert.equal(unclaimCalls(bd).length, 0, 'taking a bead off a human is worse than leaving a stale one');
+});
+
+test('a restart leaves an already-closed bead alone', async () => {
+  const { db, bd, projects, project } = setup({
+    bdHandlers: { show: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', status: 'closed' })]) } },
+  });
+  acquireLease(db, { projectId: project.id, beadId: 'sp-1' });
+
+  const out = await projects.recoverOrphans();
+  assert.equal(out[0].handedBack, false);
+  assert.equal(unclaimCalls(bd).length, 0, 'the run finished before the daemon died — do not reopen it');
+});
+
+test('a bead that cannot be re-read on restart is reported, not guessed at', async () => {
+  const { db, projects, project } = setup({ bdHandlers: { show: { timeout: true } } });
+  acquireLease(db, { projectId: project.id, beadId: 'sp-1' });
+  const unresolved = [];
+  projects.events.on('orphan-unresolved', (e) => unresolved.push(e));
+
+  const out = await projects.recoverOrphans();
+
+  assert.equal(out[0].handedBack, false);
+  assert.equal(unresolved.length, 1, 'a bead we could not check may stay hidden — say so');
 });

@@ -140,7 +140,14 @@ declaration is reviewable in git and survives re-clones:
   "autoLabel": "unattended",   // ONLY beads with this label are eligible. Opt-in, never opt-out.
   "cwd": ".",
   "maxConcurrent": 1,
-  "defaults": { "timeoutMin": 30, "model": "default", "notify": "failure" },
+  "defaults": {
+    "timeoutMin": 30, "model": "default", "notify": "failure",
+    // How much a scheduled run may do here without being asked. Absent = "default"
+    // = prompts for permission = with no TTY, every edit is DENIED (§4a.7b).
+    // "acceptEdits" lets it edit its own worktree; "auto" is
+    // --dangerously-skip-permissions. An unrecognised value is an error.
+    "permMode": "acceptEdits"
+  },
   "budget": { "minHeadroomPct": 20 }   // per-job M2 override, same shape as jobs.params.budget
 }
 ```
@@ -424,6 +431,108 @@ visible history of that bead's runs. Reaping, if it is ever wanted, becomes a pr
 old rows rather than something on the hot path — and the burst planner's per-project median
 fallback is still available for a bead that has never run. Covered by a test asserting the job row
 is reused and the learned delta survives into the next run.
+
+## 4a.7b What live-driving changed — read this before trusting §4a.5's outcome contract
+
+Step 4 was built, then driven against a real `bd init`-ed repo. Five defects surfaced that the
+206-test engine suite did not, and two of them changed the milestone's contracts. Recorded here
+because each one is a *measured* correction to reasoning that looked sound above.
+
+### The outcome contract was incomplete: releasing a lease is not enough
+
+§4a.5 says a failed/stopped run "leaves the bead open for retry". It did not.
+
+`bd ready` **excludes `in_progress`** (§4a.6 item 2 notes this, and drew the wrong conclusion from
+it — "belt and braces"). Our `--claim` sets `in_progress`. So every path that gave up *after* a
+successful claim released our lease while leaving the bead **invisible to every future poll**:
+"retry later" meant "never", silently, with the bead looking claimed-by-the-scheduler to any human
+who looked.
+
+- **Fix:** `beads.release()` → `bd update <id> --status open --assignee ""`. Measured: one call
+  restores it to `bd ready`, rc 0. Called from every post-claim give-up path — guard skip, worktree
+  failure, runner decline, and any non-`ok` finish.
+- **The dangerous half:** this must *never* run against a claim we did not place. Un-claiming a bead
+  a human took seconds earlier would be actively harmful, so the caller tracks whether its own claim
+  landed (`claimed`) and the hand-back path is a **separate function** from `abandon` — the pre-claim
+  paths, above all "already claimed by <actor>", cannot reach it.
+- A failed un-claim is logged with the exact command to repair it. A stuck bead has no other symptom.
+
+### `ok` is not "done" — the CLI's success says nothing about the task
+
+The first real run **could not write a single file**: unattended `claude -p` defaults to asking for
+permission, and with no TTY the tool call is denied. It explained this in plain English, exited
+`subtype: success` / code 0 — and the scheduler closed the bead. An undone task was marked done in
+the user's own tracker.
+
+**Decided with the user (2026-07-25): completion must be asserted, not inferred.**
+
+- The prompt asks the agent to end its final message with `TASK-COMPLETE: <beadId>`, and states the
+  consequence of omitting it. The bead id is part of the marker so a marker echoed from elsewhere
+  cannot close the wrong task.
+- A run that exits `ok` **without** the marker is handed back, and the agent's own closing words are
+  attached to the bead with `bd note`. An unexplained retry is worse than a slow one.
+- Requires the run's final message to be readable after the fact: the claude formatter now persists
+  it as `meta.resultText`, keeping the **tail** (a closing statement, and any marker, is at the end).
+- Accepted cost: an agent that does the work but forgets the marker gets retried.
+
+### Scheduled beads could not edit anything, because `materialise` bypasses `validateJob`
+
+`materialise()` calls `createJob` directly, so the claude extension's `permMode` **field default was
+never applied** — every bead ran in "ask" mode. **Decided with the user:** a repo may declare
+`defaults.permMode` in its own committed `.scheduler.json`, up to and including `auto`
+(`--dangerously-skip-permissions`). Absence stays the fail-closed `default`, and an unrecognised
+value is an **error, not a silent downgrade** — a typo must not widen what unattended work may do.
+This keeps the decision where M4a puts every other one: declared in the repo, reviewable in git.
+
+### A `hold` pause did not stop bead pickup
+
+The poller launches runs **directly**, not through the scheduler, and M3's `gate()` deliberately
+admits everything under `hold` (in v1 the only things that could reach the runner were a manual
+click and an armed retry). A bead run is neither, so the button whose whole promise is "nothing
+fires automatically" left the most unattended work in the system running. The poller now consults
+`pause.blocksSchedule()` itself — **after** the `ready` read, because a pause stops launching, not
+looking, and the tab must still report an honest ready count.
+
+### The audit-line promise (§4a.6's decision (b)) was understated
+
+Measured per operation, from a committed-clean baseline:
+
+| Operation | Lines appended to `.beads/interactions.jsonl` |
+|---|---|
+| `bd ready` (poll) | **0** |
+| `bd update --claim` | **0** |
+| `bd close` (finished bead) | **1** |
+| hand-back (`--status open --assignee ""`) | **2** (one per changed field) |
+
+So item 1's "polling is git-silent" holds, but "one line per completed task" does not: a bead that
+is skipped or retried also writes. The tab says exactly this. Separately, `bd` reports some failures
+on **stdout** as a JSON envelope (`{error, message, hint}`), so the adapter was rendering
+`failed (exit 1): no stderr` while the real explanation went unread — errors now use bd's own
+`message` + `hint`.
+
+### Restart recovery — the same defect one level up
+
+`releaseOrphanLeases()` (the lease counterpart to `failOrphanRuns`) frees leases a dead daemon left
+behind. That is only half: the beads are still `in_progress` from our claim, so a crash *or an
+ordinary restart* mid-run hid precisely the work that was in flight.
+
+`projects.recoverOrphans()` now runs **before** the leases are released — while they still record
+which beads were ours — re-reads each bead, and hands it back **only if `BEADS_ACTOR` still holds
+it**. If our claim never landed and a human has since taken the bead, un-claiming would take it off
+them; leaving a stale claim is the lesser harm. A bead that cannot be re-read (busy database) is
+reported via an `orphan-unresolved` event rather than guessed at. It is deliberately not awaited
+before the HTTP listener starts, because it makes `bd` calls that can block.
+
+### Two smaller corrections
+
+- **`BEADS_ACTOR=claude-scheduler` on every call.** Without it bd falls back to the *repo's*
+  `git user.name`: scheduler claims appeared under the human's own name, which defeats the point of
+  the claim as a notice board and made our audit entries indistinguishable from theirs.
+- **"Contributing nothing" was still silent in two places.** A poll reporting `1 ready · started 0`
+  gave no reason (now a per-bead `skipped[]`, stopping after the first *guard* refusal so we don't
+  claim-and-hand-back every ready bead each cycle), and activating a repo `bd` cannot read left a row
+  looking healthy for up to a poll interval (`refreshHealth` now records `lastError` immediately,
+  without touching `state` — a probe is not a verdict).
 
 ## 4a.8 API & UI
 
