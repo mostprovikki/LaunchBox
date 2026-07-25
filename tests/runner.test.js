@@ -61,8 +61,19 @@ test('claude run: args, log, session meta, progress, ok status', async () => {
   assert.equal(done.exitCode, 0);
   assert.equal(done.meta.sessionId, 'sess-9');
   assert.equal(done.progress.activity, 'done');
-  const log = readFileSync(done.logPath, 'utf8');
-  assert.ok(log.includes('sess-9') && log.includes('done!'));
+  // The log is written through a write stream, and `stream.end()` only starts the
+  // flush — so a run can be recorded `ok` a few milliseconds before its last lines
+  // reach disk. Reading immediately was a real flake (failing ~2 runs in 3 under
+  // load, passing in isolation), and it was the test's assumption that was wrong,
+  // not the runner: see the note in settle() for why the status deliberately does
+  // not wait for the flush.
+  let log = '';
+  for (let i = 0; i < 50 && !(log.includes('sess-9') && log.includes('done!')); i++) {
+    log = readFileSync(done.logPath, 'utf8');
+    if (log.includes('sess-9') && log.includes('done!')) break;
+    await sleep(10);
+  }
+  assert.ok(log.includes('sess-9') && log.includes('done!'), `log never completed: ${JSON.stringify(log.slice(0, 200))}`);
   assert.deepEqual(notifications, ['test job: ok']);
 });
 
