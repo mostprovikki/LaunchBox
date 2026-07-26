@@ -195,6 +195,16 @@ there is a body** (`seed.mjs:25`), so that one needs fixing with the change.
 
 New **Sessions** tab (4-edit pattern; extract `public/util.js` first if M1 hasn't). Worth keeping from upstream, as *logic* not markup: `activeMs` vs `spanMs` side by side; model label only on change (`:1474-1478`); tool rows collapsed by default and auto-expanded on a search hit (`:1366`); running sessions floated to top as a second sort pass (`:1631`); a precomputed lowercased search haystack (`:1124-1127`); `relTime` bucketing and `fmtTok` (`4187 → 4.2k`); auto-collapse prompts over 700 chars; arm-then-confirm inline delete. Rebuild the CSS, icons, tooltips and markdown rendering against the existing design tokens rather than porting 420 lines of upstream CSS.
 
+> **Superseded 2026-07-27 — see `docs/specs/2026-07-27-sessions-tab-visual-design.md`.**
+> The last sentence above, and §5.3 deviation 6's "skip entirely: the embedded
+> HTML/CSS/JS template", are **reversed for the Sessions tab**. Using the upstream
+> dashboard live rather than reading it changed the call: its visual language is
+> better than ours and is adopted, not merely referenced — semantic token layering,
+> the chip grid, labelled actions, sentence tooltips, inline arm-then-confirm.
+> Scoped to the Sessions tab only; the other four tabs are untouched.
+> The behavioural list earlier in this paragraph all still stands.
+> The transcript viewer — undesigned here — is specified in that document.
+
 ## 5.8 Tests
 
 Fixture-driven, using synthetic `.jsonl` files in a tmpdir `root` (never the real `~/.claude`):

@@ -26,8 +26,12 @@ Two things are derived from it:
   It is deliberately **not** the official Anthropic logo asset. "Claude", "Claude Code" and
   "Anthropic" are trademarks of Anthropic PBC; this mark is used to identify Claude Code as
   the thing a job runs, which is nominative use, and no endorsement is implied.
-- **Session discovery and JSONL parsing** in `lib/sessions.js` (planned, M5) — see the header
+- **Session discovery and JSONL parsing** in `lib/sessions.js` — see the header
   comment in that file for the specific logic ported and the deliberate deviations from it.
+- **Visual language of the Sessions tab** — the semantic CSS-variable layering, the chip
+  grid, the `data-tip` tooltip component and the inline arm-then-confirm delete are adapted
+  from the upstream dashboard's UI. See `docs/specs/2026-07-27-sessions-tab-visual-design.md`
+  for what was adopted and what was deliberately fixed rather than copied.
 
 MIT permits commercial use, modification and sublicensing; the sole obligation is carrying the
 notice above, which this file and `LICENSES/` discharge. Nothing here requires this project to
