@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { ensureDirs, dbPath, dataDir } from './lib/paths.js';
 import { ensureToken, tokenMatches } from './lib/token.js';
+import { createApproval, APPROVAL_CODES } from './lib/approval.js';
 import {
   openDb, createJob, listJobs, getJob, updateJob, deleteJob,
   insertRun, getRun, listRuns, lastRun, failOrphanRuns,
@@ -54,10 +55,43 @@ const AUDIT_NOTE = 'Expect .beads/interactions.jsonl to show up as modified. bd 
   + 'on your behalf. If you would rather not version the audit trail at all, that is your repo\'s call: '
   + 'git rm --cached .beads/interactions.jsonl, then ignore it.';
 
+// The dialog sentence for a job. Names the job in typographic quotes and says
+// plainly what a job IS — arbitrary commands on this machine — because that is
+// what is being granted, and a user who reads only this line should still
+// understand it. `permMode: auto` is called out separately because it widens
+// what unattended work may do to their files.
+function jobApprovalSentence(verb, job) {
+  const bits = [`${verb} the scheduled job “${job.name}”`];
+  bits.push(job.type === 'claude'
+    ? 'which can run Claude with access to this Mac'
+    : 'which can run commands on this Mac');
+  if (job.params?.permMode === 'auto') bits.push('accepting file edits without asking');
+  return bits.join(', ');
+}
+
+// True when the ONLY effect of an update is turning the job off. Compared field
+// by field against the stored row rather than trusting the request shape,
+// because the jobs-list toggle submits the whole object.
+function isOnlyDisabling(before, after) {
+  if (before.enabled !== true || after.enabled !== false) return false;
+  const norm = (j) => JSON.stringify({ ...j, enabled: null, updatedAt: null, createdAt: null });
+  return norm(before) === norm(after);
+}
+
 // A human may activate or pause. `pending` belongs to discovery and `error` to the
 // poller, so neither is settable here — accepting them would let a client
 // hand-wave a project into a state the daemon uses to mean something specific.
 const PROJECT_SETTABLE_STATES = ['active', 'paused'];
+
+// One sentence per refusal. Deliberately says "nothing was saved" for the two
+// recoverable cases: the frontend keeps the form filled and the user will press
+// Submit again, so the copy has to make that the obvious next move.
+const APPROVAL_ERROR = {
+  approval_denied: 'you denied that approval, so nothing was saved',
+  approval_timeout: 'the approval request timed out, so nothing was saved',
+  approval_unavailable: 'the approval helper is unavailable, so this was refused rather than allowed',
+  approval_busy: 'another approval is already waiting — finish that one first',
+};
 
 // How long a *failed* `bd --version` is remembered. Success is cached inside the
 // adapter for the daemon's life; this exists so a missing binary doesn't mean a
@@ -111,6 +145,10 @@ export function createApp({
   // Injectable so a test can pin a known value; otherwise read from (or created
   // in) the data directory.
   token = null,
+  // Layer 2. null means the presence layer is not wired at all (a standalone app
+  // or an embedding), which is distinct from the helper being missing on an
+  // install that expects one — that case fails closed inside lib/approval.js.
+  approval = null,
 }) {
   const app = express();
 
@@ -165,6 +203,9 @@ export function createApp({
   app.use('/api', (req, res, next) => {
     const header = String(req.headers.authorization || '');
     const provided = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+    // Stashed for the approval layer: the grace window is keyed to the caller's
+    // token so a second client cannot ride an approval this one earned.
+    req.csToken = provided;
     if (!tokenMatches(expectedToken, provided)) {
       // A distinct machine-readable code, not just prose: the frontend must
       // raise a persistent banner for this and never confuse it with an
@@ -179,6 +220,48 @@ export function createApp({
 
   app.use(express.json({ limit: '1mb' }));
   app.use(express.static(join(ROOT, 'public')));
+
+  // ---------------- Layer 2: human presence on high-power actions
+  //
+  // Each refusal has its own status AND its own machine-readable code, because
+  // the frontend must respond differently: a denial or timeout is recoverable by
+  // pressing Submit again (and must leave the form filled), while an unavailable
+  // helper needs a reinstall.
+  const APPROVAL_STATUS = {
+    approval_denied: 403,
+    approval_timeout: 408,
+    approval_unavailable: 503,
+    approval_busy: 409,
+  };
+
+  /**
+   * Ask for approval. Returns true to proceed.
+   *
+   * ⚠️ **Call this before performing any write.** A refusal must leave zero
+   * partial state — the user's form is still filled and they will press Submit
+   * again, and M4a already shipped a settings PUT that persisted one key before a
+   * later check could reject the save.
+   *
+   * `detail` is handed to the OS untouched and is prepended with
+   * "LaunchBox is trying to ", so it must read as the rest of that sentence and
+   * name the specific thing being approved.
+   */
+  async function approve(req, res, { action, detail, grace = false }) {
+    // Not wired (a standalone app, or an embedding) means the layer is absent,
+    // exactly like the other optional deps. The *installed* fail-closed case is
+    // the helper being missing, which lib/approval.js reports as unavailable.
+    if (!approval) return true;
+    let out;
+    try {
+      out = await approval.request({ action, detail, grace, token: req.csToken });
+    } catch (err) {
+      out = { ok: false, code: 'approval_unavailable', message: err?.message ?? String(err) };
+    }
+    if (out?.ok) return true;
+    const code = APPROVAL_CODES.includes(out?.code) ? out.code : 'approval_unavailable';
+    res.status(APPROVAL_STATUS[code]).json({ error: APPROVAL_ERROR[code], code });
+    return false;
+  }
 
   // main() passes the same policy the runner admits against; a standalone app
   // (tests, embedding) gets an equivalent one so the settings routes still read
@@ -215,9 +298,16 @@ export function createApp({
     });
   });
 
-  app.post('/api/jobs', (req, res) => {
+  app.post('/api/jobs', async (req, res) => {
     const v = validateJob(req.body, extensions, { windows: windows() });
     if (!v.ok) return res.status(400).json({ errors: v.errors });
+    // Validation first so an invalid payload is rejected without troubling the
+    // user for a fingerprint, then approval, then the write.
+    if (!await approve(req, res, {
+      action: 'job.create',
+      detail: jobApprovalSentence('create', v.job),
+      grace: true,
+    })) return;
     const job = createJob(db, v.job);
     scheduler.reload(job.id);
     awake?.refresh();
@@ -230,13 +320,22 @@ export function createApp({
     res.json(decorate(job));
   });
 
-  app.put('/api/jobs/:id', (req, res) => {
+  app.put('/api/jobs/:id', async (req, res) => {
     const existing = getJob(db, req.params.id);
     if (!existing) return res.status(404).json({ error: 'not found' });
     const merged = { ...existing, ...req.body, params: { ...existing.params, ...(req.body?.params ?? {}) } };
     // Toggling enabled on an existing once-job whose time passed: allow disable, block enable.
     const v = validateJob(merged, extensions, { windows: windows() });
     if (!v.ok && !(req.body.enabled === false)) return res.status(400).json({ errors: v.errors });
+    // Turning a job OFF strictly reduces what this machine will do, so it is not
+    // gated — prompting to disable something would be theatre, and the jobs list
+    // toggle is a single click.
+    if (!isOnlyDisabling(existing, v.ok ? v.job : { ...existing, enabled: false })
+      && !await approve(req, res, {
+        action: 'job.edit',
+        detail: jobApprovalSentence('change', v.ok ? v.job : existing),
+        grace: true,
+      })) return;
     const job = updateJob(db, req.params.id, v.ok ? v.job : { enabled: false });
     scheduler.reload(job.id);
     awake?.refresh();
@@ -648,6 +747,17 @@ export function createApp({
           + 'and "error" by the poller',
       });
     }
+    // Activation is the airlock: it is what allows unattended agent runs with
+    // write access in that repository. Never granted a grace window.
+    //
+    // Ordered AFTER validation deliberately: a malformed request must be refused
+    // without making the user authenticate something that was never going to
+    // happen. Same rule as POST /api/jobs.
+    if (state === 'active' && !await approve(req, res, {
+      action: 'project.activate',
+      detail: `activate the project “${project.name}” so it can run agents unattended in ${project.path}`,
+      grace: false,
+    })) return;
     // Probe before flipping the state so the response can say what activating
     // just signed up for, including a beads dir that doesn't resolve.
     let health = null;
@@ -852,7 +962,22 @@ export function createApp({
     });
   });
 
-  app.put('/api/settings', (req, res) => {
+  app.put('/api/settings', async (req, res) => {
+    // The bypass the spec calls out: these two name executables, so repointing
+    // one makes every existing job run an attacker's binary — no job created, no
+    // other gate touched. Checked before any key is written, so a refusal cannot
+    // leave the config half-applied.
+    for (const [key, label] of [['claudePath', 'Claude'], ['bdPath', 'bd']]) {
+      const next = req.body?.[key];
+      if (typeof next !== 'string' || !next.trim()) continue;
+      const current = getSetting(db, key, key === 'claudePath' ? 'claude' : 'bd');
+      if (next.trim() === current) continue;
+      if (!await approve(req, res, {
+        action: 'settings.executable',
+        detail: `change which ${label} program your scheduled work runs, from \u201c${current}\u201d to \u201c${next.trim()}\u201d`,
+        grace: false,
+      })) return;
+    }
     const b = req.body || {};
     // Usage keys are core, not per-extension: M2's guard and M4's planner read
     // the same numbers, so they can't belong to any one job type.
@@ -998,7 +1123,14 @@ export function createApp({
     res.json({ ok: true });
   });
 
-  app.post('/api/cleanup', (req, res) => {
+  app.post('/api/cleanup', async (req, res) => {
+    // No grace: a grace window is an attack window, and this is the action where
+    // riding one would cost the most.
+    if (!await approve(req, res, {
+      action: 'cleanup',
+      detail: 'delete every scheduled job, run history entry and log file this scheduler has stored',
+      grace: false,
+    })) return;
     runner.killAll();
     scheduler.stop();
     pause?.stop();
@@ -1010,7 +1142,12 @@ export function createApp({
     res.json({ ok: true });
   });
 
-  app.post('/api/uninstall', (req, res) => {
+  app.post('/api/uninstall', async (req, res) => {
+    if (!await approve(req, res, {
+      action: 'uninstall',
+      detail: 'remove the claude-scheduler background service from this Mac',
+      grace: false,
+    })) return;
     res.status(202).json({ ok: true, message: 'uninstalling — daemon will exit' });
     awake?.stop();
     pause?.stop();
@@ -1123,7 +1260,17 @@ export async function main() {
   const resumed = burst.resume();
   if (resumed) console.log(`burst: resuming — ${resumed.slots.length} attempt(s) left of ${resumed.budgetPct}% of ${resumed.window}`);
 
-  const app = createApp({ db, runner, scheduler, extensions, awake, usage, budget, pause, projects, beads, burst });
+  // The helper is compiled into the data dir by install.sh. Absent means gated
+  // actions are refused, never allowed — except on a platform with no
+  // authenticator at all, which lib/approval.js reports as degraded.
+  const approval = createApproval({ helperPath: join(dataDir(), 'bin', 'LaunchBox') });
+  const av = approval.available();
+  if (av.degraded) console.warn(`approval: ${av.reason} — high-power actions are NOT gated on this platform`);
+  else if (!av.ok) console.warn(`approval: ${av.reason} — high-power actions will be REFUSED until install.sh is re-run`);
+  approval.events.on('asked', (e) => console.log(`approval: asked for ${e.action}`));
+  approval.events.on('result', (e) => console.log(`approval: ${e.action} → ${e.ok ? 'approved' : e.code}`));
+
+  const app = createApp({ db, runner, scheduler, extensions, awake, usage, budget, pause, projects, beads, burst, approval });
   const port = Number(process.env.CS_PORT) || 9099;
   const server = app.listen(port, '127.0.0.1', () => {
     // Publish the port we actually bound, so `claude-scheduler open` builds a

@@ -10,6 +10,7 @@ import { readFileSync, mkdtempSync, writeFileSync } from 'node:fs';
 import {
   openDb, listRuns, getSetting, setSetting, recordRunUsage,
   createProject, getProject, acquireLease, listJobsByProject, createJob, getJob, findJobByBead,
+  listJobs, listProjects,
 } from '../lib/db.js';
 import { createBeads } from '../lib/beads.js';
 import { createProjects } from '../lib/projects.js';
@@ -1502,4 +1503,177 @@ test('a wrong, absent or malformed token is refused; the right one works', async
   // tokenMatches throw inside timingSafeEqual and answer 500 instead of 401.
   assert.equal((await get({ Authorization: `Bearer ${'\u00e9'.repeat(64)}` })).status, 401, 'multibyte');
   assert.equal((await get({ Authorization: `Bearer ${token}` })).status, 200, 'the real key works');
+});
+
+// ---------------- the approval gate (Layer 2)
+//
+// A fakeApprover throughout: no test may spawn the real helper or raise a system
+// dialog. The user asked that every prompt be batched into one deliberate
+// session, and a test suite that prompts is also a test suite nobody can run.
+function fakeApprover({ answer = { ok: true } } = {}) {
+  const asked = [];
+  return {
+    asked,
+    available: () => ({ ok: true, degraded: false, platform: 'darwin' }),
+    request: async (spec) => { asked.push(spec); return typeof answer === 'function' ? answer(spec) : answer; },
+    events: new EventEmitter(),
+  };
+}
+
+async function bootGated(answer) {
+  const dir = tmpData();
+  ensureDirs();
+  const db = openDb(join(dir, 'test.db'));
+  const spawnFn = fakeSpawn();
+  const approval = fakeApprover({ answer });
+  let pause = null;
+  const runner = createRunner({
+    db, extensions, spawnFn, notifyFn: () => {}, admit: (j, t, o) => pause?.gate(j, t, o) ?? null,
+  });
+  pause = createPauseController({ db, runner });
+  const scheduler = createScheduler({ db, runner, pause });
+  currentToken = ensureToken();
+  // Minimal projects/beads stubs: the activation route is behind needProjects,
+  // so without them it answers 501 and never reaches the gate under test.
+  const projects = {
+    refreshHealth: async () => ({ ok: true, busy: false }),
+    explain: () => [],
+    warningsFor: () => [],
+    busyStreakFor: () => 0,
+    readyFor: () => ({ count: null, at: null }),
+    start: () => {}, stop: () => {},
+  };
+  const app = createApp({
+    db, runner, scheduler, extensions, awake: null, pause, approval, token: currentToken,
+    projects, beads: { version: async () => ({ version: '1.1.0' }), resetVersion: () => {} },
+    uninstallFn: () => {},
+  });
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((r) => server.once('listening', r));
+  return { db, server, approval, base: () => `http://127.0.0.1:${server.address().port}` };
+}
+
+test('creating a job is gated, and a denial writes nothing', async (t) => {
+  const { server, base, approval, db } = await bootGated({ ok: false, code: 'approval_denied' });
+  t.after(() => server.close());
+
+  const r = await req(base(), 'POST', '/api/jobs', jobPayload({ name: 'denied job' }));
+  assert.equal(r.status, 403);
+  assert.equal(r.body.code, 'approval_denied');
+  // The state-preservation contract's server half: the gate runs BEFORE any
+  // write, so a refusal leaves nothing behind for the user to clean up.
+  assert.equal(listJobs(db).length, 0, 'nothing was written');
+  assert.equal(approval.asked.length, 1);
+  // The dialog sentence must name the job, and must read as a completion of
+  // "LaunchBox is trying to …".
+  assert.match(approval.asked[0].detail, /denied job/);
+  assert.equal(approval.asked[0].action, 'job.create');
+});
+
+test('a timeout is distinct from a denial, and also writes nothing', async (t) => {
+  const { server, base, db } = await bootGated({ ok: false, code: 'approval_timeout' });
+  t.after(() => server.close());
+
+  const r = await req(base(), 'POST', '/api/jobs', jobPayload());
+  assert.equal(r.status, 408);
+  assert.equal(r.body.code, 'approval_timeout');
+  assert.equal(listJobs(db).length, 0);
+});
+
+test('an unavailable helper refuses rather than allowing', async (t) => {
+  const { server, base, db } = await bootGated({ ok: false, code: 'approval_unavailable' });
+  t.after(() => server.close());
+
+  const r = await req(base(), 'POST', '/api/jobs', jobPayload());
+  assert.equal(r.status, 503);
+  assert.equal(r.body.code, 'approval_unavailable');
+  assert.equal(listJobs(db).length, 0, 'a missing authenticator never means yes');
+});
+
+test('approved: the job is created and the gate was asked exactly once', async (t) => {
+  const { server, base, approval, db } = await bootGated({ ok: true });
+  t.after(() => server.close());
+
+  const r = await req(base(), 'POST', '/api/jobs', jobPayload({ name: 'allowed' }));
+  assert.equal(r.status, 201);
+  assert.equal(listJobs(db).length, 1);
+  assert.equal(approval.asked.length, 1);
+});
+
+test('every high-power action is gated, including the settings that name a binary', async (t) => {
+  const { server, base, approval, db } = await bootGated({ ok: true });
+  t.after(() => server.close());
+
+  const { body: job } = await req(base(), 'POST', '/api/jobs', jobPayload({ name: 'j' }));
+  createProject(db, { name: 'repo', path: '/repo', state: 'pending', config: PROJECT_CONFIG });
+  const proj = listProjects(db)[0];
+  approval.asked.length = 0;
+
+  const cases = [
+    ['job.edit', () => req(base(), 'PUT', `/api/jobs/${job.id}`, { ...jobPayload({ name: 'j2' }) })],
+    ['project.activate', () => req(base(), 'PUT', `/api/projects/${proj.id}`, { state: 'active' })],
+    // claudePath is the bypass: repoint it and every existing claude job runs an
+    // attacker's binary, with no job ever created and so no other gate touched.
+    ['settings.executable', () => req(base(), 'PUT', '/api/settings', { claudePath: '/tmp/evil' })],
+    ['settings.executable', () => req(base(), 'PUT', '/api/settings', { bdPath: '/tmp/evil-bd' })],
+    ['cleanup', () => req(base(), 'POST', '/api/cleanup')],
+    ['uninstall', () => req(base(), 'POST', '/api/uninstall')],
+  ];
+  for (const [action, call] of cases) {
+    approval.asked.length = 0;
+    const r = await call();
+    assert.ok(r.status < 400, `${action} should succeed when approved (got ${r.status})`);
+    assert.equal(approval.asked.length, 1, `${action} must ask for approval`);
+    assert.equal(approval.asked[0].action, action);
+  }
+});
+
+test('the deliberately ungated actions are not gated', async (t) => {
+  const { server, base, approval, db } = await bootGated({ ok: true });
+  t.after(() => server.close());
+
+  const { body: job } = await req(base(), 'POST', '/api/jobs', jobPayload());
+  createProject(db, { name: 'repo', path: '/repo', state: 'pending', config: PROJECT_CONFIG });
+  approval.asked.length = 0;
+
+  // A manual run executes work the user already approved when creating the job.
+  // Gating it would prompt on the most common action in the app and train
+  // reflexive approval, which is worse than the risk it would remove.
+  await req(base(), 'POST', `/api/jobs/${job.id}/run`);
+  // Disabling strictly reduces what the machine will do.
+  await req(base(), 'PUT', `/api/jobs/${job.id}`, { ...jobPayload(), enabled: false });
+  // Ordinary settings tune thresholds; none names an executable.
+  await req(base(), 'PUT', '/api/settings', { usagePollSec: 300 });
+  await req(base(), 'PUT', '/api/pause', { mode: 'hold' });
+
+  const gated = approval.asked.filter((a) => a.action !== 'job.edit');
+  assert.deepEqual(gated, [], `unexpected prompts: ${JSON.stringify(gated)}`);
+});
+
+test('grace is offered for job edits and never for the destructive actions', async (t) => {
+  const { server, base, approval, db } = await bootGated({ ok: true });
+  t.after(() => server.close());
+
+  const { body: job } = await req(base(), 'POST', '/api/jobs', jobPayload());
+  assert.equal(approval.asked[0].grace, true, 'creating a job may ride the window');
+
+  approval.asked.length = 0;
+  await req(base(), 'PUT', `/api/jobs/${job.id}`, jobPayload({ name: 'edited' }));
+  assert.equal(approval.asked[0].grace, true, 'editing too');
+
+  // A grace window IS an attack window, so the actions where riding one would be
+  // worst must never offer it. This is the whole reason grace is per-request.
+  for (const [label, call] of [
+    ['cleanup', () => req(base(), 'POST', '/api/cleanup')],
+    ['uninstall', () => req(base(), 'POST', '/api/uninstall')],
+  ]) {
+    approval.asked.length = 0;
+    await call();
+    assert.equal(approval.asked[0].grace, false, `${label} must never ride the grace window`);
+  }
+
+  createProject(db, { name: 'r2', path: '/r2', state: 'pending', config: PROJECT_CONFIG });
+  approval.asked.length = 0;
+  await req(base(), 'PUT', `/api/projects/${listProjects(db).at(-1).id}`, { state: 'active' });
+  assert.equal(approval.asked[0].grace, false, 'activation must never ride the grace window');
 });
