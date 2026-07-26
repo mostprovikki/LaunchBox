@@ -414,18 +414,16 @@ Two process notes worth keeping, because both are patterns rather than incidents
   by me while fixing something else, and caught by reading the result instead of
   trusting the patch.
 
-### Known and NOT fixed, with the reasoning
-
-Everything else the review found has since been fixed (see the git log for
-`d8b44da`, `c04bf9f`, `5a9bbec`, `0b62e69`). What is left is what cannot be closed from
-inside this design:
+### Known and NOT fixed — one item, and it is irreducible
 
 | Finding | Why it is left | Severity |
 |---|---|---|
-| **Substituting the helper binary defeats the layer.** `available()` is `existsSync` and nothing more; `swiftc` gives an attacker's own binary a valid adhoc signature, so the "exit 137 detects tampering" property catches *patching* a signed binary, not *replacing* it | Requires same-user code, which this spec deprioritises for the reason given in the threat model. **Honest correction to an earlier claim in this document:** "no local process can satisfy its dialog" is true of the **dialog** and false of the **gate**, which trusts an exit code from a path it never authenticates. Pinning a hash raises the bar but does not close it — the pin lives in the same trust domain as the binary | Real, accepted |
-| **`approval: null` in `createApp` means "unenforced"** | `main()` always passes one, but "omitted → open" and "helper missing → closed" are one typo apart and only the second is announced at boot. An explicit `'unenforced'` sentinel would make omission a startup error; deferred because it changes the constructor contract every test harness uses | Hardening |
-| **The `Origin` port is not pinned** | Any loopback *port* is accepted as an origin, so another local app's page is not distinguished from ours. Left because the `Host` check is what actually stops rebinding and is strict, and pinning the port needs the listening port plumbed into `createApp`, which only learns it at `listen()` time | Cosmetic |
-| **An extension could flip `process.platform` before `createApproval` snapshots it**, reaching the documented fail-**open** `degraded` path | Extensions are unsigned local `.js` files loaded in-process, so this is the same attacker class as substituting the helper — and strictly easier. Not separately closable while extensions are trusted code | Real, same class as the above |
+| **Same-user code that can overwrite both the helper binary *and* its checksum pin can still defeat the gate.** | The binary is now checksummed at install and verified before every spawn, and the pin lives in the same trust domain as the binary — so this raises the bar without closing the hole. What it buys is real: tampering is **loud** (refused, with the mismatch named in the log), it takes two coordinated writes instead of one silent one, and a partial attempt fails closed. Closing it properly needs a root of trust outside the user's own account, which this design does not have and cannot manufacture | Real, accepted |
+
+**Honest correction, kept rather than buried.** An earlier revision of this document
+claimed "no local process — including this one — can satisfy its dialog". That is true
+of the **dialog** and was false of the **gate**, which trusted an exit code from a path
+it never authenticated. The pin narrows the gap; it does not make the sentence true.
 
 ### Fixed after the review (second pass)
 
@@ -437,3 +435,21 @@ inside this design:
 | `Bearer` case-sensitive | Case-insensitive per RFC 7235 (it failed closed, but the 401 copy misdirected third-party callers) |
 | `express.static` follows symlinks out of `public/` | The daemon refuses to start if `public/` contains one, verified by planting a link to `/etc/passwd` |
 | **An agent could grant itself `permMode: auto`** by editing the `.scheduler.json` that governs it | `pinPermMode` refuses a *widening* for an active project and reports it; narrowing is always allowed, and a `pending` project adopts freely since activation is what freezes the ceiling |
+
+### Third pass — the last three closable items
+
+| Finding | Fix |
+|---|---|
+| Substituting the helper granted silent approval forever (`available()` was `existsSync` and nothing more; `swiftc` signs a replacement just as validly) | SHA-256 recorded at install, verified **before every spawn** and not merely at boot. Verified by doing it: an always-approve replacement gets `approval_unavailable`, no job is created, and the log names the mismatch. `install.sh` also drops the binary to `0500` and `bin/` to `0700` |
+| An unsigned extension could flip `process.platform` and reach the fail-**open** degraded path | `process.platform` is snapshotted at **module load**, which happens before `main()` loads any extension |
+| Any loopback **port** was accepted as an `Origin` | Pinned to the listening port when known. `http://127.0.0.1:3000` is a different origin and has no business here |
+
+⚠️ **Caught by running it, not by reading the patch:** threading `originPort` into
+`createApp` put the use one line *above* the `const port` declaration — a TDZ
+`ReferenceError` that stopped the daemon booting at all.
+
+**And a mutation check that lied.** Disabling the pin appeared to leave the tests green;
+in fact the mutation had also rewritten the function *definition*, so the file simply
+failed to parse and the "0 failures" was the file not loading. Re-run against only the
+call sites, both pin tests fail as they should. A mutation check is only evidence if the
+mutated program still runs.
