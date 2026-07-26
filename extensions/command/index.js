@@ -3,7 +3,9 @@
 export default {
   id: 'command',
   name: 'Shell command',
-  icon: '＄',
+  iconName: 'terminal',
+  icon: '＄', // fallback for any renderer that doesn't know the SVG set
+
   description: 'Run a shell command on a schedule (zsh login shell).',
   fields: [
     { key: 'command', label: 'Command', type: 'textarea', rows: 2, required: true, placeholder: 'e.g. git -C ~/repo pull' },

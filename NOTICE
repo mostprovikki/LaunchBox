@@ -1,0 +1,34 @@
+# Third-party notices
+
+## Lucide — ISC
+
+The `terminal` icon in `public/icons.js` is Lucide's `square-terminal`, path data copied
+verbatim.
+
+  https://lucide.dev · Licence: `LICENSES/lucide-ISC.txt`
+
+Lucide is **ISC**. Noted because the copy of `claude-sessions-dashboard` referenced below
+labels its own Lucide-derived icons "MIT" in two inline comments while its README credits
+"Lucide (ISC)" — ISC is the correct one, and this project states it once, here.
+
+## claude-sessions-dashboard — MIT © 2026 wannabemrrobot
+
+  https://github.com/wannabemrrobot/claude-sessions-dashboard
+  Licence: `LICENSES/claude-sessions-dashboard-MIT.txt`
+
+Copied locally 2026-07-24. The local copy carries no `.git`, so no upstream commit can be
+pinned — the copy date is the provenance.
+
+Two things are derived from it:
+
+- **The `claude` sunburst icon** in `public/icons.js` — a 12-ray stroke mark the upstream
+  author marks as bespoke (`claude-sessions:984`) and describes as echoing Claude's own mark.
+  It is deliberately **not** the official Anthropic logo asset. "Claude", "Claude Code" and
+  "Anthropic" are trademarks of Anthropic PBC; this mark is used to identify Claude Code as
+  the thing a job runs, which is nominative use, and no endorsement is implied.
+- **Session discovery and JSONL parsing** in `lib/sessions.js` (planned, M5) — see the header
+  comment in that file for the specific logic ported and the deliberate deviations from it.
+
+MIT permits commercial use, modification and sublicensing; the sole obligation is carrying the
+notice above, which this file and `LICENSES/` discharge. Nothing here requires this project to
+be open-sourced.

@@ -1,6 +1,7 @@
 import { renderFields, collectFields } from './fields.js';
 import { $, $$, api, apiErr, esc, toast, relTime, fullTime, duration } from './util.js';
 import { renderUsage } from './usage.js';
+import { iconFor } from './icons.js';
 import { refreshProjects } from './projects.js';
 
 let exts = []; // extension manifests from /api/extensions
@@ -98,7 +99,7 @@ function renderJobs() {
     el.className = 'item' + (j.enabled ? '' : ' disabled');
     el.innerHTML = `
       <div class="grow">
-        <div class="title"><span class="type-ico" title="${esc(extById(j.type)?.name ?? j.type)}">${esc(extById(j.type)?.icon ?? '⚙')}</span>${esc(j.name)}</div>
+        <div class="title"><span class="type-ico" title="${esc(extById(j.type)?.name ?? j.type)}">${iconFor(extById(j.type))}</span>${esc(j.name)}</div>
         <div class="sub">
           <span>${esc(scheduleText(j.schedule))}</span>
           <span title="${esc(fullTime(j.nextFire))}">${j.nextFire ? 'next ' + relTime(j.nextFire) : j.enabled ? '' : 'disabled'}</span>
@@ -415,7 +416,7 @@ function setJobType(v, params = {}) {
 
 function buildTypeSeg() {
   $('#f-type').innerHTML = exts
-    .map((e) => `<button type="button" data-value="${esc(e.id)}">${esc(e.icon)} ${esc(e.name)}</button>`)
+    .map((e) => `<button type="button" data-value="${esc(e.id)}">${iconFor(e, { size: 14 })} ${esc(e.name)}</button>`)
     .join('');
   $$('#f-type button').forEach((b) => b.addEventListener('click', () => setJobType(b.dataset.value, collectParams())));
 }
@@ -748,7 +749,7 @@ function renderExtSettings(values) {
     if (!e.settings.length) continue;
     const fs = document.createElement('fieldset');
     fs.dataset.ext = e.id;
-    fs.innerHTML = `<legend>${esc(e.icon)} ${esc(e.name)}</legend>`;
+    fs.innerHTML = `<legend>${iconFor(e, { size: 13 })} ${esc(e.name)}</legend>`;
     const box = document.createElement('div');
     fs.appendChild(box);
     renderFields(box, e.settings, values?.[e.id] ?? {});
@@ -781,6 +782,7 @@ async function loadSettings() {
     $('#s-usageShow').value = s.usageShow;
     $('#s-usagePollSec').value = s.usagePollSec;
     $('#s-usageWarnPct').value = s.usageWarnPct;
+    $('#s-usageCritPct').value = s.usageCritPct;
     $('#s-budgetGuard').checked = !!s.budgetGuard;
     $('#s-reserveFiveHourPct').value = s.reserveFiveHourPct;
     $('#s-reserveWeeklyPct').value = s.reserveWeeklyPct;
@@ -808,6 +810,7 @@ async function saveSettings(ev) {
       usageShow: $('#s-usageShow').value,
       usagePollSec: Number($('#s-usagePollSec').value),
       usageWarnPct: Number($('#s-usageWarnPct').value),
+      usageCritPct: Number($('#s-usageCritPct').value),
       budgetGuard: $('#s-budgetGuard').checked,
       reserveFiveHourPct: Number($('#s-reserveFiveHourPct').value),
       reserveWeeklyPct: Number($('#s-reserveWeeklyPct').value),

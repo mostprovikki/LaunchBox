@@ -1,2 +1,8 @@
 node_modules/
 .DS_Store
+
+# generated: UI capture output (npm run screenshots), ~15MB/run
+working_prototype_screenshots/
+
+# reference copy of upstream claude-sessions-dashboard (MIT), not vendored
+claude-sessions-dashboard/

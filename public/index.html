@@ -116,8 +116,10 @@
         </label>
         <div class="row">
           <label>Check every (sec) <input id="s-usagePollSec" type="number" min="60" max="3600"></label>
-          <label>Warn above (%) <input id="s-usageWarnPct" type="number" min="1" max="99"></label>
+          <label>Amber above (%) <input id="s-usageWarnPct" type="number" min="1" max="99"></label>
+          <label>Red above (%) <input id="s-usageCritPct" type="number" min="1" max="99"></label>
         </div>
+        <p class="muted note">Colours the meters only — it never changes whether a job fires. What blocks a run is the budget guard's reserve, below.</p>
       </fieldset>
       <fieldset>
         <legend>🛡 Budget &amp; reserve</legend>

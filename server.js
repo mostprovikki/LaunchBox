@@ -18,7 +18,10 @@ import { createRunner, DEFAULT_SOFT_GRACE_MS } from './lib/runner.js';
 import { createScheduler } from './lib/scheduler.js';
 import { createAwake, DEFAULT_RESET_LEAD_MIN } from './lib/awake.js';
 import { createPauseController, PAUSE_MODES } from './lib/pause.js';
-import { createUsageMonitor, POLL_FLOOR_SEC, DEFAULT_POLL_SEC, USAGE_SHOW_MODES } from './lib/usage.js';
+import {
+  createUsageMonitor, POLL_FLOOR_SEC, DEFAULT_POLL_SEC, USAGE_SHOW_MODES,
+  DEFAULT_WARN_PCT, DEFAULT_CRIT_PCT,
+} from './lib/usage.js';
 import { createBudgetPolicy } from './lib/budget.js';
 import { createBurst, BURST_DEFAULTS } from './lib/burst.js';
 import { createBeads } from './lib/beads.js';
@@ -281,7 +284,8 @@ export function createApp({
     const v = getSetting(db, 'usageShow', 'banner');
     return USAGE_SHOW_MODES.includes(v) ? v : 'banner';
   };
-  const usageWarnPct = () => Number(getSetting(db, 'usageWarnPct', 80)) || 80;
+  const usageWarnPct = () => Number(getSetting(db, 'usageWarnPct', DEFAULT_WARN_PCT)) || DEFAULT_WARN_PCT;
+  const usageCritPct = () => Number(getSetting(db, 'usageCritPct', DEFAULT_CRIT_PCT)) || DEFAULT_CRIT_PCT;
 
   // A snapshot of "nothing known yet" rather than null: the client renders the
   // same shape whether or not the first probe has landed.
@@ -295,6 +299,7 @@ export function createApp({
     ...(usage?.snapshot() ?? pendingSnapshot()),
     display: usageShow(),
     warnPct: usageWarnPct(),
+    critPct: usageCritPct(),
   });
 
   app.get('/api/usage', (req, res) => {
@@ -738,6 +743,7 @@ export function createApp({
       usagePollSec: Number(getSetting(db, 'usagePollSec', DEFAULT_POLL_SEC)) || DEFAULT_POLL_SEC,
       usageShow: usageShow(),
       usageWarnPct: usageWarnPct(),
+      usageCritPct: usageCritPct(),
       awakeResetLeadMin: Number(getSetting(db, 'awakeResetLeadMin', DEFAULT_RESET_LEAD_MIN)) || DEFAULT_RESET_LEAD_MIN,
       // Task sources (M4a). `bdPath` is pinned deliberately: bd shipped ~93
       // releases in 9 months with a breaking change, so which binary we talk to
@@ -773,10 +779,29 @@ export function createApp({
       }
       setSetting(db, 'usageShow', b.usageShow);
     }
-    if ('usageWarnPct' in b) {
-      const n = Number(b.usageWarnPct);
-      if (!Number.isFinite(n) || n < 1 || n > 99) return res.status(400).json({ errors: ['usageWarnPct must be 1-99'] });
-      setSetting(db, 'usageWarnPct', Math.round(n));
+    // The two display thresholds are validated as a *pair*, and neither is written
+    // until both pass. Two reasons, both learned here:
+    //  - crit must stay above warn or the amber band is unreachable, since the
+    //    higher test wins first. Rejecting the inversion makes that impossible;
+    //    clamping at render time would only hide it.
+    //  - M4a shipped a settings PUT that persisted one key before a later check
+    //    could reject the save, leaving the stored config half-applied.
+    // An absent key falls back to what is stored, so sending only one still gets
+    // checked against the other.
+    if ('usageWarnPct' in b || 'usageCritPct' in b) {
+      const pair = {
+        usageWarnPct: 'usageWarnPct' in b ? Number(b.usageWarnPct) : usageWarnPct(),
+        usageCritPct: 'usageCritPct' in b ? Number(b.usageCritPct) : usageCritPct(),
+      };
+      for (const [key, n] of Object.entries(pair)) {
+        if (!Number.isFinite(n) || n < 1 || n > 99) return res.status(400).json({ errors: [`${key} must be 1-99`] });
+      }
+      if (Math.round(pair.usageCritPct) <= Math.round(pair.usageWarnPct)) {
+        return res.status(400).json({ errors: ['usageCritPct must be above usageWarnPct'] });
+      }
+      for (const key of ['usageWarnPct', 'usageCritPct']) {
+        if (key in b) setSetting(db, key, Math.round(pair[key]));
+      }
     }
     // Budget guard keys — core for the same reason the usage keys are: the guard,
     // the planner and (later) the backlog all read these same numbers.
