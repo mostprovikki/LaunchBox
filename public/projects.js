@@ -7,6 +7,7 @@
 //   1. a project that will never contribute work says so, in words (`reasons`);
 //   2. a completed bead leaves an audit line in the human's checkout (auditNote).
 
+import { guardedSubmit } from './auth.js';
 import { $, $$, api, apiErr, esc, toast, relTime, fullTime } from './util.js';
 
 // Which rows have the ready list expanded, plus the last body fetched for each.
@@ -95,7 +96,7 @@ function projectRow(p) {
       <button data-act="del" class="icon" title="Remove from the scheduler">🗑</button>
     </div>`;
   el.querySelectorAll('[data-act]').forEach((n) =>
-    n.addEventListener('click', () => onProjectAction(p, n.dataset.act)));
+    n.addEventListener('click', () => onProjectAction(p, n.dataset.act, n)));
   if (readyOpen.has(p.id)) renderReady(el, p);
   return el;
 }
@@ -251,11 +252,19 @@ function pollSummary(r) {
     ...held, ...refused, ...(r.reasons ?? []), ...(r.warnings ?? [])].join(' · ');
 }
 
-async function onProjectAction(p, act) {
+// `el` is the button that was clicked; guardedSubmit shows the approval wait on
+// it. Passing a button rather than a container matters: guardedSubmit's fallback
+// busy-target is the element itself, so a bare <div> would have its markup
+// overwritten by the waiting label.
+async function onProjectAction(p, act, el) {
   try {
     if (act === 'activate') {
       if (!confirmActivate(p)) return;
-      const out = await api('PUT', `/api/projects/${p.id}`, { state: 'active' });
+      // Activation raises a system approval, which can hold this open for up to
+      // three minutes; guardedSubmit shows the wait on the button that was
+      // clicked and speaks the shared failure vocabulary on refusal.
+      let out = null;
+      if (!await guardedSubmit(el, async () => { out = await api('PUT', `/api/projects/${p.id}`, { state: 'active' }); })) return;
       // Activating something that still can't contribute is legal and common
       // (no autoLabel, bd missing) — say so now rather than leaving the user to
       // wonder why an active project never does anything.

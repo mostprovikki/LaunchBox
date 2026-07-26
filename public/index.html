@@ -40,6 +40,9 @@
   </div>
 </header>
 <div id="paused-banner" class="banner" hidden></div>
+<!-- Raised by api() on a 401, and never dismissed on its own: it names a command
+     the user has to run, which is not something to read in a 3.5s toast. -->
+<div id="auth-banner" class="auth-banner" hidden></div>
 
 <main>
   <section id="tab-jobs">
@@ -170,12 +173,19 @@
     <strong id="log-title"></strong>
     <span id="log-progress" class="muted"></span>
     <span class="spacer"></span>
+    <!-- The log is a snapshot, not a live stream, so the drawer has to say how old
+         it is — otherwise a stalled run and a stale view look identical. -->
+    <span id="log-asof" class="muted"></span>
+    <button id="log-refresh" class="icon" title="Reload the log">⟳</button>
     <button id="log-stop" hidden title="Ask this run to wind down at its next safe point">⤓ Wind down</button>
     <button id="log-kill" class="danger-btn" hidden>■ Stop now</button>
     <span id="run-actions"></span>
     <button id="log-close" class="icon" title="Close">✕</button>
   </div>
   <pre id="log-view"></pre>
+  <!-- Anyone who genuinely wants to follow output live gets the command to do it,
+       because the browser no longer can. Empty until the run has a log file. -->
+  <code id="log-follow" class="follow-hint" title="Run this in a terminal to follow the output live"></code>
 </div>
 
 <dialog id="job-dialog">

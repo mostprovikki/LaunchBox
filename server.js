@@ -1263,7 +1263,14 @@ export async function main() {
   // The helper is compiled into the data dir by install.sh. Absent means gated
   // actions are refused, never allowed — except on a platform with no
   // authenticator at all, which lib/approval.js reports as degraded.
-  const approval = createApproval({ helperPath: join(dataDir(), 'bin', 'LaunchBox') });
+  const approval = createApproval({
+    helperPath: join(dataDir(), 'bin', 'LaunchBox'),
+    // Overridable so the batched verification session (docs/spikes/auth-verify.sh)
+    // can exercise the timeout path in seconds instead of asking a human to sit
+    // through 180s twice. The real default stays covered by a unit test with an
+    // injected clock.
+    timeoutMs: Number(process.env.CS_APPROVAL_TIMEOUT_MS) || undefined,
+  });
   const av = approval.available();
   if (av.degraded) console.warn(`approval: ${av.reason} — high-power actions are NOT gated on this platform`);
   else if (!av.ok) console.warn(`approval: ${av.reason} — high-power actions will be REFUSED until install.sh is re-run`);
