@@ -195,7 +195,7 @@ const isLoopbackHost = (host) => LOOPBACK_NAMES.has((hostnameOf(host) || '').toL
 
 // An Origin is a URL, not an authority, so it needs a different parse. A
 // malformed one is not loopback — this is a guard, and guards fail closed.
-function isLoopbackOrigin(origin) {
+function isLoopbackOrigin(origin, port = null) {
   try {
     // Parsed only to validate the shape and pin the scheme — an `https://127.0.0.1`
     // origin is not this app.
@@ -205,7 +205,16 @@ function isLoopbackOrigin(origin) {
     // normalises `http://127.1` and `http://2130706433` to `127.0.0.1` first, so
     // the strict check never sees what was actually sent. Two different
     // definitions of "loopback" in one file is how a guard gets bypassed later.
-    return isLoopbackHost(String(origin).replace(/^https?:\/\//i, ''));
+    const authority = String(origin).replace(/^https?:\/\//i, '');
+    if (!isLoopbackHost(authority)) return false;
+    // Port pinned when known: `http://127.0.0.1:3000` is a different origin from
+    // ours and has no business driving this API, even though its host is loopback.
+    if (port == null) return true;
+    const colon = authority.lastIndexOf(':');
+    const sent = authority.startsWith('[')
+      ? authority.slice(authority.indexOf(']') + 1).replace(/^:/, '')
+      : (colon === -1 ? '' : authority.slice(colon + 1));
+    return sent === String(port);
   } catch {
     return false;
   }
@@ -239,6 +248,11 @@ export function createApp({
   // Injectable so a test can pin a known value; otherwise read from (or created
   // in) the data directory.
   token = null,
+  // The port we are listening on, when the caller knows it. Used to pin the
+  // Origin: without it any loopback port is accepted, so another local app's page
+  // is indistinguishable from ours. main() passes it; a standalone app that does
+  // not simply keeps the looser check.
+  originPort = null,
   // Layer 2. null means the presence layer is not wired at all (a standalone app
   // or an embedding), which is distinct from the helper being missing on an
   // install that expects one — that case fails closed inside lib/approval.js.
@@ -260,7 +274,7 @@ export function createApp({
     }
     // Belt and braces, and it costs one header read. `null` is included
     // deliberately: that is what a sandboxed iframe sends.
-    if (req.headers.origin && !isLoopbackOrigin(req.headers.origin)) {
+    if (req.headers.origin && !isLoopbackOrigin(req.headers.origin, originPort)) {
       return res.status(403).json({ error: 'forbidden: cross-origin request' });
     }
     return next();
@@ -1438,8 +1452,11 @@ export async function main() {
     else console.warn(`${line}${e.message ? ` — ${e.message}` : ''}`);
   });
 
-  const app = createApp({ db, runner, scheduler, extensions, awake, usage, budget, pause, projects, beads, burst, approval });
+  // Resolved BEFORE createApp, which now needs it to pin the Origin. It used to be
+  // declared after, and moving the use above the declaration cost a TDZ
+  // ReferenceError that stopped the daemon booting at all — caught by running it.
   const port = Number(process.env.CS_PORT) || 9099;
+  const app = createApp({ db, runner, scheduler, extensions, awake, usage, budget, pause, projects, beads, burst, approval, originPort: port });
   const server = app.listen(port, '127.0.0.1', () => {
     // Publish the port we actually bound, so `claude-scheduler open` builds a
     // URL that works even when CS_PORT moved it. The alternative — having the
