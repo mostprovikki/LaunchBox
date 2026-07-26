@@ -25,6 +25,15 @@ mkdir -p "$DATA" "$DATA/bin" "$HOME/Library/LaunchAgents"
 if [ "$(uname)" = "Darwin" ]; then
   if command -v swiftc >/dev/null; then
     swiftc -O -o "$DATA/bin/LaunchBox" helper/LaunchBox.swift
+    # Record the checksum beside the binary and verify it before every spawn. An
+    # attacker who can overwrite the binary can usually overwrite this too, so it
+    # does not make the gate unbypassable -- it makes tampering LOUD, requires two
+    # coordinated writes instead of one silent one, and fails closed on a partial
+    # attempt. 0500/0700 also keeps any *other* account on the machine out.
+    shasum -a 256 "$DATA/bin/LaunchBox" | awk '{print $1}' > "$DATA/bin/LaunchBox.sha256"
+    chmod 0500 "$DATA/bin/LaunchBox"
+    chmod 0400 "$DATA/bin/LaunchBox.sha256"
+    chmod 0700 "$DATA/bin"
     # Verifying by running --check (which never prompts) also detects tampering
     # for free: a patched or re-signed binary is SIGKILLed rather than misbehaving.
     if "$DATA/bin/LaunchBox" --check >/dev/null 2>&1; then

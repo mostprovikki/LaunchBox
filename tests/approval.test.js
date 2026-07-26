@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import { readFileSync } from 'node:fs';
 import { tmpData, fakeSpawn, sleep } from './helpers.js';
 import {
   createApproval, APPROVAL_CODES, DEFAULT_TIMEOUT_MS, DEFAULT_GRACE_MS, DEFAULT_MAX_QUEUED,
@@ -512,4 +512,62 @@ test('grace still works for the sequential case it exists for', async () => {
   const second = await approval.request({ action: 'job.edit', detail: 'change job one', token: 't', grace: true });
   assert.equal(second.ok, true);
   assert.equal(spawnFn.calls.length, 1, 'the second edit rode the window with no new dialog');
+});
+
+test('a substituted helper binary is refused, not trusted', async () => {
+  // Before the pin, available() was existsSync and nothing more, and exit 0 from
+  // the helper WAS the approval — so replacing the binary with one that exits 0
+  // approved every gated action silently, forever. swiftc signs a replacement just
+  // as validly, so the adhoc signature does not help: it detects patching a signed
+  // binary, not substituting a fresh one.
+  const dir = tmpData();
+  const helperPath = join(dir, 'LaunchBox');
+  writeFileSync(helperPath, '#!/bin/sh\nexit 0\n');
+  writeFileSync(`${helperPath}.sha256`, `${'0'.repeat(64)}\n`);
+
+  const approval = createApproval({ spawnFn: fakeSpawn(), helperPath, platform: 'darwin' });
+  const state = approval.available();
+  assert.equal(state.ok, false);
+  assert.equal(state.tampered, true);
+  assert.match(state.reason, /checksum/);
+
+  const out = await approval.request({ action: 'job.create', detail: 'create a job', token: 't' });
+  assert.equal(out.ok, false);
+  assert.equal(out.code, 'approval_unavailable', 'a mismatched helper never means yes');
+});
+
+test('a matching pin is accepted, and an absent pin is permissive but flagged', async () => {
+  const dir = tmpData();
+  const helperPath = join(dir, 'LaunchBox');
+  const body = '#!/bin/sh\nexit 0\n';
+  writeFileSync(helperPath, body);
+  const digest = createHash('sha256').update(readFileSync(helperPath)).digest('hex');
+  writeFileSync(`${helperPath}.sha256`, `${digest}  LaunchBox\n`);
+
+  const ok = createApproval({ spawnFn: fakeSpawn(), helperPath, platform: 'darwin' }).available();
+  assert.equal(ok.ok, true, 'the recorded checksum matches');
+  assert.equal(ok.unpinned, false);
+
+  // An older install has no pin file. Absence is not evidence of tampering, so it
+  // stays permissive — but it is reported, because it is a weaker posture.
+  rmSync(`${helperPath}.sha256`);
+  const unpinned = createApproval({ spawnFn: fakeSpawn(), helperPath, platform: 'darwin' }).available();
+  assert.equal(unpinned.ok, true);
+  assert.equal(unpinned.unpinned, true);
+});
+
+test('the platform is snapshotted at module load, out of reach of an extension', () => {
+  // Extensions are unsigned local .js loaded in-process by main(), which runs after
+  // this module is evaluated. Reading process.platform lazily would let one do
+  // Object.defineProperty(process, 'platform', {value:'linux'}) and drop the whole
+  // layer into the documented fail-OPEN degraded path.
+  const original = process.platform;
+  try {
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    const a = createApproval({ spawnFn: fakeSpawn(), helperPath: '/nope', });
+    assert.equal(a.available().degraded, false,
+      'a late platform change must not reach the degraded path');
+  } finally {
+    Object.defineProperty(process, 'platform', { value: original, configurable: true });
+  }
 });
