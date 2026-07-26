@@ -350,3 +350,33 @@ depend on Phase 2.
 - Hardware keys, TPM, passkeys.
 - Signing the helper with a developer certificate (the spike proved it unnecessary).
 - Rotating the token on a schedule. Restarting the daemon is the rotation story.
+
+
+## Verification evidence (2026-07-26)
+
+Recorded because "has the approval layer been tested?" has a subtler answer than yes or no: every
+link in the chain is verified, but the *last continuous run* needs a human, and no amount of
+engineering removes that.
+
+| Link | How it was verified | Result |
+|---|---|---|
+| Real helper + real **Touch ID approve** | Human, during the spike (screenshotted) | exit 0, `success:true, errorCode:0`, 34.4s |
+| Real helper + real **password approve** | Human, during the spike (screenshotted) | exit 0, identical payload, 67.6s — indistinguishable from biometry by design |
+| Real helper + real **Deny** | Human, during the spike (screenshotted) | exit 1, `errorCode:-2`, "Authentication canceled." |
+| Real helper prompts from a **background launchd agent** | Spike, `gui/502`, no TTY | `canEvaluate:true`, then `success:true` |
+| **Server → `lib/approval.js` → real binary → real dialog** | `tools/verify-approval-timeout.sh`, unattended | 5/5; helper process asserted alive, `approval_timeout`, nothing written |
+| exit code → `{ok, code}` mapping, queue, grace, per-token scoping | `tests/approval.test.js` | 17/17, mutation-checked |
+| Each gated route: approve / deny / timeout / unavailable, and **nothing written** on refusal | `tests/api.test.js` | mutation-checked (moving a write before its gate fails 3 tests) |
+| Frontend keeps the user's work on refusal | `tools/verify-auth-ui.mjs`, real Chrome | 19/19 |
+| Whole app under both layers | `npm run screenshots` | 40/40 |
+| The live daemon | probes against the running instance | exploit → 403, form content-type → 415, `Host` leak → 403, tokenless → 401 |
+
+**What cannot be automated, and why that is the point.** The approve and deny outcomes of a real
+dialog require a human. This was tested rather than assumed: an attempt to click the sheet through
+System Events failed with `-1743, Not authorised to send Apple events`, and granting the Automation
+permission that would allow it would weaken the machine in order to test a feature whose purpose is
+to protect it. **The layer's value is precisely that no local process — including this one — can
+satisfy its dialog.** A build that could self-approve would be a bypass, and malware would use it.
+
+So `docs/spikes/auth-verify.sh` (8 steps, 5 dialogs) is not an outstanding implementation task. It
+is the human half of a two-party protocol, and the machine half is complete.
