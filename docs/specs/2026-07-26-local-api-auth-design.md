@@ -1,6 +1,6 @@
 # Local API authentication and approval — design
 
-Status: **approved in conversation 2026-07-26**, not yet implemented.
+Status: **shipped and verified 2026-07-26**, including the human half of the approval protocol.
 Supersedes the "decide it explicitly for the whole API" note in
 [M5 §5.6](../plans/2026-07-25-m5-sessions-dashboard.md).
 
@@ -453,3 +453,25 @@ in fact the mutation had also rewritten the function *definition*, so the file s
 failed to parse and the "0 failures" was the file not loading. Re-run against only the
 call sites, both pin tests fail as they should. A mutation check is only evidence if the
 mutated program still runs.
+
+
+## Human verification — completed 2026-07-26
+
+`tools/verify-auth-minimal.sh`, run by the user against a sandboxed daemon: **4/4**.
+
+- A real **Deny** at a genuine system dialog → `approval_denied`, and **nothing written**.
+- A real **approval** (Touch ID or password) of the identical retried request → the job was
+  created, and the approval appears in the audit log.
+
+The retried-request shape is deliberate: it is what the UI does when you press Submit again after
+a refusal, so this exercised the state-preservation contract against a real dialog rather than a
+fake approver.
+
+This closes the only outcomes no machine here could exercise. Combined with the automated
+coverage — the exit-code mapping checked against the real binary's captured payloads, the
+server→binary→dialog path proved via the timeout outcome, the per-route gating and
+nothing-written guarantees, and the browser-driven state-preservation contract — **both halves of
+the two-party protocol are verified.**
+
+The single accepted limitation is unchanged and irreducible: same-user code able to overwrite both
+the helper binary and its checksum pin. Everything else the adversarial review found is fixed.
