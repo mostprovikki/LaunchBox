@@ -129,13 +129,33 @@ Verified, not assumed:
   We are a plain-JS repo with no typecheck step, so the value is documentation, not
   enforcement. **Not taken; noted for whoever revisits per-tool rendering.**
 
-**Still open:** a survey of the third-party ecosystem (transcript viewers on npm and
-GitHub — `claude-code-log`, `assistant-ui`, Vercel AI Elements, and others) was
-commissioned but had not reported when this was written. It is unlikely to change
-the conclusion, because the binding constraint is ours rather than theirs: no build
-step, no bundler, no React. Anything React-shaped is out regardless of quality.
-Whoever picks up `claude-scheduler-a6o` should re-run that check rather than treat
-this paragraph as settled.
+**The third-party ecosystem was surveyed too, and changes nothing** — the binding
+constraint is ours rather than theirs: no build step, no bundler, no React. But it
+turned up two useful references and one trap.
+
+References for whoever picks up `claude-scheduler-a6o`:
+
+- **`claude-lens-viewer`** — its published `public/index.html` is a ~55 KB
+  zero-dependency single-`<script>` **vanilla** renderer with per-tool branches for
+  Bash, Edit, MultiEdit, Read, Write, Grep, Glob, Task, TodoWrite and WebFetch. The
+  closest existing thing to what we want, and worth reading before writing ours.
+  ⚠️ It has 14 unsanitised `innerHTML` sites — read it for the per-tool *shapes*,
+  never paste from it.
+- **`@codexview/adapters`** (MIT, ~30 KB) parses Claude Code JSONL in a browser with
+  no bundler. Real, but 1 star — no validation, so not a dependency.
+- `opencode` is out: its renderer package is `private: true`, unpublished, and it is
+  a different transcript format.
+
+⚠️ **The vendoring trap, and it is specific to us.** jsDelivr `/+esm` and `esm.sh`
+rewrite bare specifiers into **origin-absolute** imports. Such a file works while
+loaded from the CDN and breaks the moment it is vendored — which for a local-only
+daemon is not a preference but the whole point. Only genuinely single-file,
+zero-bare-specifier builds are vendorable. `marked` and `dompurify` were verified to
+be exactly that; nothing else may be assumed to be without the same check.
+
+Related: if the hand-rolled JSON highlighter is ever replaced by `highlight.js`,
+note that the `highlight.js` package itself is **not** browser-ESM-ready —
+`@highlightjs/cdn-assets` is the shippable form, same version and licence.
 
 So: hand-roll the tool rendering, but do it against Anthropic's own data contract
 rather than an invented one, and keep the fallback generic so an unknown future tool
