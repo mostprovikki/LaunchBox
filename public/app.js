@@ -3,12 +3,14 @@ import { $, $$, api, apiErr, esc, toast, relTime, fullTime, duration } from './u
 import { renderUsage } from './usage.js';
 import { iconFor } from './icons.js';
 import { refreshProjects } from './projects.js';
+// Only for the fragment hand-off below; ordinary calls get the token via api().
+import { getToken, guardedSubmit, FAILURE_COPY } from './auth.js';
 
 let exts = []; // extension manifests from /api/extensions
 let jobs = [];
 let editingId = null;
-let logSource = null;
 let logRun = null;
+let logJobName = ''; // kept so Refresh can rebuild the title without re-parsing it
 let home = '';
 let jobSearch = '';
 let runStatusFilter = '';
@@ -57,13 +59,17 @@ function scheduleText(s) {
 }
 
 // ---------- tabs ----------
+const TABS = ['jobs', 'history', 'projects', 'settings'];
 function hashParts() {
   const [tab, query] = (location.hash || '#jobs').slice(1).split('?');
-  return { tab: tab || 'jobs', query: new URLSearchParams(query || '') };
+  // Anything that isn't a tab name falls back to Jobs. Without this, one
+  // unrecognised fragment hides every section and the page looks broken with no
+  // way back — which is exactly what `#token=…` did before it was handled below.
+  return { tab: TABS.includes(tab) ? tab : 'jobs', query: new URLSearchParams(query || '') };
 }
 function showTab() {
   const { tab, query } = hashParts();
-  for (const s of ['jobs', 'history', 'projects', 'settings']) {
+  for (const s of TABS) {
     $(`#tab-${s}`).hidden = s !== tab;
     document.querySelector(`.tabs a[data-tab="${s}"]`).classList.toggle('active', s === tab);
   }
@@ -76,7 +82,19 @@ function showTab() {
   if (tab === 'projects') refreshProjects();
   if (tab === 'settings') loadSettings();
 }
-window.addEventListener('hashchange', showTab);
+window.addEventListener('hashchange', () => {
+  // The session key arrives as a fragment, which is a delivery mechanism and not
+  // a route. It lands here when the tab is already open — pasting the URL, or
+  // `claude-scheduler open` reusing this tab — and by then boot has already run
+  // without a key, so the page is empty and showing the banner. Capture it (which
+  // also strips it from the address bar) and reload, so the whole boot re-runs
+  // with the key rather than leaving half the UI unpopulated.
+  if (/(?:^|[#&])token=/.test(location.hash)) {
+    getToken();
+    return location.reload();
+  }
+  showTab();
+});
 
 // ---------- jobs ----------
 const statusHtml = (st) => `<span class="status st-${st}"><span class="dot ${st}"></span>${st}</span>`;
@@ -485,16 +503,35 @@ async function saveJob(ev) {
     retryDelayMin: Number($('#f-retryDelayMin').value),
     notify: $('#f-notify').value,
   };
+  // Creating or editing a job is gated by a system approval, which can hold this
+  // request open for up to three minutes. Without a visible waiting state the
+  // dialog looks hung and the natural response is to press Submit again.
+  // #dialog-save, not `button[type=submit]`: inside a method="dialog" form the
+  // save button carries no explicit type, so the attribute selector matches
+  // nothing and the waiting state would silently never appear. Found by driving
+  // the dialog rather than by reading it.
+  const btn = $('#dialog-save');
+  const label = btn?.textContent;
+  if (btn) { btn.disabled = true; btn.textContent = 'waiting for your approval…'; }
   try {
     if (editingId) await api('PUT', `/api/jobs/${editingId}`, payload);
     else await api('POST', '/api/jobs', payload);
+    // Only past this point is anything cleared. A denied or timed-out approval
+    // must leave every field exactly as typed — in some cases the input cannot
+    // reasonably be reconstructed, so losing it is not an acceptable outcome.
     $('#job-dialog').close();
     toast(editingId ? 'Job updated' : 'Job created', 'ok');
     refreshJobs();
   } catch (e) {
     const box = $('#form-errors');
     box.hidden = false;
-    box.textContent = (e.data?.errors || [e.data?.error || 'save failed']).join(' · ');
+    // An approval refusal gets the shared wording, which says plainly that
+    // nothing was saved and that pressing Submit again is the way forward.
+    // Validation errors keep their own inline list.
+    box.textContent = FAILURE_COPY[e.code]
+      ?? (e.data?.errors || [e.data?.error || 'save failed']).join(' · ');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = label; }
   }
 }
 
@@ -703,42 +740,68 @@ function renderRunActions(run) {
   }
 }
 
+// The drawer is a snapshot, not a stream. There is no SSE tail any more:
+// `EventSource` cannot send an Authorization header, so a live tail would have
+// meant a second auth path with the token in the URL. What replaces it is this
+// plus Refresh, plus the `tail -f` line for anyone who wants output as it lands.
+async function loadLogSnapshot(run) {
+  const view = $('#log-view');
+  try {
+    // api() returns the parsed body, or the raw text when it isn't JSON — a log
+    // is text/plain, so this is the log itself.
+    const text = await api('GET', `/api/runs/${run.id}/log`);
+    view.textContent = typeof text === 'string' ? text : '';
+    view.scrollTop = view.scrollHeight;
+    $('#log-asof').textContent = `as of ${new Date().toLocaleTimeString()}`;
+  } catch (e) {
+    apiErr(e, 'could not load the log');
+  }
+  // Progress used to arrive as a stream event; it now rides on the run row, which
+  // /api/runs already returns, so it is only as fresh as the last read.
+  const p = run.progress;
+  $('#log-progress').textContent = p
+    ? `⚙ ${p.text ?? p.activity ?? ''}${p.turns ? ` · ${p.turns} turns` : ''}`
+    : '';
+  $('#log-follow').textContent = run.logPath ? `tail -f ${run.logPath}` : '';
+}
+
 function openLog(run, jobName = '') {
-  logSource?.close();
   logRun = run;
+  logJobName = jobName;
   $('#log-drawer').hidden = false;
   $('#log-title').textContent = `${jobName || 'run'} · ${run.status}`;
-  $('#log-progress').textContent = '';
+  // Cleared before the fetch, not after: loadLogSnapshot fills these in once the
+  // request resolves, and until then the previous run's log path and progress
+  // would still be sitting in the header describing a different run.
   $('#log-view').textContent = '';
+  $('#log-asof').textContent = '';
+  $('#log-progress').textContent = '';
+  $('#log-follow').textContent = '';
   setLogKill(run);
   renderRunActions(run);
-
-  logSource = new EventSource(`/api/runs/${run.id}/tail`);
-  const view = $('#log-view');
-  logSource.onmessage = (ev) => {
-    view.textContent += ev.data + '\n';
-    view.scrollTop = view.scrollHeight;
-  };
-  logSource.addEventListener('progress', (ev) => {
-    const p = JSON.parse(ev.data);
-    $('#log-progress').textContent = `⚙ ${p.text ?? p.activity ?? ''}${p.turns ? ` · ${p.turns} turns` : ''}`;
-  });
-  logSource.addEventListener('done', async (ev) => {
-    $('#log-title').textContent = `${jobName || 'run'} · ${ev.data}`;
-    $('#log-kill').hidden = true;
-    $('#log-stop').hidden = true;
-    logSource.close();
-    // meta (e.g. sessionId) may have landed during the run — re-check actions
-    try { renderRunActions(await api('GET', `/api/runs?limit=100`).then((d) => d.runs.find((r) => r.id === run.id)) ?? run); } catch {}
-    if (!$('#tab-history').hidden) refreshRuns();
-  });
-  logSource.onerror = () => logSource.close();
+  loadLogSnapshot(run);
 }
 
 function closeLog() {
-  logSource?.close();
   logRun = null;
   $('#log-drawer').hidden = true;
+}
+
+// Refresh re-reads the run row before the log, so status, progress, the stop
+// buttons and any extension run action (which can appear only once the run has
+// written its meta) all move together rather than drifting apart.
+async function refreshLog() {
+  if (!logRun) return;
+  try {
+    const fresh = (await api('GET', '/api/runs?limit=100')).runs.find((r) => r.id === logRun.id);
+    if (fresh) {
+      logRun = fresh;
+      $('#log-title').textContent = `${logJobName || 'run'} · ${fresh.status}`;
+      setLogKill(fresh);
+      renderRunActions(fresh);
+    }
+  } catch { /* the snapshot below is the point of the click — still fetch it */ }
+  await loadLogSnapshot(logRun);
 }
 
 // ---------- settings ----------
@@ -846,6 +909,7 @@ $('#plan-cancel').addEventListener('click', () => $('#plan-dialog').close());
 $('#history-job').addEventListener('change', refreshRuns);
 $$('#status-chips .chip').forEach((c) => c.addEventListener('click', () => { setStatusChip(c.dataset.status); refreshRuns(); }));
 $('#log-close').addEventListener('click', closeLog);
+$('#log-refresh').addEventListener('click', refreshLog);
 $('#settings-form').addEventListener('submit', saveSettings);
 // Clicking the strip or the chip forces a probe; the floor throttle answers 429
 // with the current reading, so the click is never a dead end.
@@ -884,18 +948,18 @@ $$('#awake-menu button[data-mode]').forEach((b) => b.addEventListener('click', a
 
 $$('#pause-seg button').forEach((b) => b.addEventListener('click', () => setPauseMode(b.dataset.mode)));
 
-$('#cleanup-btn').addEventListener('click', async () => {
+$('#cleanup-btn').addEventListener('click', async (ev) => {
   if ($('#cleanup-confirm').value !== 'cleanup') return toast('Type "cleanup" to confirm.', 'err');
-  await api('POST', '/api/cleanup');
+  if (!await guardedSubmit(ev.currentTarget, () => api('POST', '/api/cleanup'))) return;
   $('#cleanup-confirm').value = '';
   toast('All jobs, runs and logs removed.', 'ok');
   location.hash = '#jobs';
   refreshJobs();
 });
 
-$('#uninstall-btn').addEventListener('click', async () => {
+$('#uninstall-btn').addEventListener('click', async (ev) => {
   if ($('#uninstall-confirm').value !== 'uninstall') return toast('Type "uninstall" to confirm.', 'err');
-  await api('POST', '/api/uninstall');
+  if (!await guardedSubmit(ev.currentTarget, () => api('POST', '/api/uninstall'))) return;
   document.body.innerHTML = '<main><h2>Uninstalling…</h2><p>The daemon is shutting down and removing itself. You can close this tab.</p></main>';
 });
 

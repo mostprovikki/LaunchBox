@@ -43,6 +43,18 @@ header {
    colour; the softer modes must not borrow it. */
 .banner.hard { background: var(--fail); color: #fff; }
 
+/* The invalid-key banner. Deliberately not `.banner`: that one is a transient
+   mode the user chose and can undo from the header, whereas this one means the
+   page cannot read anything at all until a command is run in a terminal. It
+   stays put, wraps rather than truncating (it contains that command), and is
+   selectable so the command can be copied out of it. */
+.auth-banner {
+  background: color-mix(in srgb, var(--fail) 16%, var(--panel));
+  color: var(--text); border-bottom: 1px solid var(--fail);
+  padding: 10px 20px; font-size: 12.5px; line-height: 1.45;
+  user-select: text; white-space: pre-wrap;
+}
+
 /* Pause modes: compact enough for the header, and the active mode is coloured by
    how forceful it is, so the state is readable without reading the label. */
 .pause-seg { margin: 0; padding: 2px; }
@@ -179,6 +191,17 @@ button.icon.soft-stop-btn { color: var(--stopped); font-weight: 700; }
   white-space: pre-wrap; word-break: break-word;
   font: 12px/1.55 "SF Mono", Menlo, monospace; background: var(--bg);
 }
+#log-asof { font-size: 12px; white-space: nowrap; }
+/* The live-follow escape hatch. A block so it can't be mistaken for part of the
+   log, and `:empty` collapses it for a run that has no log file yet — an empty
+   bordered strip would read as "the command is missing". */
+.follow-hint {
+  display: block; padding: 7px 20px; border-top: 1px solid var(--border);
+  background: var(--panel); color: var(--muted);
+  font: 11.5px/1.4 "SF Mono", Menlo, monospace;
+  user-select: all; overflow: auto; white-space: nowrap;
+}
+.follow-hint:empty { display: none; }
 
 /* ---------- cards / settings ---------- */
 .card {

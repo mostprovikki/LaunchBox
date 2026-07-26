@@ -1,19 +1,38 @@
 // Shared front-end primitives. Everything here is used by more than one module
 // — app.js, fields.js, usage.js — and nothing here touches app state.
 
+// auth.js imports `$`/`toast` from here while we import from it: a deliberate
+// cycle. ES modules tolerate it only because neither side calls the other during
+// module evaluation, so nothing below this line may run at load time.
+import { authHeaders, showTokenBanner, FAILURE_COPY } from './auth.js';
+
 export const $ = (sel) => document.querySelector(sel);
 export const $$ = (sel) => [...document.querySelectorAll(sel)];
 
+// Upgraded in place rather than offered as an opt-in wrapper: every page already
+// calls this, so they all inherit the token, the invalid-key banner and the
+// failure codes without changing a line — and so will the next page somebody adds.
 export const api = async (method, path, body) => {
   const res = await fetch(path, {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    // The Content-Type is not decoration: the server rejects any mutation that
+    // doesn't declare application/json, which is what makes a cross-origin form
+    // post impossible.
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: body ? JSON.stringify(body) : undefined,
+    // Long enough for a 180s Touch ID / password approval to resolve. Without a
+    // bound a denied approval that never answers would hang the request forever.
+    signal: AbortSignal.timeout(200_000),
   });
   const text = await res.text();
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = text; }
-  if (!res.ok) throw Object.assign(new Error('api error'), { status: res.status, data });
+  if (!res.ok) {
+    // Raised here, once, so no page can forget it: an invalid key needs an action
+    // at a terminal, not a toast that vanishes in 3.5 seconds.
+    if (res.status === 401 && data?.code === 'token_invalid') showTokenBanner(FAILURE_COPY.token_invalid);
+    throw Object.assign(new Error('api error'), { status: res.status, data, code: data?.code });
+  }
   return data;
 };
 
