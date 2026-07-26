@@ -22,7 +22,10 @@ export class Api {
   async req(method, path, body) {
     const res = await fetch(this.base + path, {
       method,
-      headers: body ? { 'content-type': 'application/json' } : undefined,
+      // Unconditional, not `body ? … : undefined`: the daemon's CSRF guard
+      // requires application/json on every mutating method, and several of the
+      // calls made here (a manual run, a poll) legitimately have no body.
+      headers: { 'content-type': 'application/json' },
       body: body ? JSON.stringify(body) : undefined,
     });
     const text = await res.text();

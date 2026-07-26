@@ -63,6 +63,45 @@ const PROJECT_SETTABLE_STATES = ['active', 'paused'];
 // spawn attempt on every render of the Projects tab.
 const BD_INFO_TTL_MS = 30_000;
 
+// ---------------- local-only guards (M5 §5.6)
+//
+// The whole security model used to be the `127.0.0.1` bind, and that stops
+// nothing a browser does on the user's behalf. Measured 2026-07-26 rather than
+// reasoned about: a cross-origin form-style POST (`Host: evil.example.com`,
+// `Content-Type: text/plain`, no body) to /api/cleanup returned 200 and deleted
+// every job and run in the database, and a GET with a foreign Host returned
+// /api/settings including `home`.
+//
+// Two guards because they stop two different attacks; neither subsumes the other.
+const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+const LOOPBACK_NAMES = new Set(['127.0.0.1', 'localhost', '::1']);
+
+// "127.0.0.1:9099" | "localhost" | "[::1]:9099" -> bare hostname.
+// Split on the LAST colon so an IPv6 literal isn't cut in half, and unwrap the
+// brackets that only ever appear around one.
+function hostnameOf(host) {
+  if (!host) return null;
+  const v = String(host).trim();
+  if (v.startsWith('[')) {
+    const end = v.indexOf(']');
+    return end === -1 ? null : v.slice(1, end);
+  }
+  const colon = v.lastIndexOf(':');
+  return colon === -1 ? v : v.slice(0, colon);
+}
+
+const isLoopbackHost = (host) => LOOPBACK_NAMES.has((hostnameOf(host) || '').toLowerCase());
+
+// An Origin is a URL, not an authority, so it needs a different parse. A
+// malformed one is not loopback — this is a guard, and guards fail closed.
+function isLoopbackOrigin(origin) {
+  try {
+    return LOOPBACK_NAMES.has(new URL(origin).hostname.replace(/^\[|\]$/g, '').toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 export function createApp({
   db, runner, scheduler, extensions, awake, usage = null, budget = null, pause = null,
   projects = null, beads = null, burst = null,
@@ -70,6 +109,44 @@ export function createApp({
   usageRefreshFloorMs = POLL_FLOOR_SEC * 1000,
 }) {
   const app = express();
+
+  // Ahead of express.json and express.static both: a rebound origin must not be
+  // able to read index.html either, and there is no reason to parse a body we
+  // are about to reject.
+  app.use((req, res, next) => {
+    // DNS rebinding is what turns a read-only endpoint into exfiltration: the
+    // attacker's page re-resolves its own name to 127.0.0.1, becomes
+    // same-origin with us, and can then read replies rather than just fire
+    // blind writes. The one thing it cannot forge is the Host it sends us.
+    // Absent Host (HTTP/1.0) is rejected too — every real client sends one.
+    if (!isLoopbackHost(req.headers.host)) {
+      return res.status(403).json({ error: 'forbidden: this API only answers to a loopback Host' });
+    }
+    // Belt and braces, and it costs one header read. `null` is included
+    // deliberately: that is what a sandboxed iframe sends.
+    if (req.headers.origin && !isLoopbackOrigin(req.headers.origin)) {
+      return res.status(403).json({ error: 'forbidden: cross-origin request' });
+    }
+    return next();
+  });
+
+  app.use((req, res, next) => {
+    if (!MUTATING_METHODS.has(req.method)) return next();
+    // The CSRF guard. A cross-origin HTML form can only send urlencoded,
+    // multipart or text/plain, and a cross-origin fetch that sets
+    // application/json becomes preflighted — which we never answer with CORS
+    // headers, so the browser blocks it before it is sent.
+    //
+    // Rejecting an *unparseable body* would not have worked: the destructive
+    // routes take no body at all, so a form post left req.body as {} and ran
+    // anyway. The header is the signal, not the payload.
+    const type = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+    if (type !== 'application/json') {
+      return res.status(415).json({ error: 'content-type must be application/json' });
+    }
+    return next();
+  });
+
   app.use(express.json({ limit: '1mb' }));
   app.use(express.static(join(ROOT, 'public')));
 
