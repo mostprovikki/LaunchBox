@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { request as httpRequest } from 'node:http';
 import { tmpData, jobPayload, fakeSpawn, fakeBd, bdReadyRow, sleep, extensions } from './helpers.js';
 import { ensureDirs } from '../lib/paths.js';
+import { ensureToken } from '../lib/token.js';
 import { readFileSync, mkdtempSync, writeFileSync } from 'node:fs';
 import {
   openDb, listRuns, getSetting, setSetting, recordRunUsage,
@@ -46,8 +47,10 @@ async function boot() {
   const awake = createAwake({ db, runner, scheduler, pause, spawnFn: caffSpawn });
   const osaCalls = [];
   const uninstalls = [];
+  currentToken = ensureToken();
   const app = createApp({
     db, runner, scheduler, extensions, awake, usage, pause,
+    token: currentToken,
     usageRefreshFloorMs: 5_000,
     execFileFn: (cmd, args, cb) => { osaCalls.push({ cmd, args }); cb(null); },
     uninstallFn: (opts) => uninstalls.push(opts),
@@ -55,7 +58,7 @@ async function boot() {
   const server = app.listen(0, '127.0.0.1');
   await new Promise((r) => server.once('listening', r));
   const base = () => `http://127.0.0.1:${server.address().port}`;
-  return { db, spawnFn, caffSpawn, usageSpawn, usage, runner, scheduler, awake, pause, server, base, osaCalls, uninstalls };
+  return { db, spawnFn, caffSpawn, usageSpawn, usage, runner, scheduler, awake, pause, server, base, osaCalls, uninstalls, token: currentToken };
 }
 
 // A second boot whose usage monitor is a fixed snapshot rather than a probe: the
@@ -103,11 +106,13 @@ async function bootWithUsage({ fiveHour = 20, sevenDay = 20, buckets = [], reset
   // stand-in — which is what the burst tests use to activate a project.
   const beadsStub = withBurst ? { version: async () => '1.1.0', healthy: async () => ({ ok: true }) } : null;
   const burst = withBurst ? createBurst({ db, usage, budget, projects }) : null;
-  const app = createApp({ db, runner, scheduler, extensions, awake: null, usage, budget, projects, beads: beadsStub, burst });
+  currentToken = ensureToken();
+  const app = createApp({ db, runner, scheduler, extensions, awake: null, usage, budget, projects, beads: beadsStub, burst, token: currentToken });
   const server = app.listen(0, '127.0.0.1');
   await new Promise((r) => server.once('listening', r));
   return {
     db, spawnFn, usage, snap, resetsAt, runner, scheduler, server, burst, polls,
+    token: currentToken,
     base: () => `http://127.0.0.1:${server.address().port}`,
   };
 }
@@ -120,10 +125,18 @@ async function answerProbe(usageSpawn, payload = USAGE_PAYLOAD) {
     JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: '1', response: payload } }) + '\n');
 }
 
-async function req(base, method, path, body) {
+// Set by every boot helper below. req() sends it by default, so the ~200
+// existing call sites need no change when the token became mandatory — and a
+// test that wants to probe a wrong or absent key passes `token` explicitly.
+let currentToken = null;
+
+async function req(base, method, path, body, { token = currentToken } = {}) {
   const res = await fetch(base + path, {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
     body: body ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
@@ -251,8 +264,7 @@ test('stop endpoint: 202 active, 409 finished, 404 unknown', async (t) => {
   assert.equal(r.body.meta.stopRung, 'SIGINT');
   assert.equal(spawnFn.calls[0].child.killedWith, 'SIGINT');
 
-  // A `stopped` run is finished — not active for the kill guard, the stop guard,
-  // or the SSE live check.
+  // A `stopped` run is finished — not active for the kill guard or the stop guard.
   r = await req(base(), 'POST', `/api/runs/${run.id}/stop`);
   assert.equal(r.status, 409);
   r = await req(base(), 'POST', `/api/runs/${run.id}/kill`);
@@ -260,9 +272,10 @@ test('stop endpoint: 202 active, 409 finished, 404 unknown', async (t) => {
   r = await req(base(), 'POST', '/api/runs/nope/stop');
   assert.equal(r.status, 404);
 
-  const sse = await fetch(`${base()}/api/runs/${run.id}/tail`);
-  const text = await sse.text();
-  assert.match(text, /event: done\ndata: stopped/, 'the tail closes rather than hanging open');
+  // The log is readable as a snapshot, and it records the wind-down.
+  r = await req(base(), 'GET', `/api/runs/${run.id}/log`);
+  assert.equal(r.status, 200);
+  assert.match(r.raw, /winding down/, 'the stop ladder wrote its reason to the log');
 
   // And it is reachable under its own history filter.
   r = await req(base(), 'GET', '/api/runs?status=stopped');
@@ -351,7 +364,7 @@ test('settings: softGraceMs round-trips and rejects out-of-range values', async 
   }
 });
 
-test('SSE tail streams history + done for finished run', async (t) => {
+test('the log route returns a snapshot of the whole log', async (t) => {
   const { spawnFn, server, base } = await boot();
   t.after(() => server.close());
 
@@ -361,10 +374,20 @@ test('SSE tail streams history + done for finished run', async (t) => {
   spawnFn.calls[0].child.emit('close', 0);
   await sleep(30);
 
-  const res = await fetch(`${base()}/api/runs/${run.id}/tail`);
-  const text = await res.text(); // finished run → server ends stream
-  assert.ok(text.includes('data: hello world'));
-  assert.ok(text.includes('event: done'));
+  const r = await req(base(), 'GET', `/api/runs/${run.id}/log`);
+  assert.equal(r.status, 200);
+  assert.match(r.raw, /hello world/);
+});
+
+test('the SSE tail route is gone — EventSource cannot carry the token', async (t) => {
+  const { server, base } = await boot();
+  t.after(() => server.close());
+
+  // Pinned deliberately. Reintroducing a stream endpoint would mean either a
+  // second authentication path or the token in a URL, and the log drawer works
+  // as a snapshot plus Refresh instead. See the note where the route used to be.
+  const r = await req(base(), 'GET', '/api/runs/anything/tail');
+  assert.equal(r.status, 404);
 });
 
 test('schedule preview + settings round-trip (per-extension)', async (t) => {
@@ -940,7 +963,8 @@ async function bootWithProjects({ handlers = {}, fsx = null } = {}) {
     // out there instead of depending on whatever happens to be on this machine.
     fsx: fsx ?? { readdir: async () => [], readFile: async () => { throw new Error('ENOENT'); } },
   });
-  const app = createApp({ db, runner, scheduler, extensions, awake: null, projects, beads });
+  currentToken = ensureToken();
+  const app = createApp({ db, runner, scheduler, extensions, awake: null, projects, beads, token: currentToken });
   const server = app.listen(0, '127.0.0.1');
   await new Promise((r) => server.once('listening', r));
   return {
@@ -1413,16 +1437,69 @@ test('the guards accept every name a human might browse to', async (t) => {
   // localhost and [::1] are as legitimate as 127.0.0.1, and the port must not
   // matter. `[::1]:port` also pins the parse: splitting on the first colon
   // would cut an IPv6 literal in half and lock the user out of their own app.
+  // The token rides along here too: these assert the *host* guard lets the
+  // request through, which is only observable once auth also succeeds.
+  const auth = { Authorization: `Bearer ${currentToken}` };
   for (const host of [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`, 'localhost', 'LOCALHOST']) {
-    const r = await rawReq(port, { path: '/api/settings', headers: { Host: host } });
+    const r = await rawReq(port, { path: '/api/settings', headers: { Host: host, ...auth } });
     assert.equal(r.status, 200, host);
   }
   for (const origin of [`http://localhost:${port}`, `http://127.0.0.1:${port}`, `http://[::1]:${port}`]) {
     const r = await rawReq(port, {
       method: 'PUT', path: '/api/pause',
-      headers: { Host: `127.0.0.1:${port}`, 'Content-Type': 'application/json', Origin: origin },
+      headers: { Host: `127.0.0.1:${port}`, 'Content-Type': 'application/json', Origin: origin, ...auth },
       body: JSON.stringify({ mode: 'off' }),
     });
     assert.equal(r.status, 200, origin);
   }
+});
+
+// ---------------- the capability token (Layer 1)
+
+test('every /api route requires the token, and the static shell does not', async (t) => {
+  const { server, base } = await boot();
+  t.after(() => server.close());
+
+  // Enumerated from the source rather than hand-listed, so a route added later
+  // cannot silently ship unauthenticated — the failure mode this test exists for
+  // is the NEXT route somebody writes.
+  const src = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+  const routes = [...src.matchAll(/app\.(get|post|put|patch|delete)\('(\/api[^']*)'/g)]
+    .map((m) => ({ method: m[1].toUpperCase(), path: m[2] }));
+  assert.ok(routes.length >= 38, `expected the real route table, got ${routes.length}`);
+
+  for (const r of routes) {
+    // Any :param becomes a value that would 404 *after* auth, never before, so a
+    // 401 here can only come from the token check.
+    const path = r.path.replace(/:[A-Za-z]+/g, 'nonexistent');
+    const res = await fetch(base() + path, {
+      method: r.method,
+      headers: { 'Content-Type': 'application/json' },
+      body: ['POST', 'PUT', 'PATCH', 'DELETE'].includes(r.method) ? '{}' : undefined,
+    });
+    assert.equal(res.status, 401, `${r.method} ${path} must require the token`);
+    assert.equal((await res.json()).code, 'token_invalid', `${r.method} ${path} code`);
+  }
+
+  // The shell carries no data and must load, so the page can say it has no key
+  // rather than showing a blank window.
+  assert.equal((await fetch(base() + '/')).status, 200);
+  assert.equal((await fetch(base() + '/app.js')).status, 200);
+});
+
+test('a wrong, absent or malformed token is refused; the right one works', async (t) => {
+  const { server, base, token } = await boot();
+  t.after(() => server.close());
+  const get = (headers) => fetch(base() + '/api/settings', { headers });
+
+  assert.equal((await get({})).status, 401, 'no header at all');
+  assert.equal((await get({ Authorization: 'Bearer wrong' })).status, 401);
+  assert.equal((await get({ Authorization: token })).status, 401, 'missing the Bearer prefix');
+  assert.equal((await get({ Authorization: `Bearer ${token}x` })).status, 401, 'longer');
+  assert.equal((await get({ Authorization: `Bearer ${token.slice(0, -1)}` })).status, 401, 'shorter');
+  // 64 multibyte characters: the same character length as a real token but twice
+  // the byte length. This is the input that made an earlier draft of
+  // tokenMatches throw inside timingSafeEqual and answer 500 instead of 401.
+  assert.equal((await get({ Authorization: `Bearer ${'\u00e9'.repeat(64)}` })).status, 401, 'multibyte');
+  assert.equal((await get({ Authorization: `Bearer ${token}` })).status, 200, 'the real key works');
 });
