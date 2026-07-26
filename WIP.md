@@ -5,17 +5,27 @@
 Everything not yet done, newest concern first. Each links to the section holding the
 detail; nothing is tracked anywhere else, so if it is not here it is not tracked.
 
-- [ ] **Wind-down is not graceful for a run with subagents** — reported 2026-07-26, evidence
-      gathered, not yet diagnosed. Start here. → [Open bug](#-open-bug-reported-2026-07-26--wind-down-is-not-graceful-for-a-run-with-subagents)
+**Open work now lives in beads, not here.** This repo adopted `bd` on 2026-07-26 and declared
+itself to the scheduler in `.scheduler.json`. `bd ready` is the list; this file keeps the
+reasoning a bead title cannot carry. The two must be updated together — bead for state, WIP.md
+for evidence.
+
+```
+bd ready                      # what is actionable
+bd ready --label unattended    # ...and what the scheduler may run by itself
+```
+
+Filed at adoption: the wind-down bug (now fixed, below), M5's epic and its three remaining
+steps chained in order, the deferred M6, and the five smaller items this list used to carry in
+prose. Registration stops at `pending` — activation is a human's Touch ID, so nothing here runs
+unattended until you click.
+
+- [x] **Wind-down is not graceful for a run with subagents** — fixed and verified 2026-07-26.
+      → [Diagnosis](#-fixed-2026-07-26--wind-down-was-not-graceful-for-a-run-with-subagents)
 - [ ] **M5 step 4** — `/api/sessions/*` routes → [M5](#v2--launchbox-session--usage-management)
 - [ ] **M5 step 5** — Sessions tab + run↔session cross-links
 - [ ] **M5 step 6** — live CDP verification + a fresh screenshot baseline
 - [ ] **M6 (deferred)** — full rename with migration; optional `node:sqlite`
-
-Smaller things recorded in place, not worth their own line above: two UI warts filed from the
-v0 screenshot session (a stale overlap-skipped row hiding the ⤓/■ controls; a discovered repo
-silently normalising an invalid `.scheduler.json` value), and a cosmetic settings-toast race
-where two saves inside 2s let the first one's timer wipe the second's `saved ✓`.
 
 ## v1 — scheduling core: SHIPPED
 
@@ -218,46 +228,109 @@ armed. Reopen the UI with `node bin/claude-scheduler.mjs open`.
 Stability: `npm test` run 3× → 359/359 each time, no flakes. `tools/verify-auth-ui.mjs` re-run →
 19/19.
 
-## ⚠️ Open bug, reported 2026-07-26 — wind-down is not graceful for a run with subagents
+## ✅ Fixed 2026-07-26 — wind-down was not graceful for a run with subagents
 
-- [ ] **OPEN — not diagnosed.** Evidence below; the ladder is exonerated, the suspicion is M5-adjacent.
+- [x] **FIXED and verified end-to-end.** Bead `claude-scheduler-k9p`.
 
-**Next session should start here, ahead of M5 step 4.** User report: "wind down isn't working
-properly — it forces the agent to stop. Tried it on a previously running session and it immediately
-stopped its background agents without a safe stop."
+User report: "wind down isn't working properly — it forces the agent to stop. Tried it on a
+previously running session and it immediately stopped its background agents without a safe
+stop." **Disambiguated first, as this section previously insisted: confirmed to be LaunchBox's
+⤓ button, not Claude Code's own wind-down.**
 
-**Not investigated yet — this is a lead with some evidence attached, not a diagnosis.** What is
-already measured:
+### Root cause, measured rather than assumed
 
-- **The stop ladder is not the culprit, and one hypothesis is already eliminated.** The single real
-  claude wind-down in the live database reads `stopped`, `stopRung: SIGINT`, `exitCode: 0` after a
-  39.9-minute run (`2026-07-26T03:22:11Z`, session `cc8bec1c`) — **one signal, no escalation**. And
-  `softGraceMs` is at its `120000` default, so the "M3 live verification lowered it to 6s and never
-  restored it" theory is **wrong**: nothing escalated early.
-- So **a single SIGINT to `claude -p` is by itself enough to abruptly drop in-flight subagents.**
-  M3's spike measured that SIGINT denies the in-flight *tool call* before it runs, emits a final
-  `result`, exits 0, and leaves the session resumable — all true, all re-verified here — but **the
-  spike never ran a prompt with `Task` subagents in flight.** A subagent's work is not a tool call
-  the parent can decline on the way out; it is work already in progress that gets discarded. That
-  gap is the most likely root cause and it is a gap in the *measurement*, not in the ladder.
-- **The control channel does not help here.** M3 measured `interrupt` as behaviourally *identical*
-  to plain SIGINT, which is why it was deferred. Do not re-reach for it expecting a gentler stop.
+The previous hypothesis was right, and is now measured. A real `claude -p` with two Task
+subagents mid-generation, sent one SIGINT:
 
-**Promising direction, and M5 just built the machinery for it:** an in-flight subagent is a
-`<sessionUuid>/subagents/agent-*.jsonl` file being appended to right now — 101 such files, 66MB, on
-this machine. `lib/sessions.js` already discovers and mtime-watches exactly that tree. So "is this
-run safe to wind down?" becomes an answerable question instead of a guess: no subagent transcript
-touched inside the liveness window. That turns the wind-down from *ask and hope* into either
-"defer the SIGINT until the fan-out settles" or "tell the user N subagents are mid-flight and let
-them choose", with a bounded wait so a wedged subagent cannot block a stop forever.
+| | uninterrupted | SIGINT during fan-out |
+| --- | --- | --- |
+| time to exit | 158s (ran to completion) | **985ms after the signal** |
+| `result` event | `success`, `is_error: false` | **`error_during_execution`, `is_error: true`** |
+| exit code | 0 | 0 |
+| subagent transcripts | 27.2KB / 25.9KB, ending in the answer | frozen ~18KB, **`[Request interrupted by user]`** |
 
-**Disambiguate first:** the report may partly concern Claude Code's *own* wind-down rather than
-LaunchBox's ⤓ button — both were exercised in the same sitting. The two have different fixes and
-only one of them is ours.
+So a single SIGINT abandons in-flight fan-out in under a second. A subagent's work is not a
+tool call the parent can decline on its way out; it is work already in progress, and it is
+discarded. The stop ladder was never the culprit — `requestStop()` simply sent rung 1 with no
+knowledge of fan-out, while its own log line promised "winding down at the next safe point".
+For fan-out there is no such point, so **waiting for it to finish IS the safe point.**
+
+Note the `error_during_execution` result was already handled correctly (`lib/runner.js`, the
+comment above `child.on('close')`) — the run is recorded `stopped`, not `fail`. That part of
+the M3 spike held up.
+
+### The fix
+
+`requestStop()` now holds rung 1 while the run has subagents in flight, bounded by
+`subagentHoldMs` (default 300s) so a wedged subagent cannot make a stop unstoppable. The
+soft-grace ladder is armed **by the SIGINT, not by the request**, or a long hold would eat the
+grace the child was promised. A hard `kill` still overtakes the hold immediately.
+
+### ⚠️ The direction this section used to recommend was WRONG — mtime is not the signal
+
+The previous plan here was to reuse `lib/sessions.js`'s mtime watch over
+`<sessionUuid>/subagents/agent-*.jsonl`: "no subagent transcript touched inside the liveness
+window". **That was implemented, verified live, and failed** — the fix looked correct and was
+not:
+
+**A subagent transcript is written at START — ~18KB of prompt plus attachments — and then
+nothing is appended until it FINISHES**, when the answer lands in one go. A subagent that is
+thinking therefore looks *idle* on disk. A 15s mtime window reported "fan-out settled after
+16s" while both subagents were still generating, and the SIGINT killed them exactly as before.
+The tell was the transcripts growing by only ~565B — which is the size of the interruption
+record, not of an answer.
+
+`liveSubagentCount` is therefore **content-based**, and the record shapes are measured:
+
+| last record in the transcript | meaning |
+| --- | --- |
+| `assistant` with terminal text | finished — that is the answer |
+| `assistant` with `text` *and* `tool_use` | still working, waiting on a tool |
+| `user` with `tool_result` | still working |
+| the prompt, or an `attachment` | still working, has not begun answering |
+| `user` = `[Request interrupted by user]` | already aborted; nothing to wait for |
+
+mtime survives only as a staleness bound (`DEFAULT_SUBAGENT_STALE_MS`, 10min): a crashed run
+leaves transcripts mid-conversation forever, and without it every later stop in that session
+would wait out the full hold cap.
+
+Also measured, and the reason the probe is keyed on the session id across all project dirs
+rather than on a slug built from the run's cwd: **Claude slugs the *resolved* cwd**, so a run
+under `/var/...` lands in `-private-var-...`. The first probe of this bug derived the slug from
+the unresolved path, watched a directory that never appeared, and reported a clean stop.
+
+### Verification
+
+- 386/386 tests, stable across 3 consecutive full runs.
+- 6 ladder invariants and 5 probe invariants mutation-checked. **Four of them were decorative
+  when first written and were rewritten until they failed**: two ladder tests passed because the
+  fake fan-out never settled or because the fake child exited on SIGTERM before the guard was
+  reached; the `tool_use` test used a pure `tool_use` block, which the terminal-text test
+  already rejects, so it could not see the guard; and the truncated-line test put only a prompt
+  behind the partial line, giving the same answer either way.
+- **Live, on the real path** — real `claude -p`, real subagents, real probe, no injection:
+  held with 2 in flight, released after 40s, transcripts grew 18KB → 28KB ending in 6019- and
+  6185-character answers, `[Request interrupted by user]` absent, SIGINT the only signal, run
+  `stopped` with the session resumable.
+
+### One thing to watch
+
+The hold makes a wind-down take as long as the fan-out does — up to 300s by default. That is
+the intended trade (the button promises graceful), but if a soft pause ever needs to drain fast,
+`subagentHoldMs` is the lever, and `kill` still stops immediately.
+
+Do NOT reach for the stdin control channel here: M3 measured `interrupt` as behaviourally
+identical to SIGINT, so it buys nothing.
 
 ## Environment notes
 
 - **`better-sqlite3` and macOS Gatekeeper.** The downloaded prebuilt `.node` gets flagged by XProtect and removed — symptom is `ERR_DLOPEN_FAILED: library load disallowed by system policy`, or an empty `node_modules/better-sqlite3/build/Release/`, plus "unsafe software" popups. Fix: `npm rebuild better-sqlite3 --build-from-source`. A locally compiled binary is ad-hoc linker-signed with no `com.apple.quarantine` xattr, so Gatekeeper leaves it alone. Node 26 is also newer than the shipped prebuild ABI. M6 tracks migrating to built-in `node:sqlite` (verified available on this Node) to remove the native dep entirely.
 - Dev server: `CS_DATA=$(mktemp -d) CS_PORT=18741 node server.js`. Tests: `npm test` (sandboxed `CS_DATA`, fake spawns).
+- A flake was **introduced and removed on 2026-07-26** while adding the subagent-hold tests, and
+  it is worth knowing the shape: asserting `windowMs: 0` counts nothing is racy, because the
+  cutoff is then exactly `now()` and a file written in the same millisecond satisfies
+  `mtimeMs >= cutoff` legitimately. It failed 1 run in 4. Fixed by moving the injected clock
+  instead of squeezing the window to zero. This is the same load-sensitive class as the item
+  below, and evidence that this class is easy to write here.
 - **⚠️ One unidentified intermittent test failure, seen once on 2026-07-25 and not reproduced in the 10 runs after it.** The test *name* wasn't captured, so this is a lead rather than a diagnosis — worth grabbing the name if it recurs. Context: it appeared while Chrome and two dev servers were also running, so load-sensitive timing is the first suspect. A *different* load-sensitive flake was found and fixed the same day (the claude-run test read its log file before the write stream had flushed — see M4 step 2), which is evidence this class of test exists here rather than that this instance is the same one.
 - Usage probe (ground truth, ~2s, $0): `printf '%s\n' '{"type":"control_request","request_id":"1","request":{"subtype":"get_usage"}}' | claude -p --input-format stream-json --output-format stream-json --verbose`
