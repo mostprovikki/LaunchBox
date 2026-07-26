@@ -1,10 +1,11 @@
 import express from 'express';
 import { execFile } from 'node:child_process';
-import { existsSync, readFileSync, statSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, dirname, isAbsolute, resolve as resolvePath } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { ensureDirs, dbPath } from './lib/paths.js';
+import { ensureDirs, dbPath, dataDir } from './lib/paths.js';
+import { ensureToken, tokenMatches } from './lib/token.js';
 import {
   openDb, createJob, listJobs, getJob, updateJob, deleteJob,
   insertRun, getRun, listRuns, lastRun, failOrphanRuns,
@@ -107,6 +108,9 @@ export function createApp({
   projects = null, beads = null, burst = null,
   execFileFn = execFile, uninstallFn = startUninstall,
   usageRefreshFloorMs = POLL_FLOOR_SEC * 1000,
+  // Injectable so a test can pin a known value; otherwise read from (or created
+  // in) the data directory.
+  token = null,
 }) {
   const app = express();
 
@@ -143,6 +147,32 @@ export function createApp({
     const type = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
     if (type !== 'application/json') {
       return res.status(415).json({ error: 'content-type must be application/json' });
+    }
+    return next();
+  });
+
+  // Layer 1 of docs/specs/2026-07-26-local-api-auth-design.md.
+  //
+  // Mounted on /api only, deliberately: index.html and the ES modules carry no
+  // data of their own, and the page has to be able to load in order to present
+  // the token it was handed or to explain that it has none. Gating the shell
+  // too would leave a blank window with nowhere to say why.
+  //
+  // This is the layer that holds when the header guards above do not — a browser
+  // extension with localhost permission, or a port that becomes reachable by
+  // accident through a container forward, an `ssh -R`, or a VPN misconfig.
+  const expectedToken = token ?? ensureToken();
+  app.use('/api', (req, res, next) => {
+    const header = String(req.headers.authorization || '');
+    const provided = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+    if (!tokenMatches(expectedToken, provided)) {
+      // A distinct machine-readable code, not just prose: the frontend must
+      // raise a persistent banner for this and never confuse it with an
+      // approval refusal, which is recoverable by pressing Submit again.
+      return res.status(401).json({
+        error: 'this session key is not valid — stop the scheduler, start it again, then reopen with: claude-scheduler open',
+        code: 'token_invalid',
+      });
     }
     return next();
   });
@@ -279,33 +309,16 @@ export function createApp({
     res.type('text/plain').send(run.logPath && existsSync(run.logPath) ? readFileSync(run.logPath, 'utf8') : '');
   });
 
-  app.get('/api/runs/:id/tail', (req, res) => {
-    const run = getRun(db, req.params.id);
-    if (!run) return res.status(404).json({ error: 'not found' });
-    res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
-    res.flushHeaders();
-    const send = (event, data) => res.write((event ? `event: ${event}\n` : '') + `data: ${data}\n\n`);
-
-    if (run.logPath && existsSync(run.logPath)) {
-      for (const l of readFileSync(run.logPath, 'utf8').split('\n')) if (l) send(null, l);
-    }
-    if (!['running', 'queued'].includes(run.status)) {
-      send('done', run.status);
-      return res.end();
-    }
-    const onLine = (l) => send(null, l);
-    const onProgress = (p) => send('progress', JSON.stringify(p));
-    const onDone = (status) => { send('done', status); cleanup(); res.end(); };
-    const cleanup = () => {
-      runner.events.off(`line:${run.id}`, onLine);
-      runner.events.off(`progress:${run.id}`, onProgress);
-      runner.events.off(`done:${run.id}`, onDone);
-    };
-    runner.events.on(`line:${run.id}`, onLine);
-    runner.events.on(`progress:${run.id}`, onProgress);
-    runner.events.on(`done:${run.id}`, onDone);
-    req.on('close', cleanup);
-  });
+  // There is deliberately no SSE tail route. `EventSource` cannot send an
+  // `Authorization` header — its entire API is `new EventSource(url)` — so once
+  // the capability token is required on /api/*, a live tail would either 401 or
+  // need the token in the URL, giving the API a second auth path and putting the
+  // secret in a place that leaks (history, DevTools, any future access log).
+  //
+  // Instead the web view is an honest snapshot: GET /api/runs/:id/log above
+  // returns the whole log, and the drawer offers Refresh plus a `tail -f`
+  // command for anyone who wants to follow output live in a terminal.
+  // See docs/specs/2026-07-26-local-api-auth-design.md.
 
   // `{next, unknown}` — `unknown` means an afterReset entry whose reset time
   // isn't known yet, which is a state to report, not an error.
@@ -1113,6 +1126,14 @@ export async function main() {
   const app = createApp({ db, runner, scheduler, extensions, awake, usage, budget, pause, projects, beads, burst });
   const port = Number(process.env.CS_PORT) || 9099;
   const server = app.listen(port, '127.0.0.1', () => {
+    // Publish the port we actually bound, so `claude-scheduler open` builds a
+    // URL that works even when CS_PORT moved it. The alternative — having the
+    // CLI guess, or read a `port` setting nothing ever writes — sends the user
+    // to the wrong port with a valid token, which reads as "the token is
+    // broken". Written after listen so it only ever reflects a live daemon.
+    try {
+      writeFileSync(join(dataDir(), 'port'), `${port}\n`);
+    } catch { /* a missing port file just means the CLI falls back */ }
     console.log(`claude-scheduler on http://127.0.0.1:${port} · extensions: ${[...extensions.keys()].join(', ')}`);
   });
   app.locals.server = server;
