@@ -15,7 +15,7 @@
 
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readdir, rm, writeFile, chmod } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile, chmod } from 'node:fs/promises';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -131,13 +131,37 @@ async function main() {
   const dataDir = await mkdtemp(join(tmpdir(), 'cs-shots-data-'));
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
-  const api = new Api(baseUrl);
+  // Filled in after the daemon boots and writes its token file.
+  let api = new Api(baseUrl);
 
   log(`claude-scheduler screenshots → ${outDir}`);
   log(`  sandbox CS_DATA=${dataDir}  port=${port}`);
 
   // Fake claude, and pre-seed it as claudePath BEFORE boot so the extension's
   // autodetect execSync is skipped and the very first probe uses the fake.
+  // A non-prompting stand-in for the approval helper, written into the SANDBOX
+  // data dir only. Creating a job is gated by a system Touch ID dialog, so
+  // without this the harness answers 503 on every seed call and captures 40
+  // screenshots of an empty app — and with the real helper it would raise ~15
+  // modal dialogs at whoever ran it.
+  //
+  // ⚠️ This is safe *because* it lives in a throwaway CS_DATA that is deleted at
+  // the end of the run. It must never be copied into a real install: the whole
+  // point of the real helper is that it cannot be satisfied without a human.
+  // Same principle as the fake `claude` below — a capture run must not depend on,
+  // or be able to affect, anything real.
+  await mkdir(join(dataDir, 'bin'), { recursive: true });
+  const stubHelper = join(dataDir, 'bin', 'LaunchBox');
+  await writeFile(stubHelper, [
+    '#!/bin/bash',
+    '# sandbox stub — auto-approves. See tools/screenshots/capture.mjs.',
+    'if [ "$1" = "--check" ]; then echo \'{"mode":"check","canEvaluate":true,"errorCode":0}\'; exit 0; fi',
+    'echo \'{"mode":"auth","success":true,"errorCode":0}\'',
+    'exit 0',
+    '',
+  ].join('\n'));
+  await chmod(stubHelper, 0o755);
+
   const fakeClaude = join(dataDir, 'fake-claude.mjs');
   await writeFile(fakeClaude, FAKE_CLAUDE);
   await chmod(fakeClaude, 0o755);
@@ -181,9 +205,18 @@ async function main() {
       if (code !== 0 && code !== null) log(`  server exited early (${code}):\n${serverLog.slice(-1500)}`);
     });
 
+    // Probes `/`, not /api/settings: every /api route now answers 401 without the
+    // capability token, and `.ok` would therefore never become true — the harness
+    // would time out against a perfectly healthy daemon.
     await waitFor(async () => {
-      try { return (await fetch(`${baseUrl}/api/settings`)).ok; } catch { return false; }
+      try { return (await fetch(`${baseUrl}/`)).ok; } catch { return false; }
     }, 30_000, 'the server to listen');
+
+    // The daemon creates this on first boot; read it rather than generating one,
+    // so the harness uses the same key the running instance expects.
+    const token = (await readFile(join(dataDir, 'token'), 'utf8')).trim();
+    api = new Api(baseUrl, token);
+    log(`· capability token loaded (${token.slice(0, 8)}…)`);
 
     log('· waiting for the (faked) usage probe');
     await waitFor(async () => {
@@ -197,6 +230,12 @@ async function main() {
     const page = browser.page;
 
     const wanted = shots.filter((s) => !opts.only || s.file.includes(opts.only));
+    // Deliver the token to the browser once. The page stores it in localStorage
+    // and strips the fragment; every later goto(`${baseUrl}/#jobs`) then carries
+    // it automatically. Without this every shot would be the auth banner.
+    await page.goto(`${baseUrl}/#token=${token}`);
+    await sleep(600);
+
     const ctx = { api, baseUrl, ids: {}, liveRunId: null, drainRunId: null };
 
     const runPhase = async (phase) => {

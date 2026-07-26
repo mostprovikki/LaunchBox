@@ -17,15 +17,22 @@ const exec = promisify(execFile);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export class Api {
-  constructor(base) { this.base = base; }
+  // `token` is the sandbox daemon's capability token. Every /api route requires
+  // it, so without this the whole harness seeds nothing and silently captures 40
+  // screenshots of the "no session key" banner.
+  constructor(base, token = null) { this.base = base; this.token = token; }
 
   async req(method, path, body) {
     const res = await fetch(this.base + path, {
       method,
-      // Unconditional, not `body ? … : undefined`: the daemon's CSRF guard
-      // requires application/json on every mutating method, and several of the
-      // calls made here (a manual run, a poll) legitimately have no body.
-      headers: { 'content-type': 'application/json' },
+      // Content-type unconditional, not `body ? … : undefined`: the daemon's
+      // CSRF guard requires application/json on every mutating method, and
+      // several of the calls made here (a manual run, a poll) legitimately have
+      // no body.
+      headers: {
+        'content-type': 'application/json',
+        ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
+      },
       body: body ? JSON.stringify(body) : undefined,
     });
     const text = await res.text();
