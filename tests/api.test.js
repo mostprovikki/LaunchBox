@@ -1646,8 +1646,11 @@ test('the deliberately ungated actions are not gated', async (t) => {
   await req(base(), 'PUT', '/api/settings', { usagePollSec: 300 });
   await req(base(), 'PUT', '/api/pause', { mode: 'hold' });
 
-  const gated = approval.asked.filter((a) => a.action !== 'job.edit');
-  assert.deepEqual(gated, [], `unexpected prompts: ${JSON.stringify(gated)}`);
+  // Asserts on EVERY prompt, with no filter. The first version excluded
+  // 'job.edit' — which is the prompt disabling raises — so it passed whether or
+  // not disabling was gated, and it hid that isOnlyDisabling never returned true.
+  assert.deepEqual(approval.asked, [],
+    `none of these should prompt: ${JSON.stringify(approval.asked.map((a) => a.action))}`);
 });
 
 test('grace is offered for job edits and never for the destructive actions', async (t) => {
@@ -1676,4 +1679,47 @@ test('grace is offered for job edits and never for the destructive actions', asy
   approval.asked.length = 0;
   await req(base(), 'PUT', `/api/projects/${listProjects(db).at(-1).id}`, { state: 'active' });
   assert.equal(approval.asked[0].grace, false, 'activation must never ride the grace window');
+});
+
+test('deleting a job or a project is gated, and a refusal destroys nothing', async (t) => {
+  // POST /api/cleanup is gated on data-loss grounds, so a token holder looping
+  // DELETE /api/jobs/:id to the identical end state must not be a free pass.
+  const { server, base, approval, db } = await bootGated({ ok: false, code: 'approval_denied' });
+  t.after(() => server.close());
+
+  approval.request = async (spec) => { approval.asked.push(spec); return { ok: true }; };
+  const { body: job } = await req(base(), 'POST', '/api/jobs', jobPayload({ name: 'precious' }));
+  createProject(db, { name: 'repo', path: '/repo', state: 'active', config: PROJECT_CONFIG });
+  const proj = listProjects(db)[0];
+
+  approval.request = async (spec) => { approval.asked.push(spec); return { ok: false, code: 'approval_denied' }; };
+  approval.asked.length = 0;
+
+  let r = await req(base(), 'DELETE', `/api/jobs/${job.id}`);
+  assert.equal(r.status, 403);
+  assert.equal(r.body.code, 'approval_denied');
+  assert.equal(listJobs(db).length, 1, 'the job survives a refused delete');
+  assert.equal(approval.asked[0].action, 'job.delete');
+  assert.equal(approval.asked[0].grace, false, 'deletion is irreversible: never graced');
+
+  approval.asked.length = 0;
+  r = await req(base(), 'DELETE', `/api/projects/${proj.id}`);
+  assert.equal(r.status, 403);
+  assert.equal(approval.asked[0].action, 'project.delete');
+  // The gate must precede the bead-job deletion, not follow it.
+  assert.equal(listProjects(db).length, 1, 'the project survives a refused delete');
+});
+
+test('the burn-down apply route is gated: it force-enables jobs', async (t) => {
+  const { server, base, approval } = await bootGated({ ok: false, code: 'approval_denied' });
+  t.after(() => server.close());
+  approval.asked.length = 0;
+
+  // It enables whatever it is handed, which is the "enable a disabled job" the
+  // spec gates — for an arbitrary set, with future fire times attached.
+  const r = await req(base(), 'POST', '/api/budget/plan/apply', { slots: [] });
+  assert.equal(r.status, 403);
+  assert.equal(r.body.code, 'approval_denied');
+  assert.equal(approval.asked[0].action, 'budget.plan.apply');
+  assert.equal(approval.asked[0].grace, false);
 });
