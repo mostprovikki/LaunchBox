@@ -174,14 +174,16 @@ work: *"I don't want any other service/website to be able to schedule jobs on my
   - **Accepted, not fixed:** substituting the helper binary defeats the gate — `available()` is `existsSync`, and `swiftc` signs an attacker's replacement just as validly, so "137 detects tampering" catches *patching* a signed binary and not *replacing* one. Same-user only, and the same class as an unsigned extension flipping `process.platform`. This is also an honest correction to an earlier claim: "no local process can satisfy its dialog" is true of the *dialog* and false of the *gate*.
 - [ ] **Task 13 · the batched human session — `docs/spikes/auth-verify.sh`.** 8 steps, **5 dialogs**. Irreducible: what remains is the approve and deny outcomes, which cannot be satisfied without a human by design. Automating the click was attempted and refused by macOS (`-1743`), and granting the Automation permission that would allow it would weaken the machine to test a feature meant to protect it.
 
-**Status: 368/368 tests · 19/19 driving the real UI in Chrome · 40/40 screenshots · 5/5 against the
-real Touch ID helper · 22/22 in the batched session's dry run · 13 defects found and fixed by
+**Status: 371/371 tests · 19/19 driving the real UI in Chrome · 40/40 screenshots · 5/5 against the
+real Touch ID helper · 22/22 in the batched session's dry run · 16 defects found and fixed by
 adversarial review, including one complete Layer-2 bypass.**
 
-Everything the review found that is fixable is fixed. What remains open is one accepted
-same-user limitation (substituting the helper binary, plus the equivalent via an unsigned
-extension flipping `process.platform`) and two cosmetic items — all four recorded with reasoning
-in the spec's "Known and NOT fixed" table. Everything is code-complete and verified except the one step that
+**Everything the review found is now fixed except one irreducible item.** The helper binary is
+checksummed at install and re-verified before every spawn (verified by substituting an
+always-approve binary: refused, and the log names the mismatch); `process.platform` is snapshotted
+at module load, out of reach of an extension; and the `Origin` port is pinned. What remains is
+same-user code able to overwrite **both** the binary and its pin — which needs a root of trust
+outside the user's own account, and this design has none to offer. Everything is code-complete and verified except the one step that
 requires a human fingerprint.
 
 ✅ **The live daemon now runs the patched build** (restarted 2026-07-26, pid replaced, all 15 jobs
