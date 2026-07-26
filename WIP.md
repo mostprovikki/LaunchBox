@@ -1,5 +1,22 @@
 # WIP
 
+## Open work — the whole list
+
+Everything not yet done, newest concern first. Each links to the section holding the
+detail; nothing is tracked anywhere else, so if it is not here it is not tracked.
+
+- [ ] **Wind-down is not graceful for a run with subagents** — reported 2026-07-26, evidence
+      gathered, not yet diagnosed. Start here. → [Open bug](#-open-bug-reported-2026-07-26--wind-down-is-not-graceful-for-a-run-with-subagents)
+- [ ] **M5 step 4** — `/api/sessions/*` routes → [M5](#v2--launchbox-session--usage-management)
+- [ ] **M5 step 5** — Sessions tab + run↔session cross-links
+- [ ] **M5 step 6** — live CDP verification + a fresh screenshot baseline
+- [ ] **M6 (deferred)** — full rename with migration; optional `node:sqlite`
+
+Smaller things recorded in place, not worth their own line above: two UI warts filed from the
+v0 screenshot session (a stale overlap-skipped row hiding the ⤓/■ controls; a discovered repo
+silently normalising an invalid `.scheduler.json` value), and a cosmetic settings-toast race
+where two saves inside 2s let the first one's timer wipe the second's `saved ✓`.
+
 ## v1 — scheduling core: SHIPPED
 
 Plan: `docs/plans/2026-07-17-claude-scheduler.md` · design: `docs/specs/2026-07-17-claude-scheduler-design.md`.
@@ -117,7 +134,7 @@ Design: `docs/specs/2026-07-25-launchbox-design.md`. Each milestone has its own 
   - Two guards, two different attacks. **`Content-Type: application/json` on POST/PUT/PATCH/DELETE** closes CSRF (a cross-origin form can only send urlencoded/multipart/text-plain; a `fetch` that sets JSON becomes preflighted, which we never answer). Note that rejecting an unparseable *body* would **not** have helped — the destructive routes take no body at all, so `express.json` left `req.body` as `{}` and they ran anyway. **The header is the signal, not the payload.** A **loopback-only `Host`/`Origin`** defeats DNS rebinding, which is what turns a read-only endpoint into exfiltration — and M5 makes that payoff enormous, since `/api/sessions/:id/conversation` would serve every word the user has ever typed into Claude Code.
   - Applies to **every** route including GET, ahead of `express.json` and `express.static`. **This is a new convention** — there was no `Host`, `Origin`, CSRF or `Content-Type` check anywhere before — and it cost nothing at the callers, since `util.js`'s `api()` and the test harness already send the header unconditionally. `tools/screenshots/seed.mjs` sent it only when there was a body, and was fixed with the change.
   - ⚠️ **Testing a header-based guard needs raw `node:http`**: `fetch` silently drops a manually-set `Host` (a forbidden header in undici), so the attack arrives with a correct `Host` and passes for the wrong reason. Re-ran the original attack against the patched server: **403, both canaries intact, app unaffected.**
-- [ ] **M5 · sessions dashboard** — `2026-07-25-m5-sessions-dashboard.md` — **steps 1–3 of 5 shipped 2026-07-26, 324/324 tests pass. Steps 4–5 (API routes, Sessions tab) not started.** Plan audited against the real upstream file, then **measured against the real corpus before writing code** (57 depth-1 files, 122MB, ~27,350 rows) — see plan §5.0 for the table. Upstream is a single 2,218-line **Python** script (no `package.json`, untracked here), **65% of it UI**, so this is a ~370-line reimplementation, not a file move.
+- [ ] **M5 · sessions dashboard** — `2026-07-25-m5-sessions-dashboard.md` — **steps 1–3 of 6 shipped 2026-07-26. Steps 4–6 (API routes, Sessions tab, live verification) not started.** Suite is at 371/371 as of the v3 auth work; the 324/324 figure below was the count when M5 step 3 landed. Plan audited against the real upstream file, then **measured against the real corpus before writing code** (57 depth-1 files, 122MB, ~27,350 rows) — see plan §5.0 for the table. Upstream is a single 2,218-line **Python** script (no `package.json`, untracked here), **65% of it UI**, so this is a ~370-line reimplementation, not a file move.
   - **Measuring first changed four of the plan's rules, two of them wrong rather than merely imprecise:**
     - **The default entrypoint filter would have hidden every session §5.4 exists to show.** All 5 runs in the live DB carrying a `meta.sessionId` resolve to a real file, and **all 5 are `entrypoint: "sdk-cli"`** — what `claude -p` writes, and exactly what upstream's `INTERACTIVE_ENTRYPOINTS` excludes. Visibility is now a **union**: interactive **or** referenced by a `runs.meta.sessionId`. The one correction that changed a decision rather than a comment.
     - The prompt-noise list was missing its three largest real classes: `<task-notification>` (39), `<local-command-caveat>` (25), `<command-message>` as a **leading** prefix (3 — `/doctor` emits it before `<command-name>`). And `promptSource`/`isMeta` **cannot** be preferred over prefix-sniffing as §5.3.4 assumed: they exist on 2.3% and 1.7% of user rows.
@@ -202,6 +219,8 @@ Stability: `npm test` run 3× → 359/359 each time, no flakes. `tools/verify-au
 19/19.
 
 ## ⚠️ Open bug, reported 2026-07-26 — wind-down is not graceful for a run with subagents
+
+- [ ] **OPEN — not diagnosed.** Evidence below; the ladder is exonerated, the suspicion is M5-adjacent.
 
 **Next session should start here, ahead of M5 step 4.** User report: "wind down isn't working
 properly — it forces the agent to stop. Tried it on a previously running session and it immediately
