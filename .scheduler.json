@@ -1,0 +1,12 @@
+{
+  "enabled": true,
+  "autoLabel": "unattended",
+  "cwd": ".",
+  "maxConcurrent": 1,
+  "defaults": {
+    "timeoutMin": 45,
+    "model": "default",
+    "notify": "failure",
+    "permMode": "acceptEdits"
+  }
+}
