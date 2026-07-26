@@ -168,10 +168,15 @@ work: *"I don't want any other service/website to be able to schedule jobs on my
 the batched session's dry run.** Everything is code-complete and verified except the one step that
 requires a human fingerprint.
 
-⚠️ **A daemon may still be running the pre-auth build.** Checked 2026-07-26: PID on :9099 answered
-a tokenless `GET /api/settings` with **200**, i.e. the old code — so it is still exploitable by the
-CSRF attack until it is restarted. The fix is on disk; it is not in the running process. Restarting
-also means the UI needs `claude-scheduler open` (an existing browser tab will get the banner).
+✅ **The live daemon now runs the patched build** (restarted 2026-07-26, pid replaced, all 15 jobs
+intact, nothing was in flight). Verified against the running instance rather than a sandbox: the
+original exploit returns **403**, a form content-type **415**, the `Host` read-leak **403**, and a
+tokenless read **401** — all of which answered **200** minutes earlier. The approval helper is
+compiled into `~/.claude-scheduler/bin/LaunchBox` and reports ready, so the six gated actions are
+armed. Reopen the UI with `node bin/claude-scheduler.mjs open`.
+
+Stability: `npm test` run 3× → 359/359 each time, no flakes. `tools/verify-auth-ui.mjs` re-run →
+19/19.
 
 ## ⚠️ Open bug, reported 2026-07-26 — wind-down is not graceful for a run with subagents
 
