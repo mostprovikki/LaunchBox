@@ -10,9 +10,59 @@ At its core it's a friendly frontend for cron-style jobs. Job *types* are plugga
 ./install.sh
 ```
 
-Installs deps, writes `~/Library/LaunchAgents/com.claude-scheduler.plist` (RunAtLoad + KeepAlive) and starts the daemon. UI: **http://127.0.0.1:9099** (localhost only, no auth).
+Installs deps, builds the approval helper, writes
+`~/Library/LaunchAgents/com.claude-scheduler.plist` (RunAtLoad + KeepAlive) and starts the daemon.
 
-Data lives in `~/.claude-scheduler/` (sqlite db, per-run logs, daemon.log). The `claude` binary path is auto-detected at first boot; fix it in Settings if needed.
+**Open the UI with the CLI, not a bookmark:**
+
+```bash
+node bin/claude-scheduler.mjs open      # or: claude-scheduler open, if npm-linked
+```
+
+That prints a one-time URL carrying your session key and opens it. Visiting
+`http://127.0.0.1:9099` directly shows a banner explaining that it has no key — which is the
+point.
+
+Data lives in `~/.claude-scheduler/` (sqlite db, per-run logs, daemon.log, `token`, `bin/`). The
+`claude` binary path is auto-detected at first boot; fix it in Settings if needed.
+
+## Security
+
+Creating a job here means **arbitrary code execution on your Mac, on a schedule, under a trusted
+parent process**. That is the thing being protected, and binding to `127.0.0.1` does not protect
+it — a web page you visit can still make your browser send requests to your own machine. This was
+measured, not assumed: before these guards, one cross-origin form-style `POST` to `/api/cleanup`
+returned `200` and deleted every job in the database.
+
+Four layers, smallest first:
+
+1. **Loopback bind.** Nothing on your network can reach the port. Verified: a connection to this
+   machine's LAN address is refused.
+2. **Loopback-only `Host`/`Origin`.** Defeats DNS rebinding, the trick that turns a read-only
+   endpoint into data exfiltration on a hostile network.
+3. **`Content-Type: application/json` on every mutating method.** A cross-origin HTML form cannot
+   set that header, and a cross-origin `fetch` that does becomes preflighted — which is never
+   answered. Note that checking the *body* would not work: the destructive routes take no body.
+4. **A capability token** (`~/.claude-scheduler/token`, mode `0600`) required on every `/api`
+   route, reads included. This is what holds if a header check ever regresses, what shuts out a
+   browser extension, and what protects you if the port is ever exposed by accident — a container
+   forward, an `ssh -R`, a VPN misconfig.
+
+On top of that, six **high-power actions** additionally require Touch ID or your login password:
+creating or editing a job, activating a project, `POST /api/cleanup`, `POST /api/uninstall`, and
+**any change to `claudePath` or `bdPath`** — those name executables, so repointing one would make
+every existing job run a different binary without creating a job at all. Approving one job opens a
+5-minute window for further job edits; cleanup, uninstall, activation and the executable settings
+never ride that window, because a grace window is also an attack window.
+
+What this deliberately does **not** defend against: code already running as you. Such code can run
+your command directly instead of asking the scheduler to schedule it, so gating the API buys little
+there. The approval layer exists for the narrower cases where it does help — macOS grants
+permissions per *application*, so a job run through this daemon inherits its TCC grants, and a job
+scheduled here persists without the LaunchAgent that monitoring tools watch for.
+
+Details, including the measurements behind each decision:
+[`docs/specs/2026-07-26-local-api-auth-design.md`](docs/specs/2026-07-26-local-api-auth-design.md).
 
 ## Features
 
