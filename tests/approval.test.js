@@ -466,3 +466,50 @@ test('the flattened sentence is what actually reaches the helper argv', async ()
   assert.ok(shown.endsWith('which can run commands on this Mac'),
     'the clause stating what is granted must survive');
 });
+
+test('a queued request cannot ride the approval it waited behind', async () => {
+  // The attack this closes: an attacker holding the same capability token (a
+  // browser extension reading localStorage, a container port-forward, an ssh -R)
+  // fires a gated request and takes the dialog. The user's own request queues
+  // behind it. The user approves what they believe is their own action. Before
+  // the fix, the attacker's grace then waved the user's queued request through
+  // with NO dialog — one fingerprint, two actions, and the UI showed exactly what
+  // the user expected.
+  //
+  // Both requests carry the SAME token, because there is only one.
+  const { approval, spawnFn } = setup();
+  const attacker = approval.request({ action: 'job.create', detail: 'create the attacker job', token: 'the-only-token', grace: true });
+  await sleep(5);
+  const victim = approval.request({ action: 'job.create', detail: 'create the user job', token: 'the-only-token', grace: true });
+  await sleep(5);
+
+  assert.equal(spawnFn.calls.length, 1, 'only the first request should have a dialog open');
+
+  // The user approves the dialog that is showing — the attacker's.
+  await answer(spawnFn, { code: 0, nth: 0 });
+  assert.deepEqual(await attacker, { ok: true });
+
+  // The victim's request must now raise its OWN dialog rather than being waved
+  // through by the grace the attacker's approval opened.
+  await sleep(10);
+  assert.equal(spawnFn.calls.length, 2,
+    'the queued request must earn its own approval, not inherit one');
+  await answer(spawnFn, { code: 1, stdout: '{"errorCode":-2}', nth: -1 });
+  const out = await victim;
+  assert.equal(out.ok, false);
+  assert.equal(out.code, 'approval_denied');
+});
+
+test('grace still works for the sequential case it exists for', async () => {
+  // The legitimate use: a human edits several jobs in a row. Those requests are
+  // sequential, so they never queue behind one another and grace is honoured at
+  // entry. Removing the queue re-check must not have broken this.
+  const { approval, spawnFn } = setup();
+  const first = approval.request({ action: 'job.create', detail: 'create job one', token: 't', grace: true });
+  await answer(spawnFn, { code: 0 });
+  assert.deepEqual(await first, { ok: true });
+
+  const second = await approval.request({ action: 'job.edit', detail: 'change job one', token: 't', grace: true });
+  assert.equal(second.ok, true);
+  assert.equal(spawnFn.calls.length, 1, 'the second edit rode the window with no new dialog');
+});

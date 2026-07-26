@@ -55,6 +55,46 @@ const AUDIT_NOTE = 'Expect .beads/interactions.jsonl to show up as modified. bd 
   + 'on your behalf. If you would rather not version the audit trail at all, that is your repo\'s call: '
   + 'git rm --cached .beads/interactions.jsonl, then ignore it.';
 
+// Settings whose value names a program the daemon will execute. Changing one is
+// equivalent to replacing every job's binary at once, which is why it is gated.
+// `fallback` mirrors what the write path stores when the value is blank, so that
+// blanking a pinned absolute path — which silently downgrades it to a bare name
+// resolved through PATH — is also treated as a change needing approval.
+const EXECUTABLE_SETTINGS = [
+  { key: 'claudePath', label: 'Claude', fallback: 'claude' },
+  { key: 'bdPath', label: 'bd', fallback: 'bd' },
+];
+
+/**
+ * Every executable-naming setting this request would actually change, whichever
+ * shape it arrived in: top-level, or nested under `extensions.<id>`. Compares the
+ * *effective* value the writer would store, not the raw string, so a
+ * whitespace-only value that resets a pinned path still counts.
+ */
+function executableChanges(db, extensions, body) {
+  const out = [];
+  for (const { key, label, fallback } of EXECUTABLE_SETTINGS) {
+    const proposals = [];
+    if (body && Object.hasOwn(body, key)) proposals.push(body[key]);
+    for (const [extId, values] of Object.entries(body?.extensions ?? {})) {
+      if (values && typeof values === 'object' && Object.hasOwn(values, key)) {
+        // Only if that extension really declares the key; otherwise the
+        // extensions block below rejects the request anyway.
+        if (extensions.get(extId)?.settings?.some((sp) => sp.key === key)) proposals.push(values[key]);
+      }
+    }
+    const current = getSetting(db, key, fallback) || fallback;
+    for (const raw of proposals) {
+      const next = String(raw ?? '').trim() || fallback;
+      if (next !== current) {
+        out.push({ key, label, current, next });
+        break;
+      }
+    }
+  }
+  return out;
+}
+
 // The dialog sentence for a job. Names the job in typographic quotes and says
 // plainly what a job IS — arbitrary commands on this machine — because that is
 // what is being granted, and a user who reads only this line should still
@@ -974,18 +1014,24 @@ export function createApp({
   });
 
   app.put('/api/settings', async (req, res) => {
-    // The bypass the spec calls out: these two name executables, so repointing
-    // one makes every existing job run an attacker's binary — no job created, no
-    // other gate touched. Checked before any key is written, so a refusal cannot
-    // leave the config half-applied.
-    for (const [key, label] of [['claudePath', 'Claude'], ['bdPath', 'bd']]) {
-      const next = req.body?.[key];
-      if (typeof next !== 'string' || !next.trim()) continue;
-      const current = getSetting(db, key, key === 'claudePath' ? 'claude' : 'bd');
-      if (next.trim() === current) continue;
+    // The bypass the spec calls out: these settings name executables, so
+    // repointing one makes every existing job run an attacker's binary — no job
+    // created, no other gate touched. Checked before any key is written, so a
+    // refusal cannot leave the config half-applied.
+    //
+    // ⚠️ It must consider BOTH shapes this route accepts. The first version of
+    // this gate only looked at a top-level `req.body.claudePath`, which NOTHING
+    // ever writes: `claudePath` is declared by the claude extension, so the real
+    // write path is `{extensions:{claude:{claudePath}}}` (see the 'extensions'
+    // block below). Measured: the extension-shaped request changed claudePath to
+    // /tmp/evil with zero prompts, while the top-level shape prompted and then
+    // wrote nothing — a gate that was pure theatre, and worse than none, because
+    // it also trained the user to approve a meaningless dialog.
+    for (const change of executableChanges(db, extensions, req.body)) {
       if (!await approve(req, res, {
         action: 'settings.executable',
-        detail: `change which ${label} program your scheduled work runs, from \u201c${current}\u201d to \u201c${next.trim()}\u201d`,
+        detail: `change which ${change.label} program your scheduled work runs, from `
+          + `\u201c${change.current}\u201d to \u201c${change.next}\u201d`,
         grace: false,
       })) return;
     }
@@ -1285,8 +1331,25 @@ export async function main() {
   const av = approval.available();
   if (av.degraded) console.warn(`approval: ${av.reason} — high-power actions are NOT gated on this platform`);
   else if (!av.ok) console.warn(`approval: ${av.reason} — high-power actions will be REFUSED until install.sh is re-run`);
-  approval.events.on('asked', (e) => console.log(`approval: asked for ${e.action}`));
-  approval.events.on('result', (e) => console.log(`approval: ${e.action} → ${e.ok ? 'approved' : e.code}`));
+  // Event names must match lib/approval.js exactly. They did not: it emits
+  // 'prompt' and 'approval', while these listeners were 'asked' and 'result' —
+  // so both were dead and NOTHING about any approval, including a tamper
+  // report, ever reached daemon.log. The unit test subscribed to the correct
+  // names, so it passed while the only production consumer was inert.
+  //
+  // Deliberately never claims which factor was used: LocalAuthentication does
+  // not report whether a fingerprint or a password satisfied the prompt.
+  approval.events.on('prompt', (e) => console.log(`approval: asked — ${e.action ?? 'unknown'}: ${e.reason}`));
+  approval.events.on('approval', (e) => {
+    // `result` is the outcome name; this payload carries no `ok`. Reading the
+    // wrong field logged every outcome as "null" — which is what a half-dead
+    // audit line looks like.
+    const line = `approval: ${e.action ?? 'unknown'} → ${e.result}${e.ms == null ? '' : ` (${e.ms}ms)`}`;
+    if (['approved', 'graced', 'denied'].includes(e.result)) console.log(line);
+    // A tampered or missing helper is the one outcome that must be loud: it means
+    // the layer cannot be enforced at all right now.
+    else console.warn(`${line}${e.message ? ` — ${e.message}` : ''}`);
+  });
 
   const app = createApp({ db, runner, scheduler, extensions, awake, usage, budget, pause, projects, beads, burst, approval });
   const port = Number(process.env.CS_PORT) || 9099;
