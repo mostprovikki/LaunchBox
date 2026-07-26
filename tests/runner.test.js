@@ -8,13 +8,17 @@ import { openDb, createJob, getRun, listRuns, setSetting, getRunUsage, avgDeltaF
 import { createRunner } from '../lib/runner.js';
 import { shouldNotify } from '../lib/notify.js';
 
-function setup({ minuteMs = 60_000, usage = null, admit } = {}) {
+// `fanoutFn` defaults to () => 0 — no subagents in flight — because the real
+// probe reads ~/.claude/projects, and a test that consults the developer's own
+// session tree passes or fails according to what they happened to run today.
+// The subagent-hold tests below pass their own counter.
+function setup({ minuteMs = 60_000, usage = null, admit, fanoutFn = () => 0 } = {}) {
   const dir = tmpData();
   ensureDirs();
   const db = openDb(join(dir, 'test.db'));
   const spawnFn = fakeSpawn();
   const notifications = [];
-  const runner = createRunner({ db, extensions, spawnFn, notifyFn: (t, m) => notifications.push(m), minuteMs, usage, admit });
+  const runner = createRunner({ db, extensions, spawnFn, notifyFn: (t, m) => notifications.push(m), minuteMs, usage, admit, fanoutFn });
   return { dir, db, spawnFn, notifications, runner };
 }
 
@@ -453,6 +457,163 @@ test('gracefulStop: false skips the polite rung entirely', async () => {
   assert.deepEqual(child.signals, ['SIGTERM'], 'no SIGINT — it was told there is no safe point');
   await sleep(20); // the log is a write stream; let it reach disk
   assert.match(readFileSync(getRun(db, run.id).logPath, 'utf8'), /no safe stopping point/);
+});
+
+// --- wind-down with subagents in flight -------------------------------------
+// Measured against the real CLI 2026-07-26: one SIGINT with two subagents
+// mid-generation exits in 985ms reporting `error_during_execution`, and leaves
+// both subagent transcripts ~9KB short of where an uninterrupted run took them.
+// So the polite rung is NOT polite during fan-out, and the ladder has to wait
+// for the fan-out before it starts. Every test here drives `fanoutFn`, which is
+// the same shape `liveSubagentCount` returns.
+
+// A run has to have reached its init event to own a sessionId, which is what the
+// fan-out probe is keyed on.
+function startWithSession(runner, spawnFn, db) {
+  const job = createJob(db, validJob());
+  const run = runner.start(job, 'manual');
+  const child = spawnFn.calls[0].child;
+  child.stdout.emit('data', INIT + '\n');
+  return { run, child };
+}
+
+test('subagents mid-flight: the signal is held, not sent', async () => {
+  let live = 2;
+  const { db, spawnFn, runner } = setup({ fanoutFn: () => live });
+  setSetting(db, 'subagentHoldMs', 10_000);
+  const { run, child } = startWithSession(runner, spawnFn, db);
+
+  runner.requestStop(run.id, { reason: 'wind down' });
+  await sleep(30);
+  // The whole bug in one assertion: nothing may be signalled while work is live.
+  assert.deepEqual(child.signals, [], 'no signal while 2 subagents are mid-flight');
+  assert.equal(getRun(db, run.id).meta.stopRung, 'holding');
+  assert.equal(getRun(db, run.id).meta.heldForSubagents, 2);
+
+  // ...and once the fan-out settles, the ladder proceeds as before.
+  live = 0;
+  await sleep(2_500); // one FANOUT_POLL_MS tick
+  assert.deepEqual(child.signals, ['SIGINT'], 'signalled once the fan-out settled');
+  assert.equal(getRun(db, run.id).meta.stopRung, 'SIGINT');
+  await sleep(20);
+  const log = readFileSync(getRun(db, run.id).logPath, 'utf8');
+  assert.match(log, /2 subagents mid-flight, holding the signal/);
+  assert.match(log, /fan-out settled after/);
+});
+
+test('the hold is bounded — a wedged subagent still gets stopped', async () => {
+  // Never settles. Without a cap this run could never be stopped at all, which
+  // would trade an abrupt stop for an unstoppable one.
+  const { db, spawnFn, runner } = setup({ fanoutFn: () => 1 });
+  setSetting(db, 'subagentHoldMs', 60); // 5min default; the bound is what's under test
+  const { run, child } = startWithSession(runner, spawnFn, db);
+
+  runner.requestStop(run.id, { reason: 'wind down' });
+  await sleep(30);
+  assert.deepEqual(child.signals, [], 'held at first');
+  await sleep(2_600); // past the cap, on the next poll
+  assert.deepEqual(child.signals, ['SIGINT'], 'signalled anyway once the cap expired');
+  await sleep(20);
+  assert.match(
+    readFileSync(getRun(db, run.id).logPath, 'utf8'),
+    /1 subagent still mid-flight after \d+s — signalling anyway/,
+    'and it says the work is being discarded rather than pretending it was graceful',
+  );
+});
+
+test('the soft-grace window starts at the SIGINT, not at the request', async () => {
+  // The invariant that is easy to break by arming the ladder at request time: a
+  // hold would then eat the grace the child was promised, and a long fan-out
+  // would put SIGTERM immediately behind the SIGINT.
+  let live = 1;
+  const { db, spawnFn, runner } = setup({ fanoutFn: () => live });
+  setSetting(db, 'subagentHoldMs', 30_000);
+  setSetting(db, 'softGraceMs', 3_000);
+  const { run, child } = startWithSession(runner, spawnFn, db);
+  child.deaf = true; // never exits, so only the ladder can move it
+
+  // Polls run every 2s, so: t=2s still live, t=4s settled → SIGINT at ~4s.
+  runner.requestStop(run.id, { reason: 'wind down' });
+  await sleep(2_500);
+  live = 0;
+  await sleep(2_000);
+  assert.deepEqual(child.signals, ['SIGINT'], 'SIGINT sent once the hold released (~4s in)');
+
+  // 4s of hold elapsed against a 3s grace. Armed at request time, SIGTERM would
+  // have fired at t=3s — before the SIGINT even existed. It must not have.
+  await sleep(1_500); // t≈6s; grace runs to ~7s
+  assert.deepEqual(child.signals, ['SIGINT'], 'grace was not consumed by the hold');
+  await sleep(2_000); // t≈8s
+  assert.deepEqual(child.signals, ['SIGINT', 'SIGTERM'], 'and it still escalates, measured from the SIGINT');
+});
+
+test('a child that finishes during the hold is never signalled', async () => {
+  // `live` must reach 0 here, and that is the whole point: with the fan-out still
+  // busy a leaked poll timer would merely reschedule, so the test would pass
+  // whether or not the timer was cancelled. Mutation-checked — it did exactly
+  // that on the first attempt.
+  let live = 3;
+  const { db, spawnFn, runner } = setup({ fanoutFn: () => live });
+  setSetting(db, 'subagentHoldMs', 30_000);
+  const { run, child } = startWithSession(runner, spawnFn, db);
+
+  runner.requestStop(run.id, { reason: 'wind down' });
+  await sleep(30);
+  assert.deepEqual(child.signals, [], 'held');
+
+  // The subagents finished and the run ended on its own. A poll that outlived the
+  // run would now see a settled fan-out and signal a child that is already gone.
+  live = 0;
+  child.emit('close', 0);
+  await sleep(2_600);
+  assert.deepEqual(child.signals, [], 'a finished run is not signalled afterwards');
+  assert.equal(getRun(db, run.id).status, 'stopped', 'still recorded as the stop we asked for');
+  assert.equal(getRun(db, run.id).meta.stopRung, 'holding', 'and it never advanced a rung');
+});
+
+test('a hard kill during the hold wins immediately', async () => {
+  // Deaf, so SIGTERM does not end the run: that keeps the hold's poll reachable,
+  // which is the only way this test can observe the `entry.killed` guard. With a
+  // child that exits on SIGTERM, settle() clears the timers and the test passes
+  // vacuously — mutation-checked, and it did.
+  let live = 2;
+  const { db, spawnFn, runner } = setup({ fanoutFn: () => live });
+  setSetting(db, 'subagentHoldMs', 30_000);
+  const { run, child } = startWithSession(runner, spawnFn, db);
+  child.deaf = true;
+
+  runner.requestStop(run.id, { reason: 'wind down' });
+  await sleep(30);
+  assert.deepEqual(child.signals, [], 'held');
+
+  runner.kill(run.id);
+  assert.deepEqual(child.signals, ['SIGTERM'], 'kill is not queued behind the hold');
+  // Even though the fan-out settles right after, no polite rung may appear behind
+  // a kill that has already escalated past it.
+  live = 0;
+  await sleep(2_600);
+  assert.deepEqual(child.signals, ['SIGTERM'], 'no SIGINT follows the kill');
+
+  child.emit('close', 0);
+  await sleep(30);
+  assert.equal(getRun(db, run.id).status, 'killed');
+});
+
+test('a run with no session — every command job — stops exactly as before', async () => {
+  // Regression guard: the probe must not add a hold where there can be no
+  // fan-out. A thrown probe must not either, hence the second runner.
+  const { db, spawnFn, runner } = setup({ fanoutFn: () => 5 });
+  const job = createJob(db, validJob({ type: 'command', command: 'sleep 1' }));
+  const run = runner.start(job, 'manual'); // no init event, so no sessionId
+  runner.requestStop(run.id, { reason: 'wind down' });
+  assert.deepEqual(spawnFn.calls[0].child.signals, ['SIGINT'], 'signalled synchronously, as it always was');
+
+  const boom = setup({ fanoutFn: () => { throw new Error('session tree unreadable'); } });
+  const j2 = createJob(boom.db, validJob());
+  const r2 = boom.runner.start(j2, 'manual');
+  boom.spawnFn.calls[0].child.stdout.emit('data', INIT + '\n');
+  boom.runner.requestStop(r2.id, { reason: 'wind down' });
+  assert.deepEqual(boom.spawnFn.calls[0].child.signals, ['SIGINT'], 'a failed probe stops abruptly rather than never');
 });
 
 test('clearQueue drops queued work with a reason; stopping() lists the winding-down', async () => {

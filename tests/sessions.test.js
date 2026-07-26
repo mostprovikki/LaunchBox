@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import {
   parseSessionFile, readConversation, discoverSessionFiles, parseTs,
   looksLikeRealPrompt, processImageAnnotations, cleanPrompt, decodeProjectDir,
-  INTERACTIVE_ENTRYPOINTS,
+  INTERACTIVE_ENTRYPOINTS, liveSubagentCount, subagentFinished,
 } from '../lib/sessions.js';
 
 // Every fixture is synthetic and lives in a tmpdir. Nothing here reads the real
@@ -754,4 +754,165 @@ test('a missing root is not an error: Claude Code may never have run', async () 
   assert.deepEqual(index.list().sessions, []);
   index.start();   // must not throw
   index.stop();
+});
+
+// --- liveSubagentCount: "is this run's fan-out still working?" -------------
+// The stop ladder holds its SIGINT on this answer, so a wrong 0 puts the abrupt
+// wind-down back and a wrong non-zero delays every stop by the hold cap.
+//
+// Judged from transcript CONTENT, not mtime. The first version used an mtime
+// window and was measured wrong against real fan-out: the ~18KB of prompt and
+// attachments is written when a subagent STARTS and nothing is appended until it
+// FINISHES, so a subagent that is thinking looks idle. Records below are the
+// shapes taken from real transcripts.
+
+const REC = {
+  prompt: { type: 'user', message: { role: 'user', content: 'go and do it' } },
+  attachment: { type: 'attachment', message: {} },
+  answer: { type: 'assistant', message: { content: [{ type: 'text', text: 'the essay' }] } },
+  thinking: { type: 'assistant', message: { content: [{ type: 'thinking', thinking: 'hm' }] } },
+  toolUse: { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: {} }] } },
+  // The shape that makes the tool_use guard load-bearing: narration AND a call in
+  // one message ("let me check X" then the call), which is routine. A pure
+  // tool_use block is already rejected by the terminal-text test, so a fixture
+  // with only that cannot tell whether the guard works — mutation-checked, and it
+  // could not.
+  sayThenTool: { type: 'assistant', message: { content: [
+    { type: 'text', text: 'let me look that up' },
+    { type: 'tool_use', name: 'Bash', input: {} },
+  ] } },
+  toolResult: { type: 'user', message: { content: [{ type: 'tool_result', content: 'ok' }] } },
+  interrupted: { type: 'user', message: { content: [{ type: 'text', text: '[Request interrupted by user]' }] } },
+};
+
+function fanoutFixture(agents, { dir = '-Users-me-proj', id = 'sess-1' } = {}) {
+  const root = mkdtempSync(join(tmpdir(), 'cs-fanout-'));
+  const sub = join(root, dir, id, 'subagents');
+  mkdirSync(sub, { recursive: true });
+  for (const [name, spec] of Object.entries(agents)) {
+    const rows = spec.rows ?? [];
+    const body = spec.raw ?? (rows.length ? rows.map((r) => JSON.stringify(r)).join('\n') + '\n' : '');
+    const f = join(sub, name.endsWith('.json') ? name : `${name}.jsonl`);
+    writeFileSync(f, body);
+    if (spec.ageMs) {
+      const when = new Date(Date.now() - spec.ageMs);
+      utimesSync(f, when, when);
+    }
+  }
+  return { root, sub };
+}
+
+test('subagentFinished distinguishes working from done, by record shape', () => {
+  assert.equal(subagentFinished(REC.answer), true, 'a terminal text response is the answer');
+  assert.equal(subagentFinished(REC.interrupted), true, 'an aborted subagent has nothing left to wait for');
+  assert.equal(subagentFinished(REC.prompt), false, 'the prompt alone means it has not started answering');
+  assert.equal(subagentFinished(REC.attachment), false, 'attachments are written up front');
+  assert.equal(subagentFinished(REC.toolUse), false, 'it is waiting on a tool result');
+  assert.equal(subagentFinished(REC.toolResult), false, 'the result came back; it has more to do');
+  assert.equal(subagentFinished(REC.thinking), false, 'thinking with no text is not an answer');
+  assert.equal(subagentFinished(null), false, 'an unreadable transcript is not evidence of completion');
+});
+
+test('liveSubagentCount counts subagents that have not answered yet', () => {
+  const { root } = fanoutFixture({
+    'agent-working': { rows: [REC.prompt, REC.attachment] },
+    'agent-tooling': { rows: [REC.prompt, REC.attachment, REC.toolUse] },
+    'agent-narrating': { rows: [REC.prompt, REC.attachment, REC.sayThenTool] },
+    'agent-done': { rows: [REC.prompt, REC.attachment, REC.answer] },
+    'agent-aborted': { rows: [REC.prompt, REC.attachment, REC.interrupted] },
+  });
+  assert.equal(liveSubagentCount('sess-1', { root }), 3,
+    'working, tool-waiting, and the one that narrated before calling a tool');
+});
+
+test('liveSubagentCount is not fooled by an idle-looking transcript', () => {
+  // The exact failure the mtime version had: a subagent mid-thought has written
+  // nothing for a while, and is still very much working.
+  const { root } = fanoutFixture({
+    'agent-thinking': { rows: [REC.prompt, REC.attachment], ageMs: 60_000 },
+  });
+  assert.equal(liveSubagentCount('sess-1', { root }), 1,
+    'an untouched file whose last record is a prompt is still in flight');
+});
+
+test('liveSubagentCount treats a long-abandoned transcript as settled', () => {
+  // A crashed run leaves its transcripts mid-conversation forever. Without this,
+  // every later stop in that session would wait out the whole hold cap.
+  const { root } = fanoutFixture({
+    'agent-orphan': { rows: [REC.prompt, REC.attachment], ageMs: 30 * 60_000 },
+  });
+  assert.equal(liveSubagentCount('sess-1', { root }), 0, 'stale by default');
+  assert.equal(liveSubagentCount('sess-1', { root, staleMs: 60 * 60_000 }), 1, 'still live under a longer bound');
+});
+
+test('liveSubagentCount tolerates a half-written final line', () => {
+  // These files are appended to while being read, so a truncated last line is
+  // normal and must not read as "no record".
+  //
+  // The fixture has to put a COMPLETE answer behind the partial line: with only a
+  // prompt behind it, failing to walk back yields null → "not finished" → in
+  // flight, which is the same answer walking back gives, so the test could not
+  // tell the two apart. Mutation-checked, and it could not.
+  const done = [REC.prompt, REC.attachment, REC.answer].map((r) => JSON.stringify(r)).join('\n');
+  const { root } = fanoutFixture({
+    'agent-partial': { raw: done + '\n' + '{"type":"assist' },
+  });
+  assert.equal(liveSubagentCount('sess-1', { root }), 0,
+    'the last COMPLETE record is the answer, so this subagent is done');
+
+  // And the same file without the answer is still in flight.
+  const { root: root2 } = fanoutFixture({
+    'agent-partial': { raw: JSON.stringify(REC.prompt) + '\n' + '{"type":"assist' },
+  });
+  assert.equal(liveSubagentCount('sess-1', { root: root2 }), 1);
+});
+
+test('liveSubagentCount ignores empty transcripts and non-jsonl files', () => {
+  const { root } = fanoutFixture({
+    'agent-real': { rows: [REC.prompt] },
+    'agent-empty': { raw: '' },
+    'agent-real.meta.json': { raw: '{}' },   // written alongside every transcript
+    '.agent-hidden': { rows: [REC.prompt] },
+  });
+  assert.equal(liveSubagentCount('sess-1', { root }), 1);
+});
+
+test('liveSubagentCount answers 0 rather than throwing when there is nothing to find', () => {
+  const { root } = fanoutFixture({ 'agent-a': { rows: [REC.prompt] } });
+  assert.equal(liveSubagentCount('sess-nope', { root }), 0, 'unknown session');
+  assert.equal(liveSubagentCount('sess-1', { root: join(root, 'nope') }), 0, 'missing root');
+  assert.equal(liveSubagentCount('', { root }), 0, 'empty id');
+  assert.equal(liveSubagentCount(null, { root }), 0, 'no id');
+});
+
+test('liveSubagentCount refuses a session id that is a path', () => {
+  // The id is interpolated into a path, so SESSION_ID_RE is what keeps that safe.
+  //
+  // An earlier version of this test only tried ids like '../sess-1', which collapse
+  // to a directory that does not exist — so it returned 0 whether the guard was
+  // there or not, and mutation-checking showed removing the guard left it green.
+  // The id below is built so that traversal WOULD succeed.
+  const { root } = fanoutFixture({ 'agent-a': { rows: [REC.prompt] }, 'agent-b': { rows: [REC.prompt] } });
+  assert.equal(liveSubagentCount('sess-1', { root }), 2, 'the fixture really is reachable');
+
+  const traversal = '../-Users-me-proj/sess-1'; // → <root>/-Users-me-proj/sess-1
+  assert.equal(liveSubagentCount(traversal, { root }), 0,
+    'an id resolving onto a real transcript dir is still refused, because it is not an id');
+
+  for (const bad of ['a/../../sess-1', '/etc', 'a/b', '..', '.']) {
+    assert.equal(liveSubagentCount(bad, { root }), 0, `refused: ${bad}`);
+  }
+});
+
+test('liveSubagentCount finds the session under whichever project dir holds it', () => {
+  // Keyed on the session id across project dirs on purpose: Claude slugs the
+  // RESOLVED cwd, so deriving the dir name from a run's cwd misses it whenever the
+  // path contains a symlink (/var vs /private/var). Measured 2026-07-26 — it made
+  // the first probe of this bug report a clean stop.
+  const { root } = fanoutFixture(
+    { 'agent-a': { rows: [REC.prompt] }, 'agent-b': { rows: [REC.prompt] } },
+    { dir: '-private-var-folders-xy-T-probe', id: 'sess-9' },
+  );
+  mkdirSync(join(root, '-Users-me-other', 'sess-other', 'subagents'), { recursive: true });
+  assert.equal(liveSubagentCount('sess-9', { root }), 2);
 });
