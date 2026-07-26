@@ -15,7 +15,7 @@
 #     test with an injected clock.
 #
 # Usage:  docs/spikes/auth-verify.sh
-# Expect: 8 numbered steps, 6 dialogs. Each step says what to do.
+# Expect: 8 numbered steps, 5 dialogs. Each step says what to do.
 set -u
 # docs/spikes/ -> repo root: two levels, not one.
 cd "$(dirname "$0")/../.."
@@ -95,7 +95,7 @@ ok "token obtained"
 
 echo ""
 echo "════════════════════════════════════════════════════════════"
-echo " 8 steps follow, 6 of which show a dialog. Each says exactly"
+echo " 8 steps follow, 5 of which show a dialog. Each says exactly"
 echo " what to do. Nothing here can touch your real data or spend quota."
 echo "════════════════════════════════════════════════════════════"
 
@@ -151,14 +151,13 @@ check "cleanup prompted and was refused" "$CODE" "approval_denied"
 check "jobs survived the denial" "$AFTER" "$BEFORE"
 
 # ------------------------------------------------------------------- step 5
-hr "5/8  IGNORE — let this one time out (about 8 seconds)"
-echo '   Do NOT touch the dialog. It must give up on its own, and refuse.'
-echo '   (The real bound is 180s; shortened here so you are not kept waiting.)'
-BEFORE=$(api GET /api/jobs | jsonf "['jobs'].__len__()")
-CODE=$(api POST /api/cleanup | jsonf "['code']")
-AFTER=$(api GET /api/jobs | jsonf "['jobs'].__len__()")
-check "timeout code" "$CODE" "approval_timeout"
-check "an unanswered dialog is not consent" "$AFTER" "$BEFORE"
+hr "5/8  ALREADY VERIFIED AUTOMATICALLY — the timeout path"
+echo '   Skipped here on purpose. A timeout needs no human input, only that'
+echo '   nobody touches the dialog, so it is covered unattended by:'
+echo '     tools/verify-approval-timeout.sh'
+echo '   That runs the real helper, confirms a genuine dialog was raised, and'
+echo '   asserts approval_timeout with nothing written. One less prompt for you.'
+ok "timeout coverage delegated to tools/verify-approval-timeout.sh"
 
 # ------------------------------------------------------------------- step 6
 hr "6/8  APPROVE — activate a project"
