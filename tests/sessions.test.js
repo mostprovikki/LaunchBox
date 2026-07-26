@@ -424,3 +424,334 @@ test('an image-only user turn becomes a note, and a pluralised one', async () =>
 test('an unreadable transcript is empty, never an exception', async () => {
   assert.deepEqual(await readConversation('/nope/gone.jsonl'), []);
 });
+
+// ---------------- the index: cache, liveness, watcher, mutations
+
+import { openDb, createJob, insertRun, updateRun, cleanupAll } from '../lib/db.js';
+import { createSessionIndex } from '../lib/sessions.js';
+import { tmpData, validJob, sleep } from './helpers.js';
+import { ensureDirs } from '../lib/paths.js';
+import { statSync, utimesSync, readFileSync } from 'node:fs';
+
+// The injected clock is anchored to real wall time on purpose: liveness compares
+// now() against real file mtimes, so a frozen fake date would make every fixture
+// either eternally live or eternally stale depending on the hour the suite ran.
+// Tests move `nowRef.v` by explicit deltas instead.
+function bootIndex({ activeWindowS = 60, nowRef = { v: Date.now() } } = {}) {
+  const dir = tmpData();
+  ensureDirs();
+  const db = openDb(join(dir, 'test.db'));
+  const root = mkdtempSync(join(tmpdir(), 'cs-root-'));
+  const index = createSessionIndex({ db, root, activeWindowS, now: () => nowRef.v });
+  const write = (id, rows, { project = '-Users-me-proj' } = {}) => {
+    mkdirSync(join(root, project), { recursive: true });
+    const file = join(root, project, `${id}.jsonl`);
+    writeFileSync(file, rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
+    return file;
+  };
+  return { db, root, index, write, nowRef };
+}
+
+const activeWindow = (index) => index.activeWindowS() * 1000;
+
+// rename/delete are refused on a live session, and a just-written fixture is by
+// definition live. Backdate it so the test exercises the path it means to.
+function makeIdle(file, nowRef) {
+  const t = new Date(nowRef.v - 3600_000);
+  utimesSync(file, t, t);
+}
+
+const userRow = (text, t = '2026-07-26T10:00:00.000Z') => ({ type: 'user', timestamp: t, cwd: '/Users/me/proj', entrypoint: 'cli', message: { content: text } });
+
+test('an unchanged file is not re-parsed; a changed mtime or size re-parses it', async () => {
+  const { index, write } = bootIndex();
+  const file = write('s1', [userRow('first')]);
+
+  let r = await index.scan();
+  assert.equal(r.parsed, 1);
+
+  r = await index.scan();
+  assert.equal(r.parsed, 0, 'the cache key held: nothing re-read');
+  assert.equal(r.discovered, 1);
+
+  // Growing the file must invalidate it — this is the normal case, a live
+  // session being appended to.
+  appendFileSync(file, JSON.stringify(userRow('second', '2026-07-26T10:05:00.000Z')) + '\n');
+  r = await index.scan();
+  assert.equal(r.parsed, 1);
+  assert.equal(index.get('s1').prompts, 2);
+
+  // The size half of the cache key, isolated. Pinning mtime to a whole
+  // millisecond first matters: macOS reports mtimeMs with sub-millisecond
+  // precision, but utimesSync takes a ms-precision Date — so setting the mtime
+  // "back to what it was" actually truncates it and moves the key. With an
+  // integer mtime the write is idempotent, and only the size differs.
+  const fixed = new Date(Math.floor(statSync(file).mtimeMs));
+  utimesSync(file, fixed, fixed);
+  await index.scan();
+  assert.equal(statSync(file).mtimeMs, fixed.getTime(), 'the mtime write is now idempotent');
+
+  appendFileSync(file, JSON.stringify(userRow('third', '2026-07-26T10:09:00.000Z')) + '\n');
+  utimesSync(file, fixed, fixed);
+  assert.equal(statSync(file).mtimeMs, fixed.getTime(), 'same mtime as the cached row');
+  r = await index.scan();
+  assert.equal(r.parsed, 1, 'a grown file is re-read on size alone — otherwise a live transcript reads stale forever');
+  assert.equal(index.get('s1').prompts, 3);
+});
+
+test('a deleted file leaves the index, so it stops being listed', async () => {
+  const { index, write, root } = bootIndex();
+  write('gone', [userRow('bye')]);
+  write('stays', [userRow('hi')]);
+  await index.scan();
+  assert.equal(index.list().sessions.length, 2);
+
+  await (await import('node:fs/promises')).unlink(join(root, '-Users-me-proj', 'gone.jsonl'));
+  const r = await index.scan();
+  assert.equal(r.removed, 1);
+  assert.deepEqual(index.list().sessions.map((s) => s.id), ['stays']);
+  assert.equal(index.get('gone'), null);
+});
+
+test('our own sdk-cli sessions stay visible via the runs join — the §5.4 trap', async () => {
+  const { db, index, write } = bootIndex();
+  // Exactly what `claude -p` writes, and what upstream's allowlist excludes.
+  write('ours', [{ type: 'assistant', timestamp: '2026-07-26T10:00:00.000Z', cwd: '/Users/me/proj', entrypoint: 'sdk-cli', message: { id: 'm', model: 'claude-opus-5', usage: { output_tokens: 5 } } }]);
+  write('theirs', [{ type: 'assistant', timestamp: '2026-07-26T10:00:00.000Z', cwd: '/Users/me/proj', entrypoint: 'sdk-cli', message: { id: 'n', model: 'claude-opus-5', usage: { output_tokens: 5 } } }]);
+  write('human', [userRow('hello')]);
+  await index.scan();
+
+  // Before any run claims it, an sdk-cli session is correctly treated as noise.
+  let shown = index.list().sessions.map((s) => s.id);
+  assert.deepEqual(shown, ['human']);
+  assert.equal(index.list().hidden, 2);
+
+  // Now record a run that produced 'ours', exactly as the claude formatter does.
+  const job = createJob(db, { ...validJob({ name: 'nightly' }) });
+  const run = insertRun(db, { jobId: job.id, status: 'ok', trigger: 'schedule' });
+  updateRun(db, run.id, { meta: JSON.stringify({ sessionId: 'ours' }) });
+
+  const list = index.list();
+  shown = list.sessions.map((s) => s.id).sort();
+  assert.deepEqual(shown, ['human', 'ours'],
+    'a session this app started is never noise, whatever its entrypoint');
+  assert.equal(list.hidden, 1, 'the genuinely foreign sdk-cli session is still hidden, and counted');
+
+  // And the cross-link is populated both ways round.
+  const ours = list.sessions.find((s) => s.id === 'ours');
+  assert.equal(ours.runs.length, 1);
+  assert.equal(ours.runs[0].jobName, 'nightly');
+  assert.equal(ours.runs[0].runId, run.id);
+
+  // ?all=1 reveals everything, so nothing is unreachable.
+  assert.equal(index.list({ all: true }).sessions.length, 3);
+});
+
+test('liveness: fresh mtime means running, and running sessions float to the top', async () => {
+  const nowRef = { v: Date.parse('2026-07-26T12:00:00.000Z') };
+  const { index, write, root } = bootIndex({ activeWindowS: 60, nowRef });
+  write('old', [userRow('ages ago')]);
+  const liveFile = write('live', [userRow('just now')]);
+  // 'old' is stale, 'live' was touched 5s ago.
+  const stale = new Date(nowRef.v - 3600_000);
+  utimesSync(join(root, '-Users-me-proj', 'old.jsonl'), stale, stale);
+  const fresh = new Date(nowRef.v - 5000);
+  utimesSync(liveFile, fresh, fresh);
+  await index.scan();
+
+  assert.deepEqual(index.running(), ['live']);
+  assert.deepEqual(index.list().sessions.map((s) => s.id), ['live', 'old'], 'running floats up');
+  assert.equal(index.list().sessions[0].running, true);
+
+  // Move time past the window: liveness lapses with no file event, which is why
+  // there is a timer as well as a watcher.
+  nowRef.v += 120_000;
+  assert.deepEqual(index.running(), []);
+});
+
+test('our own rename does NOT make a session look running — upstream greys out its own Delete', async () => {
+  // Real-time-anchored: rename() stamps the file with the real clock, so a
+  // frozen fake now() would make the comparison meaningless.
+  const { index, write, nowRef } = bootIndex();
+  const file = write('s1', [userRow('hello')]);
+  makeIdle(file, nowRef);
+  await index.scan();
+  assert.equal(index.get('s1').running, false);
+
+  const mtimeBefore = statSync(file).mtimeMs;
+  const r = await index.rename('s1', 'my session');
+  assert.equal(r.ok, true);
+  assert.equal(r.session.customTitle, 'my session');
+
+  // The append necessarily bumped mtime into the liveness window. Upstream reads
+  // that back as activity and disables its own Delete button for 60s.
+  assert.ok(statSync(file).mtimeMs > mtimeBefore, 'the write really did bump mtime');
+  assert.ok(statSync(file).mtimeMs > nowRef.v - activeWindow(index), 'and into the live window');
+  assert.equal(index.get('s1').running, false, 'but we know it was us');
+  assert.deepEqual(index.running(), []);
+
+  // A write by anyone else moves mtime off the value we recorded, and the
+  // session is live again — the flag must not be a blanket exemption.
+  appendFileSync(file, JSON.stringify(userRow('someone else typing')) + '\n');
+  await index.scan();
+  assert.equal(index.get('s1').running, true);
+});
+
+test('rename appends exactly one 3-key custom-title row, with a newline first if needed', async () => {
+  const { index, root, nowRef } = bootIndex();
+  const file = join(root, '-Users-me-proj', 's1.jsonl');
+  mkdirSync(join(root, '-Users-me-proj'), { recursive: true });
+  // No trailing newline: the hazard the probe exists for. Without it the new row
+  // glues onto the last line and corrupts both.
+  writeFileSync(file, JSON.stringify(userRow('hello')));
+  makeIdle(file, nowRef);
+  await index.scan();
+
+  assert.equal((await index.rename('s1', 'renamed')).ok, true);
+  const lines = readFileSync(file, 'utf8').trim().split('\n');
+  assert.equal(lines.length, 2, 'the original line survived intact');
+  const added = JSON.parse(lines[1]);
+  assert.deepEqual(Object.keys(added).sort(), ['customTitle', 'timestamp', 'type']);
+  assert.equal(added.type, 'custom-title');
+  assert.equal(added.customTitle, 'renamed');
+  assert.equal(JSON.parse(lines[0]).message.content, 'hello');
+
+  // Renaming again is allowed even though we just wrote the file a millisecond
+  // ago: the self-write flag is what makes a second rename possible at all.
+  assert.equal((await index.rename('s1', 'renamed twice')).ok, true);
+  assert.equal(readFileSync(file, 'utf8').trim().split('\n').length, 3);
+  assert.equal(index.get('s1').customTitle, 'renamed twice');
+});
+
+test('rename is refused while the session is being written to', async () => {
+  const { index, write, nowRef } = bootIndex();
+  const file = write('s1', [userRow('hello')]);
+  const fresh = new Date(nowRef.v - 2000);
+  utimesSync(file, fresh, fresh);
+  await index.scan();
+
+  // This app spawns claude itself, so "another process is appending to this file
+  // right now" is normal operating state, not an edge case.
+  const r = await index.rename('s1', 'nope');
+  assert.equal(r.ok, false);
+  assert.equal(r.status, 409);
+  assert.match(r.error, /written to right now/);
+  assert.equal(readFileSync(file, 'utf8').trim().split('\n').length, 1, 'nothing was appended');
+});
+
+test('delete is refused while running, and removes both file and row when idle', async () => {
+  const { index, write, nowRef } = bootIndex();
+  const file = write('s1', [userRow('hello')]);
+  const fresh = new Date(nowRef.v - 1000);
+  utimesSync(file, fresh, fresh);
+  await index.scan();
+
+  let r = await index.remove('s1');
+  assert.equal(r.ok, false);
+  assert.equal(r.status, 409);
+  assert.ok(statSync(file).size > 0, 'the transcript is untouched');
+
+  makeIdle(file, nowRef);
+  r = await index.remove('s1');
+  assert.equal(r.ok, true);
+  assert.throws(() => statSync(file), 'the file is gone');
+  assert.equal(index.get('s1'), null);
+});
+
+test('an invalid or traversing session id never reaches the filesystem', async () => {
+  const { index, write } = bootIndex();
+  write('s1', [userRow('hello')]);
+  await index.scan();
+  for (const bad of ['../../etc/passwd', '/etc/passwd', 'a/b', '..', '.', '', 'a b', 'x'.repeat(201)]) {
+    assert.equal(index.get(bad), null, JSON.stringify(bad));
+    assert.equal((await index.rename(bad, 'x')).status, 404, JSON.stringify(bad));
+    assert.equal((await index.remove(bad)).status, 404, JSON.stringify(bad));
+  }
+});
+
+test('resume keeps the pieces apart, and says when the cwd was guessed', async () => {
+  const { index, write, nowRef } = bootIndex();
+  const plainFile = write('plain', [userRow('hello')]);
+  makeIdle(plainFile, nowRef);
+  await index.scan();
+  let spec = index.resumeSpec('plain');
+  assert.deepEqual(spec.args, ['--resume', 'plain']);
+  assert.equal(spec.cwd, '/Users/me/proj');
+  assert.equal(spec.cwdGuessed, false);
+  assert.equal(spec.ambiguous, false);
+
+  // A named session resumes by name...
+  await index.rename('plain', 'my work');
+  spec = index.resumeSpec('plain');
+  assert.deepEqual(spec.args, ['--resume', 'my work']);
+
+  // ...unless the (cwd, title) pair is ambiguous, which makes
+  // `claude --resume "<name>"` pick arbitrarily.
+  const twinFile = write('twin', [userRow('hello there')]);
+  makeIdle(twinFile, nowRef);
+  await index.scan();
+  assert.equal((await index.rename('twin', 'my work')).ok, true);
+  assert.equal(index.resumeSpec('plain').ambiguous, true);
+  assert.deepEqual(index.resumeSpec('plain').args, ['--resume', 'plain'], 'falls back to the unique id');
+  assert.deepEqual(index.resumeSpec('twin').args, ['--resume', 'twin']);
+
+  // A path containing a quote and a $ must survive as data, never as shell text.
+  write('odd', [{ type: 'user', timestamp: '2026-07-26T10:00:00.000Z', cwd: '/Users/me/it\'s $HOME', entrypoint: 'cli', message: { content: 'hi' } }]);
+  await index.scan();
+  assert.equal(index.resumeSpec('odd').cwd, '/Users/me/it\'s $HOME');
+});
+
+test('cleanupAll clears the cache rows and never touches a session file', async () => {
+  const { db, index, write } = bootIndex();
+  const file = write('s1', [userRow('hello')]);
+  await index.scan();
+  assert.equal(index.list().sessions.length, 1);
+
+  cleanupAll(db);
+  assert.equal(index.list().sessions.length, 0, 'the cache is cleared');
+  assert.ok(statSync(file).size > 0, 'but the transcript this app does not own is still there');
+  // And the cache rebuilds itself, which is what makes clearing it free.
+  assert.equal((await index.scan()).parsed, 1);
+  assert.equal(index.list().sessions.length, 1);
+});
+
+test('the watcher rescans on any event type, since macOS reports appends as rename', async () => {
+  const { index, write } = bootIndex();
+  const file = write('s1', [userRow('one')]);
+  await index.scan();
+  assert.equal(index.get('s1').prompts, 1);
+
+  const seen = [];
+  index.events.on('change', (e) => seen.push(e));
+  index.start();
+  try {
+    // FSEvents takes a moment to arm after fs.watch returns; appending
+    // immediately made this test pass alone and flake in the full run.
+    await sleep(300);
+    appendFileSync(file, JSON.stringify(userRow('two', '2026-07-26T10:05:00.000Z')) + '\n');
+
+    // Wait on the condition rather than on a fixed sleep. The debounce is 400ms,
+    // but the point of the assertion is "no poll was needed", not "it happened
+    // within exactly N ms" — a wall-clock guess is what makes watcher tests
+    // flaky on a loaded machine.
+    const deadline = Date.now() + 8000;
+    while (index.get('s1').prompts !== 2 && Date.now() < deadline) await sleep(100);
+
+    assert.equal(index.get('s1').prompts, 2, 'the append was picked up without a poll');
+    assert.ok(seen.length >= 1, 'and a change event was emitted');
+  } finally {
+    index.stop();
+  }
+});
+
+test('a missing root is not an error: Claude Code may never have run', async () => {
+  const dir = tmpData();
+  ensureDirs();
+  const db = openDb(join(dir, 'db.db'));
+  const index = createSessionIndex({ db, root: join(dir, 'no-such-dir') });
+  const r = await index.scan();
+  assert.deepEqual(r, { discovered: 0, parsed: 0, removed: 0 });
+  assert.deepEqual(index.list().sessions, []);
+  index.start();   // must not throw
+  index.stop();
+});
