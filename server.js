@@ -120,13 +120,28 @@ function jobApprovalSentence(verb, job) {
   return bits.join(', ');
 }
 
-// True when the ONLY effect of an update is turning the job off. Compared field
-// by field against the stored row rather than trusting the request shape,
-// because the jobs-list toggle submits the whole object.
+// True when the ONLY effect of an update is turning the job off, which the spec
+// leaves ungated because it strictly reduces what this machine will do.
+//
+// ⚠️ Compares ONLY the fields validateJob rebuilds. The first version spread both
+// whole objects, and `after` is a fresh object from validateJob carrying exactly
+// these ten keys while `before` is a database row carrying id, createdAt,
+// updatedAt and params — so the comparison was never equal, isOnlyDisabling
+// always returned false, and the jobs-list toggle raised a Touch ID prompt on
+// every disable. Prompting on the cheapest safe action in the app is precisely
+// the reflexive-approval training the spec refuses to accept for a manual run.
+const JOB_COMPARE_KEYS = [
+  'name', 'type', 'cwd', 'timeoutMin', 'retryCount', 'retryDelayMin', 'notify',
+];
 function isOnlyDisabling(before, after) {
   if (before.enabled !== true || after.enabled !== false) return false;
-  const norm = (j) => JSON.stringify({ ...j, enabled: null, updatedAt: null, createdAt: null });
-  return norm(before) === norm(after);
+  for (const k of JOB_COMPARE_KEYS) {
+    if (JSON.stringify(before[k] ?? null) !== JSON.stringify(after[k] ?? null)) return false;
+  }
+  // Schedule and params are compared as values: a disable that also retimes the
+  // job, or rewrites its command, is not "only disabling".
+  if (JSON.stringify(before.schedule ?? null) !== JSON.stringify(after.schedule ?? null)) return false;
+  return JSON.stringify(before.params ?? {}) === JSON.stringify(after.params ?? {});
 }
 
 // A human may activate or pause. `pending` belongs to discovery and `error` to the
@@ -393,8 +408,19 @@ export function createApp({
     res.json(decorate(job));
   });
 
-  app.delete('/api/jobs/:id', (req, res) => {
-    if (!getJob(db, req.params.id)) return res.status(404).json({ error: 'not found' });
+  app.delete('/api/jobs/:id', async (req, res) => {
+    const doomed = getJob(db, req.params.id);
+    if (!doomed) return res.status(404).json({ error: 'not found' });
+    // POST /api/cleanup is gated on data-loss grounds, and a token holder can
+    // reach the identical end state by looping this route — so gating the bulk
+    // call and not the per-row one only stopped the convenient version. No grace:
+    // deletion is irreversible (the log files are unlinked) and rare, so a prompt
+    // each time is the right trade.
+    if (!await approve(req, res, {
+      action: 'job.delete',
+      detail: `delete the scheduled job “${clampName(doomed.name)}” and its run history`,
+      grace: false,
+    })) return;
     for (const p of deleteJob(db, req.params.id)) {
       try { unlinkSync(p); } catch {}
     }
@@ -612,7 +638,19 @@ export function createApp({
   // Confirmed plan → `once` entries on the named jobs. The slots are re-checked
   // here rather than trusted: a preview left open for an hour is stale, and
   // materialising fire times that have already passed would be silent no-ops.
-  app.post('/api/budget/plan/apply', (req, res) => {
+  app.post('/api/budget/plan/apply', async (req, res) => {
+    // Gated because this route force-enables whatever it is given (see the
+    // updateJob below) and arms future fire times. The spec gates "enable a
+    // disabled job — the same, one click later"; this enables an arbitrary set of
+    // them and schedules them, so leaving it open let a token holder override a
+    // deliberate disable and install recurring fires with no dialog. It appeared
+    // in neither of the spec's tables, which makes it an omission rather than a
+    // decision — exactly what that table exists to prevent.
+    if (!await approve(req, res, {
+      action: 'budget.plan.apply',
+      detail: 'schedule extra runs of existing jobs, enabling any that are currently turned off',
+      grace: false,
+    })) return;
     const slots = Array.isArray(req.body?.slots) ? req.body.slots : [];
     if (!slots.length) return res.status(400).json({ errors: ['slots required'] });
     if (slots.length > PLAN_SLOT_MAX) return res.status(400).json({ errors: [`at most ${PLAN_SLOT_MAX} slots`] });
@@ -825,7 +863,7 @@ export function createApp({
 
   // Un-register. A held lease means a bead of this project is running right now,
   // so the default is to refuse and name it rather than orphan a live run.
-  app.delete('/api/projects/:id', (req, res) => {
+  app.delete('/api/projects/:id', async (req, res) => {
     if (!needProjects(res)) return;
     const project = getProject(db, req.params.id);
     if (!project) return res.status(404).json({ error: 'not found' });
@@ -836,6 +874,17 @@ export function createApp({
         held: held.map((l) => l.beadId),
       });
     }
+    // Ordered here, BEFORE the bead-job deletion below, because a refusal must
+    // leave zero partial state. The first placement of this gate sat after that
+    // loop, which would have destroyed the jobs and their logs and then asked
+    // permission — the precise write-before-gate bug the contract forbids.
+    // Deletes the project AND every bead-backed job of it, with their logs --
+    // the same data loss /api/cleanup is gated for, in one call.
+    if (!await approve(req, res, {
+      action: 'project.delete',
+      detail: `stop tracking the project “${clampName(project.name)}” and delete its scheduled jobs and their run history`,
+      grace: false,
+    })) return;
     // A bead's job row is kept across runs to preserve its learned cost (§4a.7),
     // which means un-registering has to clear them deliberately — otherwise the
     // Jobs list keeps rows pointing at a project id that no longer resolves.
