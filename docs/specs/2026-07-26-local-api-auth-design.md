@@ -416,14 +416,24 @@ Two process notes worth keeping, because both are patterns rather than incidents
 
 ### Known and NOT fixed, with the reasoning
 
+Everything else the review found has since been fixed (see the git log for
+`d8b44da`, `c04bf9f`, `5a9bbec`, `0b62e69`). What is left is what cannot be closed from
+inside this design:
+
 | Finding | Why it is left | Severity |
 |---|---|---|
-| **Substituting the helper binary defeats the layer.** `available()` is `existsSync` and nothing more; `swiftc` gives an attacker's own binary a valid adhoc signature, so the "137 detects tampering" property only catches *patching* a signed binary, not *replacing* it | Requires same-user code, which this spec deprioritises for the reason in the threat model. Honest correction to the earlier claim: "no local process can satisfy its dialog" is true of the **dialog** and false of the **gate**, which trusts an exit code from a path it never authenticates. Pinning a hash would raise the bar but not close it — the pin lives in the same trust domain | Real, accepted |
-| **An agent can grant itself `permMode: auto`** by editing `.scheduler.json` in a repo it already has write access to; every poll re-reads it | The human approved *activation*, not "auto permissions forever", so this is a genuine escalation. Fixing it needs the poller to refuse a *widening* of `permMode` relative to activation time, which touches `lib/projects.js` and deserves its own tests | Real, deferred — highest-priority remaining item |
-| **`sessionId` is interpolated unescaped** into an AppleScript `do script` in the claude extension's resume action | Latent: `sessionId` comes only from the CLI's own stream-json and no route writes `runs.meta`. But it invalidates this spec's stated reason for leaving `/api/runs/:id/actions/:actionId` ungated — "a client can only pick from a declared set" is true of the action *id*, not of what the action then does | Latent, should be fixed |
-| **No `finally` around the queue's `inFlight` flag** | A throwing event listener would wedge the layer permanently. Not attacker-reachable today, but it is the wrong shape for the variable that decides whether anyone can ever be prompted again | Latent |
-| **Route-enumeration test only sees `/api`-prefixed literals** | A route added as `app.get('/health')` would be invisible to the test *and* uncovered by `app.use('/api')`. Should assert against the live router stack instead of the source text | Latent, cheap to fix |
-| **`express.static` follows symlinks out of `public/`** | `public/` has none today, and it is the one unauthenticated surface. A startup assertion or a realpath check would close it | Latent |
-| **`Origin` is checked more loosely than `Host`** — scheme and port ignored, and normalising forms like `http://127.1` accepted where the `Host` equivalent is rejected | No exploit: `Host` is the guard that actually stops rebinding, and it is strict. The asymmetry is undocumented rather than dangerous | Cosmetic |
-| **`Bearer` matching is case-sensitive** (RFC 7235 says the scheme is case-insensitive) | Fails closed, and every shipped client sends `Bearer`. The 401 copy would misdirect a third-party caller, which is the real cost | Interop |
-| **`approval: null` in `createApp` means "unenforced"** | `main()` always passes one, but "omitted → open" and "helper missing → closed" are a typo apart, and only one is announced at boot | Hardening |
+| **Substituting the helper binary defeats the layer.** `available()` is `existsSync` and nothing more; `swiftc` gives an attacker's own binary a valid adhoc signature, so the "exit 137 detects tampering" property catches *patching* a signed binary, not *replacing* it | Requires same-user code, which this spec deprioritises for the reason given in the threat model. **Honest correction to an earlier claim in this document:** "no local process can satisfy its dialog" is true of the **dialog** and false of the **gate**, which trusts an exit code from a path it never authenticates. Pinning a hash raises the bar but does not close it — the pin lives in the same trust domain as the binary | Real, accepted |
+| **`approval: null` in `createApp` means "unenforced"** | `main()` always passes one, but "omitted → open" and "helper missing → closed" are one typo apart and only the second is announced at boot. An explicit `'unenforced'` sentinel would make omission a startup error; deferred because it changes the constructor contract every test harness uses | Hardening |
+| **The `Origin` port is not pinned** | Any loopback *port* is accepted as an origin, so another local app's page is not distinguished from ours. Left because the `Host` check is what actually stops rebinding and is strict, and pinning the port needs the listening port plumbed into `createApp`, which only learns it at `listen()` time | Cosmetic |
+| **An extension could flip `process.platform` before `createApproval` snapshots it**, reaching the documented fail-**open** `degraded` path | Extensions are unsigned local `.js` files loaded in-process, so this is the same attacker class as substituting the helper — and strictly easier. Not separately closable while extensions are trusted code | Real, same class as the above |
+
+### Fixed after the review (second pass)
+
+| Finding | Fix |
+|---|---|
+| `sessionId` interpolated raw into a `Terminal.do script` shell string | Quoted and shape-checked; the old test pinned the *bare* form, so it pinned the vulnerability |
+| No `try/finally` around the queue's `inFlight` flag | Added; plus a no-op `'error'` listener, because an unheard `'error'` throws and would reintroduce the crash |
+| `Origin` looser than `Host` | Now reads the **raw** authority. Worth recording how the first attempt failed: `new URL(origin).host` looks stricter but normalises `http://127.1` and `http://2130706433` to loopback *before* the strict check sees them — measured, both still passed |
+| `Bearer` case-sensitive | Case-insensitive per RFC 7235 (it failed closed, but the 401 copy misdirected third-party callers) |
+| `express.static` follows symlinks out of `public/` | The daemon refuses to start if `public/` contains one, verified by planting a link to `/etc/passwd` |
+| **An agent could grant itself `permMode: auto`** by editing the `.scheduler.json` that governs it | `pinPermMode` refuses a *widening* for an active project and reports it; narrowing is always allowed, and a `pending` project adopts freely since activation is what freezes the ceiling |

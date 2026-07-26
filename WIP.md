@@ -169,12 +169,19 @@ work: *"I don't want any other service/website to be able to schedule jobs on my
   - **The audit log was never written** — event-name mismatch, so nothing about any approval, including a tamper report, reached `daemon.log`.
   - Plus: `budget/plan/apply` force-enabled jobs ungated; per-row deletes reached `/api/cleanup`'s end state ungated; `isOnlyDisabling` never returned true so every disable prompted.
   - **Two process lessons, both patterns not incidents.** A test that cannot fail is worse than none — this happened *twice* (the first spoofing test stayed green when the call it checked was deleted; the disable test filtered out the prompt under test), and mutation checks caught both. And my first placement of the project-delete gate sat **after** the loop that deletes bead jobs and unlinks logs — it would have destroyed the data and then asked permission, the very bug the contract forbids, introduced while fixing something else and caught by reading the result rather than trusting the patch.
-  - **Recorded as known-and-not-fixed** (see the spec's second table): helper-binary substitution defeats the gate (same-user, accepted — and an honest correction to "no local process can satisfy its dialog", which is true of the *dialog* and false of the *gate*); **an agent can grant itself `permMode: auto`** by editing `.scheduler.json` in a repo it already writes to — the highest-priority remaining item; unescaped `sessionId` in the resume action's AppleScript; no `finally` around the queue's in-flight flag; the route-enumeration test only sees `/api` literals; `express.static` follows symlinks.
+  - **Second pass closed the rest.** `permMode` self-escalation is fixed (`pinPermMode` refuses a *widening* for an active project, reports it, and still allows narrowing); the resume action's `sessionId` is quoted and shape-checked — **and its existing test had pinned the *bare* form, i.e. the vulnerability**; the queue can no longer wedge; `Origin` is as strict as `Host`; `Bearer` is case-insensitive per RFC; and the daemon refuses to start if `public/` contains a symlink.
+    - Worth recording *how* the Origin fix failed first: handing `new URL(origin).host` to the strict checker looks right but is not — URL parsing normalises `http://127.1` and `http://2130706433` to loopback *before* the strict check sees them, and both still returned 200. It reads the raw authority now.
+  - **Accepted, not fixed:** substituting the helper binary defeats the gate — `available()` is `existsSync`, and `swiftc` signs an attacker's replacement just as validly, so "137 detects tampering" catches *patching* a signed binary and not *replacing* one. Same-user only, and the same class as an unsigned extension flipping `process.platform`. This is also an honest correction to an earlier claim: "no local process can satisfy its dialog" is true of the *dialog* and false of the *gate*.
 - [ ] **Task 13 · the batched human session — `docs/spikes/auth-verify.sh`.** 8 steps, **5 dialogs**. Irreducible: what remains is the approve and deny outcomes, which cannot be satisfied without a human by design. Automating the click was attempted and refused by macOS (`-1743`), and granting the Automation permission that would allow it would weaken the machine to test a feature meant to protect it.
 
-**Status: 366/366 tests · 19/19 driving the real UI in Chrome · 40/40 screenshots · 5/5 against
-the real Touch ID helper · 22/22 in the batched session's dry run · 7 defects found and fixed by
-adversarial review.** Everything is code-complete and verified except the one step that
+**Status: 368/368 tests · 19/19 driving the real UI in Chrome · 40/40 screenshots · 5/5 against the
+real Touch ID helper · 22/22 in the batched session's dry run · 13 defects found and fixed by
+adversarial review, including one complete Layer-2 bypass.**
+
+Everything the review found that is fixable is fixed. What remains open is one accepted
+same-user limitation (substituting the helper binary, plus the equivalent via an unsigned
+extension flipping `process.platform`) and two cosmetic items — all four recorded with reasoning
+in the spec's "Known and NOT fixed" table. Everything is code-complete and verified except the one step that
 requires a human fingerprint.
 
 ✅ **The live daemon now runs the patched build** (restarted 2026-07-26, pid replaced, all 15 jobs
