@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
+import { request as httpRequest } from 'node:http';
 import { tmpData, jobPayload, fakeSpawn, fakeBd, bdReadyRow, sleep, extensions } from './helpers.js';
 import { ensureDirs } from '../lib/paths.js';
 import { readFileSync, mkdtempSync, writeFileSync } from 'node:fs';
@@ -1312,4 +1313,116 @@ test('settings: task-source keys round-trip and reject a worktreeRoot inside a r
   assert.equal(r.status, 400);
   assert.match(r.body.errors.join(' '), /outside every registered repo/);
   assert.equal((await req(p.base(), 'GET', '/api/settings')).body.worktreeRoot, '/tmp/cs-worktrees');
+});
+
+// ---------------- local-only guards (M5 §5.6)
+//
+// These exist because the hole was *exploited*, not imagined: against a dev
+// server, a cross-origin form-style POST to /api/cleanup returned 200 and
+// deleted two real jobs, and a GET with a foreign Host leaked /api/settings.
+// `req()` always sets Content-Type and fetch always sets a correct Host, so
+// every other test in this file is proof the guards don't obstruct the app —
+// these are the proofs they obstruct an attacker.
+
+test('CSRF: a cross-origin form-style POST cannot reach a destructive route', async (t) => {
+  const { server, base } = await boot();
+  t.after(() => server.close());
+
+  await req(base(), 'POST', '/api/jobs', jobPayload({ name: 'canary' }));
+  assert.equal((await req(base(), 'GET', '/api/jobs')).body.jobs.length, 1);
+
+  // Exactly what a <form method=post> on any page the user visits can send.
+  // /api/cleanup needs no body at all, so refusing to parse one is not a
+  // defence — the header is what a form cannot forge.
+  for (const ct of ['text/plain;charset=UTF-8', 'application/x-www-form-urlencoded', 'multipart/form-data']) {
+    const res = await fetch(base() + '/api/cleanup', {
+      method: 'POST', headers: { 'Content-Type': ct }, body: 'ignored=1',
+    });
+    assert.equal(res.status, 415, ct);
+  }
+  assert.equal((await req(base(), 'GET', '/api/jobs')).body.jobs.length, 1, 'the job survives');
+
+  // A missing Content-Type is refused for the same reason.
+  assert.equal((await fetch(base() + '/api/cleanup', { method: 'POST' })).status, 415);
+  assert.equal((await req(base(), 'GET', '/api/jobs')).body.jobs.length, 1);
+
+  // And the honest control: the app's own call still works, so the guard is
+  // discriminating between callers rather than just breaking the route.
+  assert.equal((await req(base(), 'POST', '/api/cleanup')).status, 200);
+  assert.equal((await req(base(), 'GET', '/api/jobs')).body.jobs.length, 0);
+});
+
+// node's fetch silently drops a manually-set Host (it is a forbidden header in
+// undici), so a header-based guard cannot be tested through it — the request
+// would arrive with a correct Host and pass for the wrong reason. Raw http
+// sends exactly the bytes we ask it to, which is the whole point here.
+function rawReq(port, { method = 'GET', path = '/', headers = {}, body } = {}) {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({ host: '127.0.0.1', port, method, path, headers }, (res) => {
+      let text = '';
+      res.on('data', (c) => { text += c; });
+      res.on('end', () => {
+        let parsed = null;
+        try { parsed = text ? JSON.parse(text) : null; } catch { /* html/plaintext */ }
+        resolve({ status: res.statusCode, body: parsed, raw: text });
+      });
+    });
+    req.on('error', reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
+test('rebinding: a foreign Host or Origin is refused, on reads as well as writes', async (t) => {
+  const { server, base } = await boot();
+  t.after(() => server.close());
+  const port = server.address().port;
+
+  // GET is included on purpose. Reading is the entire payoff of DNS rebinding —
+  // M5 adds a route that serves every word the user has typed into Claude Code.
+  for (const path of ['/api/settings', '/api/jobs', '/']) {
+    const r = await rawReq(port, { path, headers: { Host: 'evil.example.com' } });
+    assert.equal(r.status, 403, path);
+    assert.match(r.body.error, /loopback Host/);
+  }
+
+  // A correct Host but a foreign Origin is still cross-origin.
+  let r = await rawReq(port, {
+    method: 'POST', path: '/api/jobs',
+    headers: { Host: `127.0.0.1:${port}`, 'Content-Type': 'application/json', Origin: 'http://evil.example.com' },
+    body: JSON.stringify(jobPayload()),
+  });
+  assert.equal(r.status, 403);
+  assert.match(r.body.error, /cross-origin/);
+  assert.equal((await req(base(), 'GET', '/api/jobs')).body.jobs.length, 0, 'nothing was created');
+
+  // `null` is what a sandboxed iframe sends, so it is not a free pass.
+  r = await rawReq(port, {
+    method: 'POST', path: '/api/jobs',
+    headers: { Host: `127.0.0.1:${port}`, 'Content-Type': 'application/json', Origin: 'null' },
+    body: '{}',
+  });
+  assert.equal(r.status, 403);
+});
+
+test('the guards accept every name a human might browse to', async (t) => {
+  const { server } = await boot();
+  t.after(() => server.close());
+  const port = server.address().port;
+
+  // localhost and [::1] are as legitimate as 127.0.0.1, and the port must not
+  // matter. `[::1]:port` also pins the parse: splitting on the first colon
+  // would cut an IPv6 literal in half and lock the user out of their own app.
+  for (const host of [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`, 'localhost', 'LOCALHOST']) {
+    const r = await rawReq(port, { path: '/api/settings', headers: { Host: host } });
+    assert.equal(r.status, 200, host);
+  }
+  for (const origin of [`http://localhost:${port}`, `http://127.0.0.1:${port}`, `http://[::1]:${port}`]) {
+    const r = await rawReq(port, {
+      method: 'PUT', path: '/api/pause',
+      headers: { Host: `127.0.0.1:${port}`, 'Content-Type': 'application/json', Origin: origin },
+      body: JSON.stringify({ mode: 'off' }),
+    });
+    assert.equal(r.status, 200, origin);
+  }
 });

@@ -16,6 +16,44 @@ Design: [`2026-07-25-launchbox-design.md`](../specs/2026-07-25-launchbox-design.
 
 **Definition of done:** a Sessions tab lists sessions with live running indicators, opens transcripts, renames/deletes/resumes; scheduled runs and their sessions are cross-linked both ways; attribution is in place.
 
+> **Measured against the real corpus 2026-07-26** (57 depth-1 files, 122MB, ~27,350 rows) before
+> writing code, because four of this plan's rules were guesses. Corrections are marked
+> **[measured]** below. The headline: **the default entrypoint filter would have hidden every
+> session §5.4 exists to surface**, and two of the audit's fixes turn out to be zero-difference
+> guards rather than corrections — worth knowing so they're commented honestly rather than
+> claimed as bug fixes.
+
+---
+
+## 5.0 What the corpus actually says
+
+| Question | Plan assumed | Measured | Consequence |
+|---|---|---|---|
+| `entrypoint` values | `""` is common, allowlist fails open | Only `cli` (18,516) and `sdk-cli` (2,074). **`""` never occurs**; the key is *absent* on 25% of rows (every sidecar type) | The `""` allowlist member is only reachable via `entrypoint ?? ''` normalisation. **`sdk-cli` is what LaunchBox's own runs are** — see §5.4 |
+| inline `isSidechain` rows | may be a legacy shape, measure first | **0 of 20,559** depth-1 rows. 100% segregated into `<uuid>/subagents/*.jsonl` (101 files, 66MB) | Filter is **dead code here**. Plan pre-authorised keeping it as a guard — do that, commented as a guard |
+| `activeMs` source | `system`/`turn_duration`.`durationMs`; "add the subtype check upstream omits" | `durationMs` is on **146/146** `turn_duration` rows and **0** of the other 72 system rows (`local_command`, `away_summary`, `stop_hook_summary`, `informational`, `api_error`) | The subtype check is a **zero-difference guard**, not a fix. Both readings give 41.61h |
+| naive timestamps | JS-vs-Python inversion, silent 5h30m error | **All 21,478** timestamps are `…Z`. Zero naive, zero `+HH:MM` | The `Z`-append is a **guard**, not a correction. Keep it; don't claim it fixed anything |
+| token inflation | dedupe on `message.id` | Confirmed **1.60× / 1.98× / 2.13×** on the three largest files. Duplicate groups repeat a **byte-identical** `usage` (0 differing across 577 groups) | Dedupe keeping any one row is *exactly* correct, not an approximation. ⚠️ **`usage.iterations[]` repeats the same numbers a second time — do not add it** |
+| `promptSource`/`isMeta` preferred over prefix-sniffing (§5.3.4) | they "exist on real rows" | `promptSource` on **165/7,128** user rows (2.3%), `isMeta` on **123**. 6,798 of 7,128 user rows are `tool_result` carriers with no text at all | **Prefix-sniffing stays primary.** Use `isMeta` only as a supplement |
+
+Three more things the sample forced:
+
+- **The noise list is bigger than both the plan's guess and upstream's.** Upstream skips `<local-command`,
+  `<command-name>`, `<command-message>`, `<system-reminder>`, `<task-notification>`, `Caveat:`,
+  `[Request interrupted`. Observed here and missing from *the plan*: `<task-notification>` (39 —
+  the largest single class), `<local-command-caveat>` (25), and `<command-message>` **as a leading
+  prefix** (3 — `/doctor` emits it before `<command-name>`). Also `[Image:` (60), `<command-name>`
+  (25), `<local-command-stdout>` (8), `◇` (2), `<bash-input>` (1), `<bash-stdout>` (1).
+  Two shapes a prefix test cannot catch: `<system-reminder>` is **embedded inside `tool_result`
+  blocks** on 24 rows and leads only 1, and `[Request interrupted by user]` (5) is not tag-shaped
+  at all — today it would be selected as a session's title. `<local-command-stdout>` carries raw
+  **ANSI SGR escapes** (`ESC[1m`), so strip those too.
+- **21% of rows carry no `timestamp`** (7 types, 5,655 rows) — and the title sidecars are *exactly*
+  the undated ones, so a title cannot be dated from its own row. `file-history-snapshot` hides one
+  at `.snapshot.timestamp`.
+- **`sessionId` is absent on both `file-history-*` types** (758 rows), which is independent
+  confirmation that the id must come from the filename stem.
+
 ---
 
 ## 5.1 Attribution (do this first — it's the licence obligation)
@@ -71,6 +109,22 @@ Port these with care; upstream line numbers given so the original is checkable:
 - Run history rows link to the session transcript.
 - Per-job token attribution becomes real (deduped tokens per session, grouped by job) — which is also the honest, tokens-based complement to M1's percent-based `run_usage` deltas.
 
+**[measured] The default filter would have hidden all of it, and this is the one correction that
+changes a decision rather than a comment.** All 5 runs in the live database that carry a
+`meta.sessionId` resolve to a real file on disk, and **all 5 have `entrypoint: "sdk-cli"`** —
+because that is what `claude -p` writes, and `claude -p` is how this app spawns every claude job.
+`sdk-cli` is precisely what upstream's `INTERACTIVE_ENTRYPOINTS` excludes, and it excludes it for a
+defensible reason (throwaway Agent-SDK sessions, one per batch item, would drown a human's real
+work). So a faithful port hides *exactly* the sessions this section exists to surface, and the
+"integration that justifies building this" would render an empty list by default.
+
+Fix: the visibility rule is a **union, not the allowlist alone** — a session is shown by default if
+its entrypoint is interactive **or** it is referenced by some `runs.meta.sessionId`. Ours are
+ours; we know they aren't noise because we started them. `?all=1` still reveals the genuinely
+foreign `sdk-cli` sessions, and the count of what's hidden stays visible so the toggle is
+discoverable rather than a secret. Test this directly — it is the cheapest thing in the milestone
+to get wrong and the most visible when it is.
+
 ## 5.5 Schema
 
 ```sql
@@ -97,6 +151,45 @@ Add to `cleanupAll()` — but note this table is a **cache of files we don't own
 Keep the upstream path-traversal guards: `^[A-Za-z0-9._-]+$` on the id (`:1984`) and a realpath prefix check on any file path (`:2063-2077`).
 
 **[audit] Two more upstream guards worth carrying, both cheap and neither given by Express:** the loopback-only `Host` check (`_guard_host`, `:1907-1913`) and requiring `Content-Type: application/json` on mutating routes as a CSRF guard (`:2009-2011`, with a comment explaining why a form post can't set it). We bind a local port and now have routes that **delete a user's session history**, so this is a real rather than theoretical concern — decide it explicitly for the whole API, not just the sessions routes, and if we decline, say why here.
+
+### [measured] Decision: adopt both, globally, and do it before the sessions routes exist
+
+Settled by **exploiting it**, not by reasoning about it. Against a throwaway dev server: created two
+real jobs, then sent what any web page in the user's browser can send — a cross-origin form-style
+`POST` with `Host: evil.example.com`, `Origin: http://evil.example.com`,
+`Content-Type: text/plain` — at `/api/cleanup`. Result: **`HTTP 200 {"ok":true}`, both jobs gone.**
+`GET /api/settings` with a foreign `Host` also returned `200` and leaked the payload including
+`home`. So this is a live pre-existing hole, and the guards are not M5 hygiene.
+
+Why a browser form is enough: `express.json()` only parses `application/json`, so a form post
+leaves `req.body` as `{}` — and the destructive routes need **no body at all**. `/api/cleanup`
+(deletes every job and run and unlinks their log files) and `/api/uninstall` are both zero-body
+`POST`s, as are `/api/jobs/:id/run`, `/api/runs/:id/kill`, `/api/runs/:id/stop` and
+`/api/projects/:id/poll`.
+
+Two independent guards, because they stop different attacks:
+
+- **`Content-Type: application/json` on POST/PUT/PATCH/DELETE → else 415.** A cross-origin HTML
+  form cannot set that header (it may only send `urlencoded`, `multipart` or `text/plain`), and a
+  cross-origin `fetch` that sets it becomes a preflighted request we never answer with CORS
+  headers, so the browser blocks it. This closes the CSRF hole above.
+- **Loopback-only `Host` (and `Origin`, when present) → else 403.** Defeats DNS rebinding, which
+  is what turns a read-only endpoint into data exfiltration: the attacker's page re-resolves its
+  own name to `127.0.0.1`, becomes same-origin with us, and can then *read* responses. M5 makes
+  that payoff enormous — `/api/sessions/:id/conversation` is everything the user has ever typed
+  into Claude Code.
+
+Applies to **every** route, GET included (the read leak is the whole point of rebinding), so it
+goes in as two `app.use` middlewares ahead of `express.json()`. Allowlist is `127.0.0.1`,
+`localhost` and `[::1]`, port-insensitive — a human may reasonably browse to either name.
+
+Honest note on novelty: agent recon confirms the repo has **no** Host, Origin, CSRF or
+`Content-Type` check today — the entire security model is the `127.0.0.1` bind (`server.js:1038`).
+So this is a **new** convention, not a match to existing style, and it is being introduced here
+deliberately. It costs nothing at the callers: `public/util.js:10`'s `api()` already sets
+`Content-Type: application/json` unconditionally, even for bodiless requests, and so do
+`tests/api.test.js`'s `req()` and `tools/screenshots/seed.mjs` — but seed.mjs sets it **only when
+there is a body** (`seed.mjs:25`), so that one needs fixing with the change.
 
 ## 5.7 UI
 
