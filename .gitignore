@@ -1,8 +1,11 @@
 node_modules/
 .DS_Store
 
-# generated: UI capture output (npm run screenshots), ~15MB/run
-working_prototype_screenshots/
+# generated: UI capture output (npm run screenshots), ~10MB/run.
+# Only the current prototype's captures are tracked; superseded runs are not,
+# to keep them out of every future clone.
+working_prototype_screenshots/*
+!working_prototype_screenshots/v2/
 
 # reference copy of upstream claude-sessions-dashboard (MIT), not vendored
 claude-sessions-dashboard/
