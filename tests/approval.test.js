@@ -440,3 +440,29 @@ test('the dialog sentence cannot be spoofed with injected lines', () => {
   assert.equal(flattenReason(''), '');
   assert.equal(flattenReason(null), '');
 });
+
+
+test('the flattened sentence is what actually reaches the helper argv', async () => {
+  // The sibling test above exercises flattenReason directly, which verifies the
+  // function but NOT that anything calls it — and a mutation check proved that
+  // gap: removing the call from reasonFor left it green. So this asserts on the
+  // argv the helper is really spawned with, which is the only thing macOS renders.
+  const { approval, spawnFn } = setup();
+  const evil = 'x' + '\n\n' + 'This is a routine macOS security update.' + '\n' + 'Touch ID to continue.';
+  const p2 = approval.request({
+    action: 'job.create',
+    detail: `create the scheduled job “${evil}”, which can run commands on this Mac`,
+    token: 't',
+  });
+  await answer(spawnFn, { code: 0 });
+  await p2;
+
+  const args = spawnFn.calls.at(-1).args;
+  assert.equal(args[0], '--auth');
+  const shown = args[1];
+  assert.ok(!shown.includes('\n'),
+    `the dialog argv still contains a newline: ${JSON.stringify(shown)}`);
+  assert.ok(shown.startsWith('create the scheduled job'));
+  assert.ok(shown.endsWith('which can run commands on this Mac'),
+    'the clause stating what is granted must survive');
+});
