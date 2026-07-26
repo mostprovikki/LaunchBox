@@ -9,3 +9,9 @@ working_prototype_screenshots/*
 
 # reference copy of upstream claude-sessions-dashboard (MIT), not vendored
 claude-sessions-dashboard/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/

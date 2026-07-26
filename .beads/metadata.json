@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "claude_scheduler",
+  "project_id": "51bf0804-0a18-4377-98f8-542d22ba57ec"
+}
