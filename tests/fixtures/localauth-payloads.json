@@ -1,0 +1,15 @@
+{
+  "_comment": [
+    "Payloads emitted by the REAL helper/LaunchBox.swift, captured on this machine.",
+    "The approve and deny entries were produced by a human at the actual system",
+    "dialog during the 2026-07-26 spike (screenshotted); the check and usage",
+    "entries were captured directly. They live here so lib/approval.js is tested",
+    "against what the binary really prints rather than against an assumed shape:",
+    "if the Swift side ever changes its output, the test that reads this fails."
+  ],
+  "approveTouchId": { "exit": 0, "stdout": "{\"elapsedMs\":34435,\"error\":\"\",\"errorCode\":0,\"hasTTY\":false,\"mode\":\"auth\",\"success\":true,\"timedOut\":false}" },
+  "approvePassword": { "exit": 0, "stdout": "{\"elapsedMs\":67582,\"error\":\"\",\"errorCode\":0,\"hasTTY\":false,\"mode\":\"auth\",\"success\":true,\"timedOut\":false}" },
+  "deny": { "exit": 1, "stdout": "{\"elapsedMs\":15346,\"error\":\"Authentication canceled.\",\"errorCode\":-2,\"hasTTY\":false,\"mode\":\"auth\",\"success\":false,\"timedOut\":false}" },
+  "check": { "exit": 0, "stdout": "{\"biometryType\":\"touchID\",\"canEvaluate\":true,\"error\":\"\",\"errorCode\":0,\"hasTTY\":false,\"mode\":\"check\",\"sessionHasGUI\":\"0\"}" },
+  "badUsage": { "exit": 2, "stdout": "{\"error\":\"usage: LaunchBox --check | --auth <reason>\"}" }
+}

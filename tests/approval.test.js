@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { tmpData, fakeSpawn, sleep } from './helpers.js';
 import {
   createApproval, APPROVAL_CODES, DEFAULT_TIMEOUT_MS, DEFAULT_GRACE_MS, DEFAULT_MAX_QUEUED,
@@ -347,4 +348,55 @@ test('the approval event reports what happened, and never how', async () => {
   await answer(spawnFn, { code: 0 });
   await withToken;
   assert.equal(JSON.stringify(events).includes('tok-secret'), false);
+});
+
+// ---------------- pinned against the REAL binary's output
+//
+// Every other test here drives a fake that emits a payload shape *we* chose. That
+// verifies the mapping but not that the mapping matches reality. These read
+// tests/fixtures/localauth-payloads.json, which holds what the compiled helper
+// actually printed — the approve and deny entries produced by a human at the real
+// system dialog. If the Swift side ever changes its output, this fails.
+test('the real helper payloads map to the right outcomes', async () => {
+  const real = JSON.parse(readFileSync(
+    new URL('./fixtures/localauth-payloads.json', import.meta.url), 'utf8',
+  ));
+
+  for (const key of ['approveTouchId', 'approvePassword']) {
+    const { approval, spawnFn } = setup();
+    const p = approval.request({ action: 'job.create', detail: 'create a job', token: 't' });
+    await answer(spawnFn, { code: real[key].exit, stdout: real[key].stdout });
+    assert.deepEqual(await p, { ok: true }, `${key} must be allowed`);
+  }
+
+  // Touch ID and password are indistinguishable to us by design: same exit code,
+  // same errorCode, differing only in elapsedMs. Asserted so nobody later tries
+  // to branch on the factor, which LocalAuthentication does not report.
+  assert.notEqual(
+    JSON.parse(real.approveTouchId.stdout).elapsedMs,
+    JSON.parse(real.approvePassword.stdout).elapsedMs,
+  );
+  for (const k of ['errorCode', 'success']) {
+    assert.equal(JSON.parse(real.approveTouchId.stdout)[k], JSON.parse(real.approvePassword.stdout)[k]);
+  }
+
+  {
+    const { approval, spawnFn } = setup();
+    const p = approval.request({ action: 'cleanup', detail: 'delete everything', token: 't' });
+    await answer(spawnFn, { code: real.deny.exit, stdout: real.deny.stdout });
+    const out = await p;
+    assert.equal(out.ok, false);
+    assert.equal(out.code, 'approval_denied', 'a real deny is a denial, not an outage');
+  }
+
+  // Bad usage exits 2. It must fail CLOSED as unavailable — never be mistaken for
+  // an approval, and never reported as the user having said no.
+  {
+    const { approval, spawnFn } = setup();
+    const p = approval.request({ action: 'job.create', detail: 'create a job', token: 't' });
+    await answer(spawnFn, { code: real.badUsage.exit, stdout: real.badUsage.stdout });
+    const out = await p;
+    assert.equal(out.ok, false);
+    assert.equal(out.code, 'approval_unavailable');
+  }
 });
