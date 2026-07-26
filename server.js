@@ -60,8 +60,19 @@ const AUDIT_NOTE = 'Expect .beads/interactions.jsonl to show up as modified. bd 
 // what is being granted, and a user who reads only this line should still
 // understand it. `permMode: auto` is called out separately because it widens
 // what unattended work may do to their files.
+// The name is clamped BEFORE interpolation, not by the overall dialog cap.
+// Measured: an over-long name pushed the sentence past the cap and truncated it
+// to "…which can run commands on thi" — losing precisely the clause that states
+// what is being granted. The safety-relevant tail must never be the part that
+// gets cut, so the untrusted part is what gives way.
+const NAME_IN_DIALOG_MAX = 60;
+const clampName = (name) => {
+  const n = String(name ?? '');
+  return n.length <= NAME_IN_DIALOG_MAX ? n : `${n.slice(0, NAME_IN_DIALOG_MAX - 1)}…`;
+};
+
 function jobApprovalSentence(verb, job) {
-  const bits = [`${verb} the scheduled job “${job.name}”`];
+  const bits = [`${verb} the scheduled job “${clampName(job.name)}”`];
   bits.push(job.type === 'claude'
     ? 'which can run Claude with access to this Mac'
     : 'which can run commands on this Mac');

