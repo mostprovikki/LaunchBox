@@ -34,8 +34,34 @@ Data lives in `~/.claude-scheduler/` (sqlite db, per-run logs, daemon.log). The 
 ```bash
 npm test                                  # sandboxed (tmp CS_DATA, fake spawns)
 CS_DATA=$(mktemp -d) CS_PORT=18741 node server.js   # dev server
+npm run screenshots                       # capture the whole UI to a versioned folder
 ```
 
 Env: `CS_PORT` (default 9099), `CS_DATA` (default `~/.claude-scheduler`), `CS_NO_NOTIFY=1` (suppress banners).
+
+### UI screenshots
+
+`npm run screenshots` writes every screen and dialog to
+`working_prototype_screenshots/v<N>/` (next free `N`) plus a generated `INDEX.md`, for
+before/after comparison across a UI overhaul. Needs Chrome (or `CHROME_PATH`) and node 22+;
+no npm dependencies. Takes ~3 min, most of it seeding.
+
+It boots its own scheduler on a free port against a throwaway `CS_DATA`, so
+`~/.claude-scheduler` is never touched. `claudePath` is pre-seeded to a fake binary, so the
+usage meters read fixed percentages from `tests/fixtures/get-usage-response.json` and **no
+real `claude` can run** — a capture spends no API quota. Only `command`-type jobs are
+executed; `claude` jobs are created disabled and never fired, and no project is ever
+activated.
+
+```bash
+npm run screenshots -- --label v2      # explicit folder name
+npm run screenshots -- --only history  # just the matching shots
+npm run screenshots -- --headful       # watch it drive a real window
+npm run screenshots -- --keep          # leave the sandbox up to poke at
+```
+
+Every DOM selector lives in [`tools/screenshots/shots.mjs`](tools/screenshots/shots.mjs). After
+an overhaul, failed shots are listed with the reason and the run exits non-zero — fix them
+there. Add a screen by appending one entry to that file; `INDEX.md` is generated from it.
 
 Future plans: [`docs/plans/2026-07-19-extensions-roadmap.md`](docs/plans/2026-07-19-extensions-roadmap.md) — rich output handlers (syntax highlighting), tmux attach, per-extension config, more agent extensions.
