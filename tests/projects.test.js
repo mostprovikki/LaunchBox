@@ -5,7 +5,7 @@ import { EventEmitter } from 'node:events';
 import { tmpData, fakeBd, bdReadyRow } from './helpers.js';
 import { openDb, createProject, getProject, updateProject, listProjects, getLease, listJobs, acquireLease, getRunUsage, recordRunUsage, avgDeltaForJob, setSetting } from '../lib/db.js';
 import { createBeads } from '../lib/beads.js';
-import { createProjects, parseProjectConfig, completionMarker, beadPrompt } from '../lib/projects.js';
+import { createProjects, parseProjectConfig, completionMarker, beadPrompt , pinPermMode} from '../lib/projects.js';
 
 function freshDb() {
   return openDb(join(tmpData(), 'test.db'));
@@ -1066,4 +1066,51 @@ test('with per-bead worktrees a project may run several beads at once, each in i
   assert.deepEqual(cwds, ['/tmp/wt/repo--sp-1', '/tmp/wt/repo--sp-2'],
     'two concurrent beads must not share a checkout — that was the collision the clamp existed to prevent');
   assert.equal(r.reasons.join(' ').includes('share a single git worktree'), false, 'the clamp explanation is gone');
+});
+
+// ---------------- an agent must not be able to widen its own permissions
+
+test('an active project cannot widen permMode by editing its own .scheduler.json', () => {
+  // The escalation: every poll re-reads .scheduler.json, and an agent the
+  // scheduler runs has write access in that repo. So it can edit the very file
+  // that governs it and grant its own successors --dangerously-skip-permissions.
+  // The human approved ACTIVATION, not "auto permissions from now on".
+  const active = { state: 'active' };
+  const stored = { autoLabel: 'unattended', defaults: { permMode: 'acceptEdits' } };
+
+  const widened = pinPermMode(active, stored, {
+    autoLabel: 'unattended', defaults: { permMode: 'auto' },
+  });
+  assert.equal(widened.refused, true);
+  assert.equal(widened.config.defaults.permMode, 'acceptEdits', 'the approved mode is kept');
+  assert.equal(widened.asked, 'auto');
+
+  // Narrowing needs no permission: a repo may always make itself safer.
+  const narrowed = pinPermMode(active, stored, {
+    autoLabel: 'unattended', defaults: { permMode: 'default' },
+  });
+  assert.equal(narrowed.refused, false);
+  assert.equal(narrowed.config.defaults.permMode, 'default');
+
+  // Everything else in the file is still adopted — owning its own label and
+  // concurrency is the point of the file.
+  const relabelled = pinPermMode(active, stored, {
+    autoLabel: 'nightly', maxConcurrent: 3, defaults: { permMode: 'auto', model: 'haiku' },
+  });
+  assert.equal(relabelled.config.autoLabel, 'nightly');
+  assert.equal(relabelled.config.maxConcurrent, 3);
+  assert.equal(relabelled.config.defaults.model, 'haiku');
+  assert.equal(relabelled.config.defaults.permMode, 'acceptEdits', 'only permMode is pinned');
+
+  // A pending project has no approval to protect yet; activation freezes it.
+  const pending = pinPermMode({ state: 'pending' }, stored, { defaults: { permMode: 'auto' } });
+  assert.equal(pending.refused, false);
+  assert.equal(pending.config.defaults.permMode, 'auto');
+
+  // An unknown future mode ranks as the least privileged, so it can never be a
+  // silent widening.
+  assert.equal(pinPermMode(active, stored, { defaults: { permMode: 'wat' } }).refused, false);
+  assert.equal(
+    pinPermMode(active, { defaults: { permMode: 'wat' } }, { defaults: { permMode: 'auto' } }).refused,
+    true, 'widening FROM an unrecognised mode is still a widening');
 });
