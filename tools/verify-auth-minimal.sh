@@ -28,7 +28,23 @@ bad(){ echo "   ✗ $1"; fail=$((fail+1)); }
 PORT=18907
 export CS_DATA="$(mktemp -d)" CS_PORT=$PORT CS_NO_NOTIFY=1 CS_APPROVAL_TIMEOUT_MS=60000
 FAKE="$(mktemp -d)"
-cleanup(){ lsof -ti:$PORT 2>/dev/null | xargs kill -9 2>/dev/null; rm -rf "$CS_DATA" "$FAKE"
+# SIGTERM first, and suppress the shell's job-control notice: a bare `kill -9`
+# on a daemon this shell still owns prints "Killed: 9" AFTER the results, which
+# reads like a failure at exactly the moment the summary says everything passed.
+stop_daemon() {
+  local pids
+  pids=$(lsof -ti:"${PORT:-${CS_PORT:-0}}" 2>/dev/null) || true
+  [ -n "$pids" ] || return 0
+  kill $pids 2>/dev/null || true
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    lsof -ti:"${PORT:-${CS_PORT:-0}}" >/dev/null 2>&1 || return 0
+    sleep 0.3
+  done
+  kill -9 $pids 2>/dev/null || true
+  wait $pids 2>/dev/null || true
+}
+
+cleanup(){ stop_daemon; rm -rf "$CS_DATA" "$FAKE"
   echo ""; echo "──────── $pass passed, $fail failed ────────"
   [ "$fail" = "0" ] && echo "The approval layer is verified end to end, including the human half." ; }
 trap cleanup EXIT
@@ -45,6 +61,10 @@ import('./lib/paths.js').then(async (p) => {
   setSetting(db, 'claudePath', process.argv[1]); db.close();
 });" "$FAKE/claude"
 node server.js > "$CS_DATA/log" 2>&1 &
+# Detached from job control so the shell does not print "Terminated: 15" after the
+# summary — a teardown notice that reads like a failure at the moment the results say
+# everything passed.
+disown 2>/dev/null || true
 for i in $(seq 1 30); do curl -sf "http://127.0.0.1:$PORT/" >/dev/null 2>&1 && break; sleep 0.5; done
 curl -sf "http://127.0.0.1:$PORT/" >/dev/null || { bad "daemon did not start"; exit 1; }
 T=$(node bin/claude-scheduler.mjs token)
