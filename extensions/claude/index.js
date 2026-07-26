@@ -8,7 +8,9 @@ import { createFormatter } from './formatter.js';
 export default {
   id: 'claude',
   name: 'Claude prompt',
-  icon: '🤖',
+  iconName: 'claude',
+  icon: '🤖', // fallback for any renderer that doesn't know the SVG set
+
   description: 'Run a headless Claude Code session with a goal prompt.',
 
   fields: [

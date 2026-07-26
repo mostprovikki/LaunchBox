@@ -17,7 +17,8 @@ That's it. The UI picks it up automatically: a type button in the job dialog, fo
 | Key | Req | Purpose |
 |---|---|---|
 | `id` | ✓ | Stored in `job.type`. Don't change after jobs exist. |
-| `name`, `icon`, `description` |  | UI labels. |
+| `name`, `icon`, `description` |  | UI labels. `icon` is any unicode glyph. |
+| `iconName` |  | An icon from `public/icons.js` (`terminal`, `claude`) — preferred over `icon`, which stays as the fallback. An unknown name falls back to the glyph rather than rendering nothing, so naming an icon a future version ships is safe. |
 | `fields` | ✓ | Job form config. Values land in `job.params`, validated server-side. `advanced: true` → collapsed section. |
 | `command(job, {setting})` | ✓ | Return `{cmd, args, env?}` — the process to spawn (cwd = job's cwd). |
 | `settings` |  | Extension-scoped settings (Settings tab). Prefix keys with your id (`my-agent:binPath`) to avoid collisions. |

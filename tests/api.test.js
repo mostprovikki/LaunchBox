@@ -390,7 +390,10 @@ test('schedule preview + settings round-trip (per-extension)', async (t) => {
     home: process.env.HOME || '',
     usagePollSec: 180,
     usageShow: 'banner',
-    usageWarnPct: 80,
+    // Display-only severity thresholds, as a validated pair. Not the guard's
+    // reserves below: these colour a meter, those decide whether a run fires.
+    usageWarnPct: 75,
+    usageCritPct: 85,
     awakeResetLeadMin: 20,
     // Task sources (M4a). All four ship empty/unpinned: no roots means discovery
     // has nowhere to look, and no worktreeRoot means work runs in the repo itself
@@ -421,24 +424,59 @@ test('settings: usage keys round-trip and reject out-of-range values', async (t)
   const { server, base } = await boot();
   t.after(() => server.close());
 
-  let r = await req(base(), 'PUT', '/api/settings', { usagePollSec: 300, usageShow: 'compact', usageWarnPct: 70 });
+  let r = await req(base(), 'PUT', '/api/settings', {
+    usagePollSec: 300, usageShow: 'compact', usageWarnPct: 70, usageCritPct: 90,
+  });
   assert.equal(r.body.ok, true);
   r = await req(base(), 'GET', '/api/settings');
   assert.equal(r.body.usagePollSec, 300);
   assert.equal(r.body.usageShow, 'compact');
   assert.equal(r.body.usageWarnPct, 70);
+  assert.equal(r.body.usageCritPct, 90);
   r = await req(base(), 'GET', '/api/usage');
   assert.equal(r.body.display, 'compact');
   assert.equal(r.body.warnPct, 70);
+  assert.equal(r.body.critPct, 90, 'the strip gets both thresholds, not just warn');
   assert.equal(r.body.pollSec, 300, 'a new interval applies without a restart');
 
   // The 60s floor is not the client's to lower.
-  for (const bad of [{ usagePollSec: 30 }, { usagePollSec: 'soon' }, { usageShow: 'sideways' }, { usageWarnPct: 0 }]) {
+  for (const bad of [{ usagePollSec: 30 }, { usagePollSec: 'soon' }, { usageShow: 'sideways' },
+    { usageWarnPct: 0 }, { usageCritPct: 100 }, { usageCritPct: 'hot' }]) {
     r = await req(base(), 'PUT', '/api/settings', bad);
     assert.equal(r.status, 400, JSON.stringify(bad));
   }
   r = await req(base(), 'GET', '/api/settings');
   assert.equal(r.body.usagePollSec, 300, 'a rejected write changes nothing');
+});
+
+// crit must stay above warn or the amber band is unreachable — the higher test
+// wins first, so `fail` would answer for every percent that should have been warn.
+test('settings: crit must exceed warn, and a rejected pair writes neither key', async (t) => {
+  const { server, base } = await boot();
+  t.after(() => server.close());
+
+  let r = await req(base(), 'PUT', '/api/settings', { usageWarnPct: 70, usageCritPct: 90 });
+  assert.equal(r.body.ok, true);
+
+  // Inverted, and equal — both make one band dead.
+  for (const bad of [{ usageWarnPct: 95, usageCritPct: 60 }, { usageWarnPct: 50, usageCritPct: 50 }]) {
+    r = await req(base(), 'PUT', '/api/settings', bad);
+    assert.equal(r.status, 400, JSON.stringify(bad));
+    assert.match(r.body.errors[0], /usageCritPct must be above usageWarnPct/);
+  }
+  r = await req(base(), 'GET', '/api/settings');
+  assert.equal(r.body.usageWarnPct, 70, 'the rejected warn was not persisted before the pair check');
+  assert.equal(r.body.usageCritPct, 90);
+
+  // One key alone is still checked against what is stored, both ways round.
+  r = await req(base(), 'PUT', '/api/settings', { usageWarnPct: 95 });
+  assert.equal(r.status, 400, 'warn alone cannot climb past the stored crit');
+  r = await req(base(), 'PUT', '/api/settings', { usageCritPct: 65 });
+  assert.equal(r.status, 400, 'crit alone cannot drop below the stored warn');
+  r = await req(base(), 'PUT', '/api/settings', { usageCritPct: 80 });
+  assert.equal(r.body.ok, true, 'a lone key that keeps the pair ordered is fine');
+  r = await req(base(), 'GET', '/api/settings');
+  assert.deepEqual([r.body.usageWarnPct, r.body.usageCritPct], [70, 80]);
 });
 
 test('settings: budget keys round-trip and reject out-of-range values', async (t) => {
@@ -744,7 +782,10 @@ test('usage: pending snapshot, throttled refresh, history', async (t) => {
   assert.equal(r.body.available, null);
   assert.deepEqual(r.body.windows, {});
   assert.equal(r.body.display, 'banner');
-  assert.equal(r.body.warnPct, 80);
+  // Both thresholds ride the pending shape too, so the strip colours correctly on
+  // the very first tick instead of recolouring once the probe lands.
+  assert.equal(r.body.warnPct, 75);
+  assert.equal(r.body.critPct, 85);
   assert.equal(r.body.pollSec, 180);
 
   const forced = req(base(), 'POST', '/api/usage/refresh');

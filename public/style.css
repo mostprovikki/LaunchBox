@@ -125,7 +125,13 @@ header .switch.small input:checked ~ span { color: var(--warn); }
 .item:hover { border-color: #35414f; }
 .item .grow { flex: 1; min-width: 0; }
 .item .title { font-weight: 600; display: flex; align-items: center; gap: 8px; }
-.item .title .type-ico { opacity: .7; font-weight: 400; }
+/* A fixed box, so an SVG mark and a fallback glyph occupy the same width and the
+   job names in a list stay left-aligned with each other whatever each type declares. */
+.item .title .type-ico { opacity: .75; font-weight: 400; flex: 0 0 16px; display: inline-flex; justify-content: center; }
+/* `vertical-align` can't centre an inline SVG against a 600-weight line box; the
+   flex parent does it, and this stops the baseline nudge browsers add otherwise. */
+.ico { display: block; flex: none; }
+.seg button .ico, legend .ico { display: inline-block; vertical-align: -2px; }
 .item .sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; display: flex; gap: 14px; flex-wrap: wrap; }
 .item .actions { display: flex; align-items: center; gap: 4px; }
 .item.disabled .title, .item.disabled .sub { opacity: .5; }
