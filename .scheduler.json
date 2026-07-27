@@ -4,9 +4,9 @@
   "cwd": ".",
   "maxConcurrent": 1,
   "defaults": {
-    "timeoutMin": 45,
+    "timeoutMin": 180,
     "model": "default",
     "notify": "failure",
-    "permMode": "acceptEdits"
+    "permMode": "auto"
   }
 }

@@ -29,7 +29,7 @@ import { createBurst, BURST_DEFAULTS } from './lib/burst.js';
 import { createBeads } from './lib/beads.js';
 import { createWorktrees } from './lib/worktree.js';
 import {
-  createProjects, parseProjectConfig, CONFIG_FILE,
+  createProjects, parseProjectConfig, rejectedConfig, CONFIG_FILE,
   DEFAULT_POLL_SEC as BEADS_DEFAULT_POLL_SEC, POLL_FLOOR_SEC as BEADS_POLL_FLOOR_SEC,
 } from './lib/projects.js';
 import { startUninstall } from './lib/uninstall.js';
@@ -847,7 +847,7 @@ export function createApp({
       name: parsed.config?.name || path.split('/').filter(Boolean).pop() || path,
       path,
       state: 'pending',
-      config: parsed.config ?? {},
+      config: parsed.config ?? rejectedConfig(parsed.errors),
     });
     // Learn where the database actually is now rather than at first poll, so the
     // tab can show the truth before anyone is asked to activate anything.
@@ -968,8 +968,8 @@ export function createApp({
       return res.json({ beads: [], busy: true, reasons: [health.reason], health, autoLabel });
     }
     if (!health.ok) return res.json({ beads: [], busy: false, reasons: [health.reason], health, autoLabel });
-    if (!autoLabel) {
-      return res.json({ beads: [], busy: false, reasons: parsed.errors, health, autoLabel: null });
+    if (!parsed.ok) {
+      return res.json({ beads: [], busy: false, reasons: parsed.errors, health, autoLabel });
     }
     try {
       const rows = await beads.ready(project, { label: autoLabel });

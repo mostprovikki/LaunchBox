@@ -1120,6 +1120,53 @@ test('a config with no autoLabel registers, reports the error, and offers no bea
   assert.match(r.body.reasons.join(' '), /autoLabel/, 'contributing nothing must never be silent');
 });
 
+test('a rejected permMode is not laundered clean by a later GET, by /ready, or by activation', async (t) => {
+  const p = await bootWithProjects({
+    handlers: { ready: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', labels: ['unattended'] })]) } },
+  });
+  t.after(() => p.close());
+
+  // The declaration is rejected: `permMode: "yolo"` is not a recognised mode.
+  let r = await req(p.base(), 'POST', '/api/projects', {
+    path: repoDir({ autoLabel: 'unattended', defaults: { permMode: 'yolo' } }),
+  });
+  assert.equal(r.status, 201);
+  assert.match(r.body.errors.join(' '), /permMode/);
+  assert.match(r.body.project.configErrors.join(' '), /permMode/);
+  const id = r.body.project.id;
+
+  // A later GET must still report it — this is the laundering this bug caused:
+  // `config` was persisted with `permMode` already normalised to "default",
+  // so a re-parse of the stored copy came back clean and the error vanished.
+  r = await req(p.base(), 'GET', '/api/projects');
+  const row = r.body.projects.find((x) => x.id === id);
+  assert.match(row.configErrors.join(' '), /permMode/, 'the rejection must survive a stored round trip');
+
+  // /ready must refuse rather than hand back the bead list.
+  r = await req(p.base(), 'GET', `/api/projects/${id}/ready`);
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.beads, [], 'a rejected declaration must offer no work, not "everything"');
+  assert.match(r.body.reasons.join(' '), /permMode/);
+
+  // Activating it and polling must leave it in `error`, not silently run under
+  // the normalised-to-default permMode.
+  r = await req(p.base(), 'PUT', `/api/projects/${id}`, { state: 'active' });
+  assert.equal(r.status, 200);
+  r = await req(p.base(), 'POST', `/api/projects/${id}/poll`);
+  assert.equal(r.status, 200);
+  assert.equal(getProject(p.db, id).state, 'error', 'a rejected config must never run work under a laundered default');
+});
+
+test('a malformed .scheduler.json is reported by its real reason, not a generic "missing autoLabel"', async (t) => {
+  const p = await bootWithProjects();
+  t.after(() => p.close());
+
+  const r = await req(p.base(), 'POST', '/api/projects', { path: repoDir('{ "autoLabel": "unattended", }') });
+  assert.equal(r.status, 201);
+  assert.match(r.body.errors.join(' '), /not valid JSON/);
+  assert.match(r.body.project.configErrors.join(' '), /not valid JSON/, 'storing {} would have re-validated to "must set autoLabel" instead');
+});
+
 test('PUT /api/projects/:id is the airlock: active|paused and nothing else', async (t) => {
   const p = await bootWithProjects();
   t.after(() => p.close());

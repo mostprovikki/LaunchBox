@@ -5,7 +5,7 @@ import { EventEmitter } from 'node:events';
 import { tmpData, fakeBd, bdReadyRow } from './helpers.js';
 import { openDb, createProject, getProject, updateProject, listProjects, getLease, listJobs, acquireLease, getRunUsage, recordRunUsage, avgDeltaForJob, setSetting } from '../lib/db.js';
 import { createBeads } from '../lib/beads.js';
-import { createProjects, parseProjectConfig, completionMarker, beadPrompt , pinPermMode} from '../lib/projects.js';
+import { createProjects, parseProjectConfig, rejectedConfig, completionMarker, beadPrompt, pinPermMode } from '../lib/projects.js';
 
 function freshDb() {
   return openDb(join(tmpData(), 'test.db'));
@@ -47,7 +47,7 @@ function fakeRunner({ db = null, status = 'running' } = {}) {
 
 const CONFIG = { autoLabel: 'unattended', maxConcurrent: 1, defaults: { timeoutMin: 30, model: 'default', notify: 'failure' } };
 
-function setup({ bdHandlers = {}, runnerOpts = {}, config = CONFIG, state = 'active' } = {}) {
+function setup({ bdHandlers = {}, runnerOpts = {}, config = CONFIG, state = 'active', fsx = null } = {}) {
   const db = freshDb();
   const bd = fakeBd({
     '--version': { stdout: 'bd version 1.1.0 (Homebrew)' },
@@ -57,9 +57,16 @@ function setup({ bdHandlers = {}, runnerOpts = {}, config = CONFIG, state = 'act
   const beads = createBeads({ execFileFn: bd });
   const runner = fakeRunner({ db, ...runnerOpts });
   const project = createProject(db, { name: 'repo', path: '/repo', state, config, beadsDir: '/repo/.beads' });
-  const projects = createProjects({ db, beads, runner });
+  const projects = createProjects({ db, beads, runner, ...(fsx ? { fsx } : {}) });
   return { db, bd, beads, runner, project, projects };
 }
+
+// What `discover()`/`POST /api/projects` actually persist for a declaration —
+// the normalised `config`, round-tripped through JSON like the real store —
+// not the raw declaration. Seeding a poll test with the raw declaration lets
+// `pollProject` re-read the offending value on the *existing* code path and
+// pass against unfixed code, pinning nothing.
+const stored = (decl) => JSON.parse(JSON.stringify(parseProjectConfig(decl).config));
 
 // --- config ------------------------------------------------------------
 
@@ -72,6 +79,91 @@ test('autoLabel is mandatory — its absence is an error, never "run everything"
   assert.equal(good.ok, true);
   assert.equal(good.config.autoLabel, 'unattended');
   assert.equal(good.config.maxConcurrent, 1, 'conservative default');
+});
+
+// --- rejected declarations must not launder clean on re-parse -----------
+
+const REJECTED_DECLS = [
+  { name: 'unrecognised permMode', decl: { autoLabel: 'unattended', defaults: { permMode: 'yolo' } } },
+  { name: 'non-object budget', decl: { autoLabel: 'unattended', budget: 'lots' } },
+  { name: 'minHeadroomPct out of range', decl: { autoLabel: 'unattended', budget: { minHeadroomPct: 250 } } },
+  { name: 'minHeadroomPct as a string', decl: { autoLabel: 'unattended', budget: { minHeadroomPct: '50%' } } },
+  { name: 'ignoreGuard self-granted', decl: { autoLabel: 'unattended', budget: { ignoreGuard: true } } },
+  { name: 'missing autoLabel', decl: { enabled: true } },
+  { name: 'two faults at once', decl: { defaults: { permMode: 'yolo' }, budget: { minHeadroomPct: 250 } } },
+  { name: 'an absurdly long permMode', decl: { autoLabel: 'unattended', defaults: { permMode: 'y'.repeat(5000) } } },
+];
+
+for (const { name, decl } of REJECTED_DECLS) {
+  test(`rejected declaration (${name}) stays rejected across a store/re-parse round trip`, () => {
+    const first = parseProjectConfig(decl);
+    assert.equal(first.ok, false, 'must be rejected on first parse');
+
+    const roundTripped = JSON.parse(JSON.stringify(first.config));
+    const second = parseProjectConfig(roundTripped);
+    assert.equal(second.ok, false, 'must still be rejected once the normalised config is stored and re-parsed');
+    assert.deepEqual(second.errors, first.errors, 'the carried reasons must survive byte-identical');
+
+    const thirdTripped = JSON.parse(JSON.stringify(second.config));
+    const third = parseProjectConfig(thirdTripped);
+    assert.equal(third.ok, false, 'a third parse must not drop the rejection either');
+    assert.deepEqual(third.errors, second.errors, 'errors must be stable, not accumulate or shrink');
+  });
+}
+
+test('a corrected declaration clears the rejection', () => {
+  const rejected = parseProjectConfig({ autoLabel: 'unattended', defaults: { permMode: 'yolo' } });
+  assert.equal(rejected.ok, false);
+
+  // Fixing the file on disk means the next raw parse never carries the old
+  // `_rejected` key forward — this exercises a fresh declaration, not the
+  // stored one, since a human edits the file, not the database row.
+  const fixed = parseProjectConfig({ autoLabel: 'unattended', defaults: { permMode: 'auto' } });
+  assert.equal(fixed.ok, true);
+  assert.equal(fixed.config._rejected, undefined, 'a clean declaration must not carry a rejection key');
+});
+
+test('a malformed file is stored via rejectedConfig, not {}, so discovery reports the real reason', () => {
+  const parsed = parseProjectConfig('{ "autoLabel": "unattended", }');
+  assert.equal(parsed.ok, false);
+  assert.match(parsed.errors.join(' '), /not valid JSON/);
+  const persisted = parsed.config ?? rejectedConfig(parsed.errors);
+  assert.deepEqual(persisted, { _rejected: parsed.errors }, 'must store the real reason, not an empty object that re-validates as only "missing autoLabel"');
+});
+
+test('a laundered permMode does not let a rejected declaration run work', async () => {
+  const decl = { autoLabel: 'unattended', defaults: { permMode: 'yolo' } };
+  const { db, projects, project, runner } = setup({ config: stored(decl) });
+  const r = await projects.pollProject(project.id);
+
+  assert.equal(r.ok, false, 'the normalised, previously-rejected config must still fail its own re-parse');
+  assert.deepEqual(r.started, []);
+  assert.equal(getProject(db, project.id).state, 'error');
+  assert.equal(runner.starts.length, 0, 'a config the declarer never validly wrote must run nothing');
+});
+
+test('a laundered minHeadroomPct string does not let a rejected declaration run work', async () => {
+  const decl = { autoLabel: 'unattended', budget: { minHeadroomPct: '50%' } };
+  const { db, projects, project, runner } = setup({ config: stored(decl) });
+  const r = await projects.pollProject(project.id);
+
+  assert.equal(r.ok, false);
+  assert.deepEqual(r.started, []);
+  assert.equal(getProject(db, project.id).state, 'error');
+  assert.equal(runner.starts.length, 0, 'a mistyped headroom request must not run with no self-restriction at all');
+});
+
+test('a rejection survives the file becoming unreadable rather than falling back to runnable', async () => {
+  const decl = { autoLabel: 'unattended', defaults: { permMode: 'yolo' } };
+  const { db, projects, project, runner } = setup({
+    config: stored(decl),
+    fsx: { readdir: async () => { throw new Error('enoent'); }, readFile: async () => { throw new Error('enoent'); } },
+  });
+  const r = await projects.pollProject(project.id);
+
+  assert.equal(r.ok, false, 'falling back to the stored config on an unreadable file must not become "runnable"');
+  assert.equal(getProject(db, project.id).state, 'error');
+  assert.equal(runner.starts.length, 0);
 });
 
 test('a project with no autoLabel contributes zero work and lands in error', async () => {
