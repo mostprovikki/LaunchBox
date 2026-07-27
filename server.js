@@ -4,7 +4,7 @@ import { existsSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileS
 import { join, dirname, isAbsolute, resolve as resolvePath } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { ensureDirs, dbPath, dataDir } from './lib/paths.js';
+import { ensureDirs, dbPath, dataDir, PORT_BASE } from './lib/paths.js';
 import { ensureToken, tokenMatches } from './lib/token.js';
 import { createApproval, APPROVAL_CODES } from './lib/approval.js';
 import {
@@ -177,7 +177,7 @@ const BD_INFO_TTL_MS = 30_000;
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const LOOPBACK_NAMES = new Set(['127.0.0.1', 'localhost', '::1']);
 
-// "127.0.0.1:9099" | "localhost" | "[::1]:9099" -> bare hostname.
+// "127.0.0.1:43400" | "localhost" | "[::1]:43400" -> bare hostname.
 // Split on the LAST colon so an IPv6 literal isn't cut in half, and unwrap the
 // brackets that only ever appear around one.
 function hostnameOf(host) {
@@ -1455,9 +1455,17 @@ export async function main() {
   // Resolved BEFORE createApp, which now needs it to pin the Origin. It used to be
   // declared after, and moving the use above the declaration cost a TDZ
   // ReferenceError that stopped the daemon booting at all — caught by running it.
-  const port = Number(process.env.CS_PORT) || 9099;
+  const port = Number(process.env.CS_PORT) || PORT_BASE;
   const app = createApp({ db, runner, scheduler, extensions, awake, usage, budget, pause, projects, beads, burst, approval, originPort: port });
-  const server = app.listen(port, '127.0.0.1', () => {
+  // Deliberately no callback arg here: Express's app.listen(port, host, cb) wraps
+  // cb with once() and registers it via BOTH server.once('error', done) and
+  // server.listen(..., done) — so on EADDRINUSE the "success" callback fires
+  // too, printing a false "listening" line and writing a stale port file before
+  // any error handler gets a say. Attaching 'listening'/'error' ourselves on the
+  // bare server sidesteps that conflation. Caught by actually triggering the
+  // busy-port path, not just reading the happy path.
+  const server = app.listen(port, '127.0.0.1');
+  server.on('listening', () => {
     // Publish the port we actually bound, so `claude-scheduler open` builds a
     // URL that works even when CS_PORT moved it. The alternative — having the
     // CLI guess, or read a `port` setting nothing ever writes — sends the user
@@ -1467,6 +1475,17 @@ export async function main() {
       writeFileSync(join(dataDir(), 'port'), `${port}\n`);
     } catch { /* a missing port file just means the CLI falls back */ }
     console.log(`claude-scheduler on http://127.0.0.1:${port} · extensions: ${[...extensions.keys()].join(', ')}`);
+  });
+  // Fail fast on a busy port instead of silently drifting to another one — a
+  // server that auto-increments is how two projects end up driving each
+  // other's app. Whoever wants a different port sets CS_PORT explicitly.
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`claude-scheduler: port ${port} is already in use — refusing to fall back to another port.`);
+      console.error('Free it (`lsof -ti:' + port + '` then inspect before killing), or set CS_PORT to bind elsewhere.');
+      process.exit(1);
+    }
+    throw err;
   });
   app.locals.server = server;
   return server;
