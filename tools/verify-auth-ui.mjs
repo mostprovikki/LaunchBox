@@ -9,9 +9,13 @@ import { mkdtempSync, rmSync, writeFileSync, chmodSync, mkdirSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { launchBrowser, sleep } from '/Users/vignesh-5036/mydevelopment/claude-scheduler/tools/screenshots/cdp.mjs';
+import { PORT_BASE } from '/Users/vignesh-5036/mydevelopment/claude-scheduler/lib/paths.js';
 
 const REPO = '/Users/vignesh-5036/mydevelopment/claude-scheduler';
-const PORT = 18973;
+// +10 = this project's QA/e2e-web offset (see ~/.claude/docs/port-allocation.md) —
+// a sandboxed instance, deliberately never the dev-server port, so this can run
+// alongside a live daemon without fighting it.
+const PORT = PORT_BASE + 10;
 const DATA = mkdtempSync(join(tmpdir(), 'cs-uiverify-'));
 const FAKE = mkdtempSync(join(tmpdir(), 'cs-fakebin-'));
 let pass = 0; let fail = 0;

@@ -20,7 +20,7 @@ node bin/claude-scheduler.mjs open      # or: claude-scheduler open, if npm-link
 ```
 
 That prints a one-time URL carrying your session key and opens it. Visiting
-`http://127.0.0.1:9099` directly shows a banner explaining that it has no key — which is the
+`http://127.0.0.1:43400` directly shows a banner explaining that it has no key — which is the
 point.
 
 Data lives in `~/.claude-scheduler/` (sqlite db, per-run logs, daemon.log, `token`, `bin/`). The
@@ -87,7 +87,9 @@ CS_DATA=$(mktemp -d) CS_PORT=18741 node server.js   # dev server
 npm run screenshots                       # capture the whole UI to a versioned folder
 ```
 
-Env: `CS_PORT` (default 9099), `CS_DATA` (default `~/.claude-scheduler`), `CS_NO_NOTIFY=1` (suppress banners).
+Env: `CS_PORT` (default 43400 — this project's allocated port block, see
+`~/.claude/docs/port-allocation.md`; the server fails fast if it's busy rather than picking
+another one), `CS_DATA` (default `~/.claude-scheduler`), `CS_NO_NOTIFY=1` (suppress banners).
 
 ### UI screenshots
 

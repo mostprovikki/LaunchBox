@@ -6,7 +6,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ensureToken } from '../lib/token.js';
-import { dataDir, ensureDirs } from '../lib/paths.js';
+import { dataDir, ensureDirs, defaultPort } from '../lib/paths.js';
 
 const cmd = process.argv[2] ?? 'open';
 ensureDirs();
@@ -29,7 +29,7 @@ function port() {
       if (Number.isInteger(p) && p > 0 && p < 65536) return p;
     }
   } catch { /* fall through to the default */ }
-  return 9099;
+  return defaultPort();
 }
 
 const url = `http://127.0.0.1:${port()}/#token=${token}`;

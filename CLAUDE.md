@@ -76,7 +76,7 @@ left as-is and corrected here instead. Two of its rules do not hold in this repo
 ```bash
 npm install
 npm test                  # node --test tests/*.test.js
-npm start                 # server on 127.0.0.1:9099
+npm start                 # server on 127.0.0.1:43400 (PORT_BASE in lib/paths.js; override with CS_PORT)
 npm run screenshots       # UI capture → working_prototype_screenshots/
 node bin/claude-scheduler.mjs open   # launch + open the UI
 ```
