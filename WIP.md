@@ -228,6 +228,45 @@ armed. Reopen the UI with `node bin/claude-scheduler.mjs open`.
 Stability: `npm test` run 3× → 359/359 each time, no flakes. `tools/verify-auth-ui.mjs` re-run →
 19/19.
 
+## ✅ Fixed 2026-07-28 — a discovered repo silently normalised an invalid .scheduler.json value
+
+- [x] **FIXED and verified.** Bead `claude-scheduler-5x7`.
+
+Three unattended scheduler runs diagnosed and wrote this fix and could not land it: `.scheduler.json`
+had `permMode: "acceptEdits"`, which grants Edit/Write but no Bash, so `npm test`/`bd`/`git commit` were
+all denied, and `reap()` force-removes the worktree in a `finally` regardless of outcome. The complete,
+reviewed fix survived only in memory (`handoff-5x7-config-validator-fix.md`) across two of those runs.
+Landed now that `.scheduler.json` declares `permMode: "auto"`.
+
+**The bug:** `parseProjectConfig` returned a verdict *and* a silently-normalised config
+(`permMode: "yolo"` → `"default"`, a rejected `budget` → `null`). Every caller persisted the
+normalised `config` and re-derived validity by re-parsing *that stored copy* — `pollProject`,
+`decorateProject`'s `configErrors`, and `GET /:id/ready`'s `!autoLabel` branch — which came back clean
+because the rejected value was already gone. Net effect: a repo declaring `permMode: "yolo"` was
+accepted, showed no config error, was offered for activation as sound, and ran under `default`
+permissions it never validly asked for. Worst case: `minHeadroomPct: "50%"` dropped the whole `budget`
+block silently, running with **no** self-restriction — the opposite of what the repo asked for.
+
+**The fix:** a rejected config now carries its own reasons under `_rejected` (`rejectedConfig()`,
+`lib/projects.js`), so `parseProjectConfig(normalise(x))` re-validates rejected exactly like
+`parseProjectConfig(x)` — carried-first, exact-string de-duped, so storing the same rejection twice
+neither accumulates nor loses reasons. `discover()` and `POST /api/projects` now store `rejectedConfig(errors)`
+instead of `{}` when the file isn't parseable at all (`{}` used to re-validate to exactly one error,
+"must set autoLabel" — a trailing comma surfaced on the tab as a missing label). `GET /:id/ready` now
+branches on `!parsed.ok`, not just a missing `autoLabel` — the old branch still returned the bead list
+alongside the reason.
+
+**Verified:** 401/401 (`npm test`). Mutation-checked three ways, each confirmed to fail without its
+fix: reverting the carried/`all` merge fails the round-trip and laundered-permMode poll tests; reverting
+the `/ready` `!parsed.ok` branch hands back the bead list again; reverting `rejectedConfig` in
+`POST /api/projects` reports "must set autoLabel" for a malformed file instead of the real JSON error.
+
+**Left for follow-up, not fixed here (from the handoff, still true by reading):** `parseProjectConfig`
+rejects only `autoLabel`/`permMode`/`budget` — every other field (`model`, `timeoutMin`, `cwd`,
+`enabled`, `maxConcurrent`, unknown keys under `defaults`) is coerced silently, several with a live
+"bead retried forever" failure mode. Worth their own beads if this surface gets more attention; not
+filed yet.
+
 ## ✅ Fixed 2026-07-26 — wind-down was not graceful for a run with subagents
 
 - [x] **FIXED and verified end-to-end.** Bead `claude-scheduler-k9p`.
