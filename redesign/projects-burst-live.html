@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Projects — burst running · LaunchBox</title>
+<script src="assets/theme.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/system.css">
+<link rel="stylesheet" href="assets/launchbox.css">
+</head>
+<body>
+
+<header class="appbar">
+  <h1 class="appbar__brand">LaunchBox</h1>
+  <nav class="mainnav">
+    <a href="overview.html">Overview</a>
+    <a href="jobs.html">Jobs</a>
+    <a href="runs.html">Runs</a>
+    <a href="projects.html" aria-current="page">Projects</a>
+    <a href="sessions.html">Sessions</a>
+    <a href="settings.html">Settings</a>
+  </nav>
+  <div class="appbar__spacer"></div>
+  <div class="uchips" title="Claude usage — checked 09:40:12">
+    <span class="uchip"><span class="uchip__k">5h</span><span class="uchip__v">37%</span></span>
+    <span class="uchip"><span class="uchip__k">wk</span><span class="uchip__v">64%</span></span>
+    <span class="uchip uchip--crit"><span class="uchip__k">fable</span><span class="uchip__v">90%</span></span>
+  </div>
+  <a class="runchip" href="runs.html"><span class="state__dot"></span><span class="num">2</span> running</a>
+  <div class="segs segs--bar" role="radiogroup" aria-label="Pause mode">
+    <button class="seg" aria-selected="true">Off</button>
+    <button class="seg">Hold</button>
+    <button class="seg">Soft</button>
+    <button class="seg">Hard</button>
+  </div>
+  <button class="iconbtn themebtn" onclick="lbToggleTheme()" title="Switch between dark and light">
+    <svg class="ic ic--sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+    <svg class="ic ic--moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>
+  </button>
+</header>
+
+<main class="shell">
+
+  <div class="pagehead">
+    <div>
+      <h1>Projects</h1>
+      <div class="pagehead__sub"><span class="mono">4</span> registered · <span class="mono">1</span> active · beads polled every <span class="mono">60s</span> · bd <span class="mono">0.9.4</span></div>
+    </div>
+    <div class="pagehead__actions">
+      <button class="btn" disabled title="A burst is already running">Start a burst…</button>
+      <button class="btn"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>Discover in project roots</button>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <label class="search" style="max-width: 480px;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7L10 5H5a2 2 0 0 0-2 2Z"/></svg>
+      <input type="text" placeholder="Register a repo by path — it needs a committed .scheduler.json">
+    </label>
+    <button class="btn">Register</button>
+  </div>
+
+  <section class="burststrip" style="margin-bottom: 16px;">
+    <span class="state state--info" style="flex:none;"><span class="state__dot"></span>burst</span>
+    <span><b>Spending 10% of the 5-hour window</b> over ready beads · run <b>2</b> done, <b>1</b> live</span>
+    <div class="meter__track"><span class="meter__fill" style="width:58%"></span></div>
+    <span class="mono" style="font-size:12px;">5.8% / 10%</span>
+    <span class="t-meta" style="color:inherit;">next attempt no sooner than <span class="mono">10:12</span></span>
+    <button class="btn" style="margin-left:auto;">Cancel burst</button>
+  </section>
+
+  <p class="t-meta" style="margin: 0 0 14px;">An <b>active</b> project lets LaunchBox claim ready beads, run them in disposable worktrees, and write results back to that repo's tracker. Registering and configuring can be automated; <b>activation is always your click</b> and asks for Touch&nbsp;ID.</p>
+
+  <!-- ============================================================ active -->
+  <section class="card" style="margin-bottom: 16px;">
+    <div class="card__head">
+      <span class="state state--ok"><span class="state__dot"></span>active</span>
+      <h2>webapp-billing</h2>
+      <span class="t-meta mono">~/mydevelopment/webapp-billing</span>
+      <div class="pagehead__actions">
+        <button class="btn btn--ghost" title="Re-read bd ready now">Poll now</button>
+        <button class="btn">Pause</button>
+      </div>
+    </div>
+    <div class="card__body" style="padding-bottom: 10px;">
+      <div class="facts" style="margin-bottom: 14px;">
+        <div class="fact"><div class="fact__k">Ready beads</div><div class="fact__v mono">4</div><div class="fact__d">of 23 open</div></div>
+        <div class="fact"><div class="fact__k">Auto label</div><div class="fact__v mono">scheduler-ok</div><div class="fact__d">required on every bead</div></div>
+        <div class="fact"><div class="fact__k">Last poll</div><div class="fact__v mono">09:40:31</div><div class="fact__d">every 60s</div></div>
+        <div class="fact fact--info"><div class="fact__k">Leases held</div><div class="fact__v mono">1</div><div class="fact__d">wb-221 · burst</div></div>
+        <div class="fact"><div class="fact__k">Defaults</div><div class="fact__v mono">acceptEdits</div><div class="fact__d">min headroom 15%</div></div>
+      </div>
+    </div>
+    <div class="rows">
+      <div class="row row--head beadrow"><span>Bead</span><span>Title</span><span></span></div>
+      <div class="row beadrow" data-state="info">
+        <span class="mono t-body">wb-221</span>
+        <div class="cell">
+          <div class="cell__l1"><span class="pill pill--4">P0</span><span class="row__n">Fix rounding on multi-currency credit notes</span><span class="state state--info"><span class="state__dot"></span>running</span></div>
+          <div class="cell__l2"><span class="tag">bug</span><span class="tag">scheduler-ok</span><span class="mono">blocks 3</span> · claimed by the burst · worktree <span class="mono">wb-221</span> · <span class="mono">4m 12s</span></div>
+        </div>
+        <span class="rowline"><a class="btn btn--ghost" href="runs-log-live.html">Log</a></span>
+      </div>
+      <div class="row beadrow">
+        <span class="mono t-body">wb-217</span>
+        <div class="cell">
+          <div class="cell__l1"><span class="pill pill--3">P1</span><span class="row__n">Backfill invoice PDFs for July</span></div>
+          <div class="cell__l2"><span class="tag">task</span><span class="tag">scheduler-ok</span><span class="mono">blocks 2</span></div>
+        </div>
+        <span class="t-meta"></span>
+      </div>
+      <div class="row beadrow">
+        <span class="mono t-body">wb-224</span>
+        <div class="cell">
+          <div class="cell__l1"><span class="pill pill--2">P2</span><span class="row__n">Add retry to webhook dispatcher</span></div>
+          <div class="cell__l2"><span class="tag">feature</span><span class="tag">scheduler-ok</span></div>
+        </div>
+        <span class="t-meta"></span>
+      </div>
+      <div class="row beadrow">
+        <span class="mono t-body">wb-230</span>
+        <div class="cell">
+          <div class="cell__l1"><span class="pill pill--1">P3</span><span class="row__n">Tidy fixtures for billing tests</span></div>
+          <div class="cell__l2"><span class="tag">chore</span><span class="tag">scheduler-ok</span></div>
+        </div>
+        <span class="t-meta"></span>
+      </div>
+    </div>
+    <div class="card__body" style="border-top: 1px solid var(--line-2); padding: 11px 18px;">
+      <span class="t-meta">Beads run one at a time in a disposable worktree under <span class="mono">~/.claude-scheduler/worktrees</span> — this checkout is never touched. A bead closes only when the agent ends with <span class="mono">TASK-COMPLETE</span>; otherwise it is handed back with a note.</span>
+    </div>
+  </section>
+
+  <!-- =========================================================== pending -->
+  <section class="card" style="margin-bottom: 16px;">
+    <div class="card__head">
+      <span class="state state--muted"><span class="state__dot state__dot--ring"></span>pending</span>
+      <h2>infra-scripts</h2>
+      <span class="t-meta mono">~/mydevelopment/infra-scripts</span>
+      <div class="pagehead__actions">
+        <button class="btn btn--ghost">Poll now</button>
+        <button class="btn btn--primary" title="Asks for Touch ID — this is the airlock">Activate…</button>
+      </div>
+    </div>
+    <div class="card__body">
+      <p class="t-meta" style="margin: 0 0 10px;">Discovered on 29 Jul via its committed <span class="mono">.scheduler.json</span>. LaunchBox will not touch it until you activate it.</p>
+      <div class="banner">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></svg>
+        <span><b>Would contribute nothing yet.</b> Its config declares <span class="mono">autoLabel: scheduler-ok</span>, but none of its 11 open beads carries that label. Label the beads you want automated, or activation buys you nothing.</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ paused -->
+  <section class="card" style="margin-bottom: 16px;">
+    <div class="card__head">
+      <span class="state state--muted"><span class="state__dot state__dot--square"></span>paused</span>
+      <h2>design-system</h2>
+      <span class="t-meta mono">~/mydevelopment/design-system</span>
+      <div class="pagehead__actions">
+        <button class="btn btn--ghost">Poll now</button>
+        <button class="btn">Resume</button>
+      </div>
+    </div>
+    <div class="card__body">
+      <span class="t-meta">Paused by you on 28 Jul. <span class="mono">2</span> ready beads are waiting (<span class="mono">ds-88</span>, <span class="mono">ds-91</span>) — they will not be claimed while paused. Resuming does not ask for approval; only first activation does.</span>
+    </div>
+  </section>
+
+  <!-- ============================================================= error -->
+  <section class="card">
+    <div class="card__head">
+      <span class="state state--warn"><span class="state__dot"></span>bd busy</span>
+      <h2>legacy-importer</h2>
+      <span class="t-meta mono">~/mydevelopment/legacy-importer</span>
+      <div class="pagehead__actions">
+        <button class="btn btn--ghost">Poll now</button>
+        <button class="btn">Pause</button>
+      </div>
+    </div>
+    <div class="card__body">
+      <div class="banner">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+        <span><b>Beads database locked by another process since <span class="mono">09:12</span>.</b> Something else — likely an interactive <span class="mono">bd</span> session — holds the Dolt lock. This is busy, not broken: LaunchBox retries every <span class="mono">60s</span> and resumes on its own. Ready count is from the last good poll (<span class="mono">08:58</span>): <span class="mono">1</span> bead.</span>
+      </div>
+    </div>
+  </section>
+
+  <p class="pagefoot">Static redesign mockup · sample data as of Sat 1 Aug 09:41 · <a href="index.html">all pages</a> · states: <a href="projects-empty.html">empty</a> · <a href="projects-burst-live.html">burst running</a> · <a href="dialog-burst.html">burst dialog</a></p>
+</main>
+
+</body>
+</html>
