@@ -602,3 +602,66 @@ from an earlier session, started 16:50, predating this session's agents. B1 iden
 to kill it, and used a different port, which is the right call; it is left running and flagged for
 the owner. The orchestrator's own verification instance on 43410 was stopped at wind-down. The
 owner's daemon on 43400 was never touched and answers 200.
+
+## 2026-08-02 · bmn — one run-state vocabulary, pinned to the mockups
+
+`claude-scheduler-bmn` is done: `public/v2/state-vocab.js` is now the single definition of
+status → {colour class, dot form, label} plus `ordinal()`, and `jobs-logic.js`, `runs.js`,
+`runs-log.js` and `jobs.js` all import it with no local copies left. `computeRowState` keeps only
+the Jobs-specific part — which state a *job* is in, and the second line of prose; the triple itself
+is a lookup. `jobs.js` also stopped building `state__dot--${form}` by hand and calls `dotClass()`.
+
+**The drift resolved against the mockups, not by picking a favourite.** `fail` renders as **fail**,
+not "failed". `redesign/runs.html:222` and all three `runs-log-*.html` show the chip as "fail";
+`jobs.html` has no failing row at all, so B1's "failed" had nothing behind it. The dot forms were
+already identical and stayed byte-identical. Two further divergences surfaced that the bead hadn't
+listed: the unknown-status fallback was `muted` on Runs and *unstyled* on Jobs (unified on muted —
+an unfamiliar state should read as inert, not as an ordinary healthy row), and only one of the two
+`ordinal()` copies guarded non-finite input.
+
+**The test pins the vocabulary to the audited mockups by parsing them.** A golden table retyped in
+the test file would only prove the test agrees with itself — the exact failure that let "failed"
+ship and the same family as A1's asset 404s and B1's hand-built fixture shape. So
+`tests/frontend-v2-state-vocab.test.js` jsdom-parses every `redesign/*.html`, collects each
+`.state` chip's (colour, dot modifier, label), and asserts `STATE_VOCAB` matches. Change a label or
+a dot form in the module and the mockups contradict you.
+
+**Two versions of the single-source gate were wrong, and only mutation caught them.** The check
+that forbids a page re-declaring the table started anchored to the start of a line — a one-line
+`{ running: 1, ok: 2, fail: 3, killed: 4 }` sailed straight through. Dropping the anchor and
+counting bare status keys then flagged `runs.js`'s own toolbar counter
+`{ all, active, ok, fail, stopped, skipped }`, which shares four names with the status set but maps
+them to integers. The rule that works requires the *value* to look like rendering — a colour
+family, a dot class, a `{cls,dot,label}` record, or a bare string. That last clause matters and was
+also added only after mutation: a pure label copy `{ running: 'running', fail: 'failed' }` passed
+the colour-only version, and a label is the thing that actually drifted. The 3-key threshold is a
+documented limit, verified rather than assumed — a two-status snippet still slips through.
+
+Eight mutations run in total, each reverted: three fake table copies (multi-line, one-line,
+label-only), a hard-coded `state__dot--ring`, a second `ordinal()`, `fail`→"failed",
+`killed` square→ring, `timeout` bad→warn, a broken teens branch, and a re-introduction of the
+original defect (Jobs overriding the label locally) — which turns exactly the Jobs-vs-Runs
+agreement test red. 527/527 green.
+
+**Browser leg.** Isolated instance on 43410 (the allocated QA slot) with a throwaway `CS_DATA`,
+seeded through `lib/db.js` with one job and one run per status plus a disabled job, then driven
+over CDP across Jobs and Runs in **both** themes. Read back not just the class lists but the
+*computed* dot background and border-radius per theme, since a class present but unstyled is a
+regression a class list alone would not show. Every shared status agrees on both pages in both
+themes: fail `bad|—`, timeout `bad|ring`, killed `bad|square` (radius 1.5px), stopped
+`muted|square`, skipped `muted|—`, ok `ok|—`, and Jobs-only disabled `muted|solid`. Zero console
+errors; the one 404 is `/favicon.ico`, which the *existing* UI 404s too — pre-existing, not a bmn
+regression, filed at P4. Instance stopped at wind-down; the owner's daemon on 43400 was never
+touched and answers 200.
+
+**The same defect, one vocabulary over — filed before it happens.** Parsing the mockups for this
+work surfaced a *second*, disjoint state family that bmn deliberately did not fold in: "active",
+"pending", "bd busy", "paused", "handed back", "stopping…" — project/bead/lease states, rendered
+across the pages owned by btv.8, btv.9 and btv.10. Three agents would each encode it independently,
+which is precisely how the run-state table came to be written twice. Filed as
+`claude-scheduler-1ys` at P1 and blocking all three, the same shape of edge bmn had, with the
+direction read back after filing rather than inferred. Note for the owner: those three edges are
+mine, not the plan's — drop them if C1 should absorb the work instead.
+
+Housekeeping. Port 43411 is *still* occupied by pid 39469, the isolated instance from the earlier
+session flagged in the last entry. Not this session's, not killed, still flagged.
