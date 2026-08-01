@@ -787,15 +787,18 @@ git commit -m "test: fail if a page bypasses api() or uses EventSource"
 
 Not optional, and not a test run. Drive the real UI over CDP.
 
-- [ ] Start a sandboxed daemon: `CS_DATA=$(mktemp -d) CS_PORT=18990 CS_NO_NOTIFY=1 node server.js`
-- [ ] Confirm `http://127.0.0.1:18990/` with **no** token shows the banner and no data
-- [ ] Confirm the `#token=…` URL loads, and the fragment is stripped from the address bar
-- [ ] Create a `command` job through the real form, run it, open the log, press **Refresh**, and
-      confirm new output appears and the "as of" time advances
-- [ ] Re-run the original exploit and confirm it still 403/415s
-- [ ] Confirm a wrong token in `localStorage` produces the banner, not a silent empty UI
-- [ ] `npm test` green; `npm run screenshots` produces a new baseline
-- [ ] Commit any fixes found, then update `WIP.md`
+- [x] Start a sandboxed daemon — `tools/verify-auth-sitting.mjs` boots one (throwaway `CS_DATA`,
+      fake `claude`, port 43410)
+- [x] Confirm no-token shows the banner and no data — `tools/verify-auth-ui.mjs` (real Chrome)
+- [x] Confirm the `#token=…` URL loads and the fragment is stripped — `verify-auth-ui.mjs` and the
+      sitting's authenticated load
+- [x] Create a `command` job through the real form, run it, open the log, press **Refresh**, "as
+      of" advances — **sitting 2026-08-01**, T8-log: `as of 19:09:57 → 19:10:00`, run output shown
+- [x] Re-run the original exploit — **sitting 2026-08-01**: foreign-Host form `POST /api/cleanup`
+      → 403, form content-type → 415, foreign-Host read → 403, tokenless read → 401
+- [x] Confirm a wrong token in `localStorage` produces the banner — `verify-auth-ui.mjs`
+- [x] `npm test` green — **444/444, 2026-08-01**; screenshots baseline unchanged (no UI code changed)
+- [x] Commit any fixes found (none — verification only), then update `WIP.md`
 
 ---
 
@@ -894,35 +897,64 @@ to prevent.
 **Preparation before involving the user** — all of this is set up first, so the session is a
 continuous run of prompts rather than waiting on builds:
 
-- [ ] Compile the helper and confirm `LaunchBox --check` exits 0 (no prompt)
-- [ ] Boot a sandboxed daemon on a spare port with `CS_DATA=$(mktemp -d)` and a fake `claude`, so
-      **no quota is spent and no real job or project is touched**
-- [ ] Seed one command job and one registered-but-inactive project, so the activation and
-      settings prompts have real targets
-- [ ] Set `CS_APPROVAL_TIMEOUT_MS=8000` for this session only. **Rationale:** the real bound is
-      180s, and asking the user to sit through a 3-minute timeout — twice — is unreasonable. The
-      180s default is already covered by an automated test with a fake clock.
-- [ ] Drive the UI over CDP up to the point of each prompt, then hand over
+- [x] Compile the helper and confirm `LaunchBox --check` exits 0 (no prompt) — driver compiles +
+      pins it; `--check` exit 0 verified each run
+- [x] Boot a sandboxed daemon on a spare port with `CS_DATA=$(mktemp -d)` and a fake `claude` — done
+- [x] Seed a command job and a registered-but-inactive project — the job is created live in row 3
+      (then used by Task 8); the fixture project is registered up front
+- [x] ~~Set `CS_APPROVAL_TIMEOUT_MS=8000`~~ — **superseded** (see the amendment below): browser rows
+      run at the real 180s bound; the short bound lives only in the delegated timeout tool
+- [x] Drive the UI over CDP up to each prompt, then hand over — done
 
 **The prompt sequence, in one sitting.** Tell the user up front exactly how many prompts to
 expect and what to do with each:
 
-| # | Action driven | User does | Expected |
-|---|---|---|---|
-| 1 | Create job “nightly sweep” | **Approve** | dialog title reads **LaunchBox**; sentence names the job; job is created |
-| 2 | Create job “second job” | **Deny** | `403 approval_denied` toast; **form still holds every field**; no job created |
-| 3 | Press Submit again on that same untouched form | **Approve** | job created from the preserved state — proves a denial costs nothing |
-| 4 | Create job “third job” | **ignore it** (~8s) | `408 approval_timeout` toast; form intact; no job created |
-| 5 | Edit job 1's schedule, within 5 min of #3 | *nothing* | **no prompt** — the grace window works |
-| 6 | `POST /api/cleanup` in that same window | **Deny** | **does** prompt — no grace for destructive actions — and nothing is deleted |
-| 7 | Activate the seeded project | **Approve** | prompts despite the grace window; project becomes `active` |
-| 8 | Change `claudePath` in Settings | **Approve** | prompts — this is the bypass the spec calls out |
-| 9 | Change `usagePollSec` in Settings | *nothing* | **no prompt** — ordinary settings are not gated |
-| 10 | Run `docs/spikes/localauth.sh` | **Approve, then Deny** when asked | script asserts exit 0 then exit 1 with `errorCode: -2` |
+| # | Action driven | User does | Expected | Result — **sitting 2026-08-01** |
+|---|---|---|---|---|
+| 1 | Create a job | **Approve** | dialog title **LaunchBox**; sentence names the job; job created | ✓ carried by row 3 (create "second job", approved); wording confirmed via localauth.sh |
+| 2 | Create job “second job” | **Deny** | `approval_denied`; **form holds every field**; no job | ✓ denied; form kept name/command/cwd; 0 jobs; one client POST |
+| 3 | Submit that same untouched form | **Approve** | job created from preserved state | ✓ created — a denial cost nothing |
+| 4 | Timeout | **ignore it** | `approval_timeout`; nothing written | ✓ via `tools/verify-approval-timeout.sh` (real dialog, unattended) — see amendment |
+| 5 | Edit the job's schedule, within grace | *nothing* | **no prompt** | ✓ no prompt, saved 5s after the approval |
+| 6 | `POST /api/cleanup` in that window | **Deny** | **does** prompt (no grace); nothing deleted | ✓ prompted, denied, jobs survived |
+| 7 | Activate the fixture project | **Approve** | prompts despite grace; becomes `active` | ✓ `state=active` (in-page confirm auto-accepted, real sheet approved) |
+| 8 | Change `claudePath` in Settings | **Approve** | prompts — the bypass the spec calls out | ✓ prompted, written to `/usr/bin/true` |
+| 9 | Change `usagePollSec` in Settings | *nothing* | **no prompt** | ✓ saved, no prompt |
+| 10 | `docs/spikes/localauth.sh` | **Approve, then Deny** | exit 0; deny → `errorCode: -2` | ✓ **18/0**; approve→0 (no TTY), deny→`-2`, operator confirmed wording |
 
-- [ ] Record what actually happened against each row, including any wording that read badly
-- [ ] Tear the sandbox down; confirm the user's real `~/.claude-scheduler` was never touched
-- [ ] `npm test` green; `npm run screenshots` for a fresh baseline; update `WIP.md`
+- [x] Record what actually happened against each row — done, in the Result column above; no wording
+      read badly (the `LaunchBox …` sentence confirmed at localauth.sh's `[y/N]`)
+- [x] Tear the sandbox down; confirm the real `~/.claude-scheduler` was never touched — driver
+      fingerprints the top-level listing before/after: unchanged
+- [x] `npm test` green — 444/444, 2026-08-01; screenshots baseline unchanged (no UI code changed);
+      `WIP.md` updated
+
+**Amendment (2026-08-01, bead claude-scheduler-j8u) — the runnable form of this table.**
+The runner is `tools/verify-auth-sitting.mjs` (single sandboxed daemon, headful CDP against the
+real compiled + pinned helper; `--dry` proves the whole flow with a scripted helper and no
+dialogs — 24/24). Two deliberate substitutions were needed to make the table *runnable*; both
+preserve every row's intent, and this note is the record the acceptance criteria asks for (no
+silent checkbox laundering):
+
+- **The rows are reordered so the deny and the timeout precede the first approval.** As written,
+  row 1 approves a job-create, which opens the 5-minute grace window; rows 2–4 are also
+  job-creates, so run verbatim they would be silently *graced* and prompt for nothing — the
+  deny/timeout rows would test the empty set. `docs/spikes/auth-verify.sh` already hit this and
+  reordered for the same reason. Executed order: **2 (deny) → 3 (approve, opens grace) → 5 (no
+  prompt, graced edit) → 6 (deny cleanup) → 7 (approve activate) → 8 (approve claudePath) → 9 (no
+  prompt) → 4 (timeout) → 10 (localauth)**. Row 1's intent (an approved create with the
+  LaunchBox-titled sheet) is carried by row 3.
+- **Row 4 (timeout) is delegated to `tools/verify-approval-timeout.sh`**, not driven through the
+  browser. A job-create POST is held open by the server for the whole timeout; a request held
+  that long and then answered `408` is re-sent by Chrome at the HTTP layer (transparent to
+  `fetch()`), surfacing as a phantom *second* approval sheet — measured as one `clickSave` →
+  two server asks on this path alone. The delegated tool exercises the same real path (server →
+  helper → a genuine dialog → refusal → nothing written) unattended, with its own 6s bound. It
+  raises one dialog the user simply does not touch. Filed as a separate finding for the
+  browser-retry behaviour (low severity, fails closed).
+- **No `CS_APPROVAL_TIMEOUT_MS` override for the browser rows.** With the timeout delegated, every
+  approve/deny row runs at the real 180s bound, so the human is never rushed; the short bound now
+  lives only inside the delegated timeout tool.
 
 ---
 

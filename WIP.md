@@ -202,6 +202,9 @@ work: *"I don't want any other service/website to be able to schedule jobs on my
   - Two dialogs rather than ten because everything around them was already machine-verified: which actions gate and that a refusal writes nothing (`tests/api.test.js`, fake approver, mutation-checked); grace scoping, the queue, timeouts and tamper detection (`tests/approval.test.js`, using the real binary's captured payloads); server → real binary → **a genuine dialog** → refusal (`tools/verify-approval-timeout.sh`, via the timeout outcome, which needs no input); the token, header guards and the UI keeping your work on a refusal (`tools/verify-auth-ui.mjs`, real Chrome).
   - `docs/spikes/auth-verify.sh` (8 steps, 5 dialogs) remains for eyeballing the dialog wording and the grace behaviour directly if that is ever worth re-checking.
   - **Cosmetic, not a failure:** the script's teardown kills the sandbox daemon with `kill -9`, so the shell prints a `Killed: 9` line *after* the results. Worth tidying if it ever reads as an error.
+- [x] **The FULL batched sitting was run against real dialogs — 2026-08-01 (bead claude-scheduler-j8u).** `tools/verify-auth-sitting.mjs` drives the whole plan table (Task 13) plus the two unticked Task 8 rows through the real UI in a real Chrome against the compiled+pinned helper, in ONE sandboxed daemon. Result: every row verified — deny→retry-approve (state preserved, one client POST), graced edit (no prompt), cleanup-denied-despite-grace (nothing deleted), project activate (state=active), claudePath change (prompted, grace never applies), usagePollSec (no prompt); Task 8's run→log→Refresh advanced "as of" and the original exploit still 403/415/403/401. The timeout row and `localauth.sh` (18/0, wording confirmed) were run for real. The 2026-07-26 2-dialog session above was the interim evidence; this is the full sitting the plan asked for. Plan table ticked with a per-row Result column.
+  - **Two substitutions, recorded in the plan (not laundered):** (1) rows reordered so deny/timeout precede the first approval — the literal order graces rows 2–4 into silence, exactly what `auth-verify.sh` already worked around; (2) the timeout row is delegated to `tools/verify-approval-timeout.sh`, because a browser-driven timeout is re-sent by Chrome after the 408 and raises a phantom second sheet. That browser-retry is filed as **claude-scheduler-tki** (low severity, fails closed) for separate investigation.
+  - **Two harness bugs found and fixed while building the driver, both worth remembering:** project activation raises a native `confirm()` that blocks CDP — the eval-click hangs until it's answered, so the driver uses `page.withDialog('accept', …)`; and `localauth.sh` asks the operator a `[y/N]` wording question via `read`, so it must be spawned with `stdio:'inherit'` (piping stdin as `ignore` feeds it EOF → defaults to N → false wording failure even when the sheet is correct).
 
 
 **Status: SHIPPED, both halves verified. 371/371 tests · 19/19 driving the real UI in Chrome · 40/40 screenshots · 5/5 against the
@@ -396,3 +399,32 @@ reviewed by hand, the rest split across two subagent QA passes with a defect che
 0 genuine defects, 2 fixes applied along the way (queued-row copy, after-reset jitter field
 wrapping as a group). Type-scale audit via grep: all sizes on the closed scale, weights
 400/500/600 only, no hex colours in markup.
+
+## 2026-08-01 · Redesign audited, hardened, and turned into the /v2 plan
+
+Neutral UI/UX audit of all 32 `redesign/` pages, driven in real Chromium at 1280×900 in
+**both themes** with measured gates (exact WCAG contrast per text node, stranded-surface
+detection, overflow, console, links) — the gate lives at `redesign/qa/audit.mjs` and is
+green across all 64 views. Verdict: build it; the reason-per-state and consequence-line
+patterns are the design's core value and are named as must-preserve in `redesign/REVIEW.md`.
+
+What the gates caught that the earlier eyeball passes did not: **388 raw AA contrast
+failures** (all token-level: light `--ink-3` at 2.4:1, links/primary at 4.14, P1 pill at
+2.89, dark `--ink-3` at 3.0 on segmented tracks), a **48px horizontal scroll on every page**
+from the theme button's `opacity:0` tooltip box, UA-default yellow `<mark>` in the failed-run
+log, and unthemed `number`/`time` inputs rendering white in dark. All fixed at the token /
+selector layer; palette hue jobs unchanged. The same ten fixes were **backported to the
+dense-product-ui skill** (`system.css`, `rules.md` hex mentions, kitchen-sink labels) so
+future skill uses start AA-clean; `tripper/trip-planner/design/system.css` is a known old
+copy, deliberately left.
+
+Nine review recommendations were adopted by Vignesh and applied to the mockups (pause pages
+now say fires are dropped, daemon-down pages disable mutating controls with reasons, explicit
+Cancel in committing dialogs, quiet session deletes, focus-visible tooltips + aria-label
+exemplar, validation-error anchors, frozen approval form, as-of stamps, 10.5px chips).
+
+Implementation decided and beads filed: **/v2 parallel UI** (old UI and API untouched until
+cutover; API policy is additive-only, changed semantics go to `/api/v2/*`), **Sonnet 5
+sub-agents** in waves, epic `claude-scheduler-btv` with 15 children and verified `blocks`
+edges — `bd ready` offers only A1. Full plan: `redesign/IMPLEMENTATION-PLAN.md`. No
+autoLabel on any of it: code beads can't verify their own work unattended.
