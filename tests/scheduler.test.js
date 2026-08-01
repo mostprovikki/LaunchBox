@@ -48,7 +48,11 @@ test('cron job fires repeatedly; nextFire reported', async () => {
 
 test('once job fires once and auto-disables', async () => {
   const { db, starts, scheduler } = setup();
-  const job = createJob(db, jobPayload({ schedule: { type: 'once', at: new Date(Date.now() + 200).toISOString() } }));
+  // Leads on positive fires are generous on purpose: the scheduler deliberately
+  // never arms a moment already past (no-catch-up), so a tight lead can be dead
+  // on arrival when a loaded machine pauses between fixture and arm — a failure
+  // no waitFor cap can recover. Soak run 2026-08-01 caught exactly this at 200ms.
+  const job = createJob(db, jobPayload({ schedule: { type: 'once', at: new Date(Date.now() + 1000).toISOString() } }));
   scheduler.start();
   await waitFor(() => starts.length >= 1);
   assert.equal(starts.length, 1);
@@ -62,8 +66,8 @@ test('multi-schedule: both once-entries fire, job disables after the last', asyn
   const { db, starts, scheduler } = setup();
   const job = createJob(db, jobPayload({
     schedule: [
-      { type: 'once', at: new Date(Date.now() + 150).toISOString() },
-      { type: 'once', at: new Date(Date.now() + 400).toISOString() },
+      { type: 'once', at: new Date(Date.now() + 1000).toISOString() },
+      { type: 'once', at: new Date(Date.now() + 2500).toISOString() },
     ],
   }));
   scheduler.start();
@@ -82,7 +86,7 @@ test('multi-schedule: cron + once — once fires, cron keeps job enabled', async
   const job = createJob(db, jobPayload({
     schedule: [
       { type: 'cron', expr: '0 9 * * *' },
-      { type: 'once', at: new Date(Date.now() + 150).toISOString() },
+      { type: 'once', at: new Date(Date.now() + 1000).toISOString() },
     ],
   }));
   scheduler.start();
@@ -95,7 +99,7 @@ test('multi-schedule: cron + once — once fires, cron keeps job enabled', async
 });
 
 test('afterReset fires at resetsAt + offset + jitter, with trigger "schedule"', async () => {
-  const usage = fakeUsage({ five_hour: { percent: 40, resetsAt: resetIn(200) } });
+  const usage = fakeUsage({ five_hour: { percent: 40, resetsAt: resetIn(1000) } });
   const { db, starts, scheduler } = setup({ usage });
   const job = createJob(db, jobPayload({ schedule: RESET_ENTRY }));
   scheduler.start();
@@ -139,7 +143,7 @@ test('afterReset re-arms on a usage event and never fires the same window twice'
   assert.equal(scheduler.nextFire(job.id), null); // past reset — nothing armed
 
   // A new reading carrying a future reset arms it.
-  usage.set('five_hour', resetIn(200));
+  usage.set('five_hour', resetIn(1000));
   assert.ok(scheduler.nextFire(job.id));
   await waitFor(() => starts.length >= 1);
   assert.equal(starts.length, 1);
@@ -153,7 +157,7 @@ test('afterReset re-arms on a usage event and never fires the same window twice'
   assert.equal(starts.length, 1);
 
   // A genuinely new window instance does fire again.
-  usage.set('five_hour', resetIn(150));
+  usage.set('five_hour', resetIn(1000));
   await waitFor(() => starts.length >= 2);
   scheduler.stop();
   assert.equal(starts.length, 2);
@@ -164,7 +168,7 @@ test('afterReset alongside a once-entry: the spent once must not disable the job
   // has none, so without the explicit check the job would be disabled for good.
   const { db, starts, scheduler } = setup({ usage: fakeUsage() });
   const job = createJob(db, jobPayload({
-    schedule: [{ type: 'once', at: new Date(Date.now() + 150).toISOString() }, RESET_ENTRY],
+    schedule: [{ type: 'once', at: new Date(Date.now() + 1000).toISOString() }, RESET_ENTRY],
   }));
   scheduler.start();
   await waitFor(() => starts.length >= 1);
