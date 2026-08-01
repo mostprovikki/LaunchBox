@@ -188,3 +188,40 @@ test('the approval failure vocabulary matches the server exactly', () => {
     assert.ok(codes.includes(c), `public/auth.js has copy for ${c}, which lib/approval.js never produces`);
   }
 });
+
+test('no native title= remains on an interactive control in public/', () => {
+  // claude-scheduler-25h: native title= is slow to appear, unstyled, and
+  // unreachable by keyboard — public/tooltip.js (data-tip=, one delegated
+  // listener, keyboard focusin support, token-themed) replaces it everywhere.
+  //
+  // "Interactive control" is scoped narrowly and deliberately: <button>,
+  // <a>, <input>, <select>, plus anything wired to a click via `data-act=`
+  // (this codebase's own marker for a clickable chip/row — e.g. projects.js's
+  // Activate/Pause/poll buttons, app.js's soft-stop/kill/edit/clone/delete
+  // rows). That is what "interactive" means for the acceptance criteria, and
+  // it is why this does NOT flag: the document's own <title>Scheduler</title>
+  // (a different element entirely, not this attribute), or a plain <span>/<div>
+  // with a hover-only title that isn't wired to any action.
+  const INTERACTIVE_TAG = /<(button|a|input|select)\b([^>]*)>/gi;
+  const DATA_ACT_TAG = /<(\w+)\b([^>]*\bdata-act\s*=[^>]*)>/gi;
+
+  const html = readFileSync(join(PUBLIC, 'index.html'), 'utf8');
+  const files = [['index.html', html], ...pages().map((f) => [f, read(f)])];
+
+  const offenders = [];
+  for (const [name, src] of files) {
+    for (const re of [INTERACTIVE_TAG, DATA_ACT_TAG]) {
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(src))) {
+        const [full, tagName, attrs] = m;
+        if (!/\btitle\s*=/.test(attrs)) continue;
+        const line = src.slice(0, m.index).split('\n').length;
+        offenders.push(`${name}:${line} <${tagName}> ${full.slice(0, 80)}`);
+      }
+    }
+  }
+  assert.deepEqual(offenders, [],
+    'interactive control still carries a native title= — convert it to data-tip (public/tooltip.js) instead:\n'
+    + offenders.join('\n'));
+});

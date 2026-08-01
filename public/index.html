@@ -17,10 +17,10 @@
     <a href="#settings" data-tab="settings">Settings</a>
   </nav>
   <div class="header-right">
-    <button id="usage-chip" class="pill usage-chip" hidden title="Usage">◔</button>
-    <button id="running-badge" class="pill" hidden title="View running jobs">◐ 0 running</button>
+    <button id="usage-chip" class="pill usage-chip" hidden aria-label="Usage" data-tip="Usage">◔</button>
+    <button id="running-badge" class="pill" hidden data-tip="View running jobs">◐ 0 running</button>
     <div class="menu-wrap">
-      <button id="awake-btn" title="Keep this Mac awake so schedules fire">☕ <span id="awake-label">sleep ok</span></button>
+      <button id="awake-btn" data-tip="Keep this Mac awake so schedules fire">☕ <span id="awake-label">sleep ok</span></button>
       <div id="awake-menu" class="menu" hidden>
         <div class="menu-head">Keep Mac awake</div>
         <button data-mode="off">Off — allow sleep</button>
@@ -33,10 +33,10 @@
       </div>
     </div>
     <div class="seg pause-seg" id="pause-seg">
-      <button type="button" data-mode="off" title="Nothing is blocked">Off</button>
-      <button type="button" data-mode="hold" title="Hold the schedule — scheduled fires are dropped, but you can still run jobs by hand and anything already running is left alone">Hold</button>
-      <button type="button" data-mode="soft" title="Drain — nothing new starts, and running jobs are asked to wind down at their next safe point">Soft</button>
-      <button type="button" data-mode="hard" title="Stop everything now — running jobs are killed immediately">Hard</button>
+      <button type="button" data-mode="off" data-tip="Nothing is blocked">Off</button>
+      <button type="button" data-mode="hold" data-tip="Hold the schedule — scheduled fires are dropped, but you can still run jobs by hand and anything already running is left alone">Hold</button>
+      <button type="button" data-mode="soft" data-tip="Drain — nothing new starts, and running jobs are asked to wind down at their next safe point">Soft</button>
+      <button type="button" data-mode="hard" data-tip="Stop everything now — running jobs are killed immediately">Hard</button>
     </div>
   </div>
 </header>
@@ -47,11 +47,11 @@
 
 <main>
   <section id="tab-jobs">
-    <div id="usage-strip" class="usage-strip" title="Usage — click to refresh"></div>
+    <div id="usage-strip" class="usage-strip" data-tip="Usage — click to refresh"></div>
     <div class="toolbar">
       <input id="job-search" type="search" placeholder="Filter jobs…" autocomplete="off">
       <span class="spacer"></span>
-      <button id="plan-burndown" title="Spread remaining capacity across a deadline">◷ Plan burn-down</button>
+      <button id="plan-burndown" data-tip="Spread remaining capacity across a deadline">◷ Plan burn-down</button>
       <button id="new-job" class="primary">＋ New job</button>
     </div>
     <div id="jobs-list" class="list"></div>
@@ -81,15 +81,15 @@
       <input id="project-path" type="text" placeholder="/path/to/repo with a .scheduler.json" autocomplete="off">
       <button id="project-register">＋ Register</button>
       <span class="spacer"></span>
-      <button id="project-burst" title="Work through ready beads using a chosen slice of a usage window">◔ Burst…</button>
-      <button id="project-discover" title="Scan the configured roots for repos that carry a .scheduler.json">⌕ Discover</button>
+      <button id="project-burst" data-tip="Work through ready beads using a chosen slice of a usage window">◔ Burst…</button>
+      <button id="project-discover" data-tip="Scan the configured roots for repos that carry a .scheduler.json">⌕ Discover</button>
     </div>
     <!-- Live burst. Driven by MEASURED spend, not by the estimate that sized it. -->
     <div id="burst-strip" class="burst-strip" hidden>
       <div class="burst-head">
         <strong id="burst-title"></strong>
         <span class="spacer"></span>
-        <button id="burst-cancel" class="icon" title="Stop making further attempts">✕ Cancel</button>
+        <button id="burst-cancel" class="icon" data-tip="Stop making further attempts">✕ Cancel</button>
       </div>
       <div class="burst-meter"><div id="burst-fill"></div></div>
       <p id="burst-detail" class="note"></p>
@@ -110,7 +110,7 @@
     <div class="toolbar">
       <input id="session-search" type="search" placeholder="Filter sessions…" autocomplete="off">
       <span class="spacer"></span>
-      <button id="sessions-all-toggle" type="button" class="icon" title="Toggle non-interactive (sdk-cli) sessions">Show all</button>
+      <button id="sessions-all-toggle" type="button" class="icon" data-tip="Toggle non-interactive (sdk-cli) sessions">Show all</button>
     </div>
     <p id="sessions-hidden-note" class="note" hidden></p>
     <div id="sessions-list" class="s-list"></div>
@@ -190,19 +190,19 @@
     <!-- The log is a snapshot, not a live stream, so the drawer has to say how old
          it is — otherwise a stalled run and a stale view look identical. -->
     <span id="log-asof" class="muted"></span>
-    <button id="log-refresh" class="icon" title="Reload the log">⟳</button>
-    <button id="log-stop" hidden title="Ask this run to wind down at its next safe point">⤓ Wind down</button>
+    <button id="log-refresh" class="icon" aria-label="Reload the log" data-tip="Reload the log">⟳</button>
+    <button id="log-stop" hidden data-tip="Ask this run to wind down at its next safe point">⤓ Wind down</button>
     <button id="log-kill" class="danger-btn" hidden>■ Stop now</button>
     <!-- Cross-link to the Sessions tab for a run that has a Claude session
          (meta.sessionId, set by extensions/claude/formatter.js). -->
-    <a id="log-session-link" class="session-link" href="#" hidden title="Open this run's Claude session transcript">session ↗</a>
+    <a id="log-session-link" class="session-link" href="#" hidden data-tip="Open this run's Claude session transcript">session ↗</a>
     <span id="run-actions"></span>
-    <button id="log-close" class="icon" title="Close">✕</button>
+    <button id="log-close" class="icon" aria-label="Close" data-tip="Close">✕</button>
   </div>
   <pre id="log-view"></pre>
   <!-- Anyone who genuinely wants to follow output live gets the command to do it,
        because the browser no longer can. Empty until the run has a log file. -->
-  <code id="log-follow" class="follow-hint" title="Run this in a terminal to follow the output live"></code>
+  <code id="log-follow" class="follow-hint" data-tip="Run this in a terminal to follow the output live"></code>
 </div>
 
 <dialog id="job-dialog">
@@ -334,7 +334,7 @@
       <button type="button" id="session-mode-prompts">Prompts</button>
       <button type="button" id="session-mode-full" class="active">Full conversation</button>
     </div>
-    <button type="button" id="session-dialog-close" class="icon" title="Close">✕</button>
+    <button type="button" id="session-dialog-close" class="icon" aria-label="Close" data-tip="Close">✕</button>
   </div>
   <div id="session-transcript" class="s-transcript"></div>
 </dialog>
