@@ -474,3 +474,80 @@ allocated QA/sandbox port) started with its own `CS_DATA`; an empty DB is what m
 run a second scheduler at all, since one sharing the live DB could fire real jobs. The owner's
 daemon on 43400 is a foreground `npm start`, not launchd-supervised, so it is never restarted to
 test — a second isolated instance is.
+
+## 2026-08-01 · Waves 0 and 1 complete — C1a, A2, and one bead deleted rather than built
+
+`btv.2` (C1a) merged as `0a0001a`, `btv.4` (A2) as `6ba7d30`, `btv.3` (D1a) **closed as
+unnecessary**. `/v2` now has a working shell, appbar, router and API client, plus the one
+aggregation endpoint the Overview tab needs. Old UI and old API untouched throughout; a test pins
+that.
+
+**C1a — `GET /api/v2/overview`.** Additive route, nothing existing changed. It reuses `lib/`
+rather than re-deriving: `previewSchedule` for fire times, `policy.explain(job)` for budget
+admission, `pause.mode()` for suppression, TTL-cached `bdStatus` so a request never fans out one
+`bd` call per row. Two REVIEW recommendations turned out to be *data* requirements, not UI work,
+and would have been unimplementable if the payload couldn't carry them: **#1** pause suppression is
+per-fire (`admitted` + `blockedBy.mode`), so the Next-24h panel can say "listed, but dropped while
+Hold is on" without the UI re-deriving admission and contradicting the daemon; **#8** every
+section carries its own `asOf` taken from that data's real source (the usage poll's `checkedAt`, a
+project's `lastPollAt`), because one request-time stamp would let a stale card claim it was just
+checked. `unknown` is kept distinct from `0` everywhere — a real 0% is legitimate, so absence
+needed its own flag rather than a value that renders as a healthy meter.
+
+**The C1a finding: parsing your own prose.** The endpoint decomposes `lib/budget.js`'s reason
+sentences with regexes so the UI never parses English — reasonable, except the tests only fed the
+decoder *synthetic* strings. Proved the hole by mutating the **dependency** instead of the code
+under test: reworded `blockReason`'s reserve sentence and re-ran. 4 tests failed, all in
+`tests/budget.test.js`, **0** in the new v2 tests. So drift wasn't perfectly silent, but the tests
+that caught it sit nowhere near the regexes and carry no pointer to them — the realistic sequence
+is reword, update the budget tests, ship green, and `/v2` silently degrades every skip reason to
+`{code:'other'}`, discarding the reason-inline property REVIEW.md calls the design's best feature.
+Fixed with coupling tests that drive the real producer through the endpoint, one per branch —
+verified by rewording again and watching *only* the matching branch go red — plus pointer comments
+at each producer site. Follow-up `claude-scheduler-ddu` filed to return structured reasons and drop
+the live-path regexes; deliberately not done here, since reshaping a function on the current UI's
+live path is a different risk profile than adding a route.
+
+**A2 — the frozen contract.** `public/v2/README.md` is the artefact eight later beads build
+against. The token-vs-route collision was handled explicitly: `#token=` is delivery, not a route;
+capture strips only the token and preserves the route hash (the old path wiped the whole hash); and
+`captureTokenFromHash()` must run before `mountChrome()`, or a cold `claude-scheduler open` deep
+link 401s its own first request — a third variant of that trap nobody had written down.
+
+**The A2 finding: a contract that promised a mechanism it didn't have.** The README stated *"mark
+any control with `data-mutating` and it is automatically killed under daemon-unreachable"*. It
+wasn't — the only auth-state subscriber re-rendered the appbar. Measured by rendering one
+`data-mutating` button exactly as the README instructs and aborting `/api/**`: appbar seg
+`disabled:true` with its reason, page control `disabled:false` still offering "Create a new job",
+under a banner announcing that requests were failing. REVIEW #2's exact defect, reintroduced at the
+contract layer where six wave-2 agents would each have had to work around it. Fixed as one central
+sweep subscribed **twice** — `onAuthState` so an open page goes dead, and a new router `onRender`
+hook so a route opened *while already degraded* comes up dead. The second is the case a
+change-only sweep silently misses, and it has its own test: removing just that subscription turns
+exactly one test red. Also exported `degradedReason()` as the single definition of the two reason
+strings; the README had been telling every page to retype them, which is how one failure comes to
+be worded six ways. Generalised to memory as
+`exercise-contract-promises-from-the-consumer-position`.
+
+**D1a — deleted, not built.** The plan specified `POST /api/v2/schedule-preview`. Investigation
+found `POST /api/schedule/preview` already does all of it, and `lib/validate.js` states reset
+jitter is deterministic in `(jobId, window)` *"so a preview shown in the UI is the time that
+actually fires"* — it is already the canonical preview mechanism, and a second one is precisely the
+"preview said 11:50, fired 11:47" drift the plan warned about. Verified live across seven cases:
+5-field cron → 3 fires; 6-field cron accepted; invalid → 400 carrying Croner's own message;
+once-in-past → `{next:[],unknown:false}`; unresolvable afterReset → `{next:[],unknown:true}`;
+`{schedules:[a,b]}` → merged and sorted; no token → 401. Note the two empty cases are **different**
+and the dialog must distinguish them. Owner approved closing the bead. Bonus find recorded on
+`btv.11`: the validation mockup illustrates a cron error as "6 fields — expected 5", but Croner
+accepts 5 *or* 6 fields (the 6th is seconds) at both preview and create time — so that inline
+message must be rendered from whatever Croner actually rejects, never a hand-authored field count.
+
+Process notes. Sub-agent reports are not evidence: every claimed mutation was re-run
+independently at the merge bar, and both rounds of pushback came from measurements the agents' own
+green suites had missed. One self-inflicted error worth recording: restoring `lib/budget.js` from a
+backup taken *before* an agent added its pointer comments silently reverted them — the fix landed,
+the documentation of why didn't. Re-added and re-verified comment-only. Also mis-addressed a
+review message to the wrong concurrent agent; it correctly refused to act on another bead's files.
+Wave 2 is dispatching in owner-approved batches of two rather than all six at once, because both
+A1 and A2 shipped defects that only a careful browser leg caught, and six simultaneous merge bars
+is how the next one gets through.
