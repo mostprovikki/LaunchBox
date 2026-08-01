@@ -61,6 +61,35 @@ test('api() attaches the token and surfaces the invalid-key banner', () => {
   assert.match(util, /from '\.\/auth\.js'/, 'util.js must import the auth module');
 });
 
+test('vendored ESM imports nothing it did not bring with it', () => {
+  // jsDelivr /+esm and esm.sh rewrite bare specifiers into origin-absolute
+  // imports ("/npm/pkg@1.2.3/+esm"). Such a file works while served from the
+  // CDN and breaks the moment it is vendored — and offline is the entire point
+  // of vendoring in a local-only daemon. So: no https://, no origin-absolute
+  // path, no bare specifier. Relative imports are fine; they ship alongside.
+  const VENDOR = join(PUBLIC, 'vendor');
+  let files;
+  try {
+    files = readdirSync(VENDOR, { recursive: true });
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+    return; // nothing vendored yet
+  }
+  const offenders = [];
+  for (const f of files.filter((n) => /\.m?js$/.test(n))) {
+    const src = readFileSync(join(VENDOR, f), 'utf8');
+    const specifiers = [
+      ...src.matchAll(/\bfrom\s*['"]([^'"]+)['"]/g),
+      ...src.matchAll(/\bimport\s*\(?\s*['"]([^'"]+)['"]/g),
+    ].map((m) => m[1]);
+    for (const s of specifiers) {
+      if (!s.startsWith('./') && !s.startsWith('../')) offenders.push(`vendor/${f}: "${s}"`);
+    }
+  }
+  assert.deepEqual(offenders, [],
+    'vendor only single-file builds, or ones whose imports are relative paths shipped with them');
+});
+
 test('the approval failure vocabulary matches the server exactly', () => {
   // public/auth.js turns a code into a sentence; lib/approval.js decides which
   // codes exist. A code with no copy reaches the user as a bare identifier, and
