@@ -14,7 +14,7 @@ import {
   listProjects, getProject, getProjectByPath, createProject, updateProject, deleteProject,
   listLeases, listJobsByProject,
 } from './lib/db.js';
-import { validateJob, previewSchedule, scheduleEntries } from './lib/validate.js';
+import { validateJob, previewSchedule, scheduleEntries, hasAfterReset } from './lib/validate.js';
 import { loadExtensions, manifest, validateFields } from './lib/extensions.js';
 import { createRunner, DEFAULT_SOFT_GRACE_MS } from './lib/runner.js';
 import { createScheduler } from './lib/scheduler.js';
@@ -1224,6 +1224,289 @@ export function createApp({
     const r = burst.cancel('cancelled from the UI');
     if (!r.ok) return res.status(409).json({ error: r.reason });
     res.json(r);
+  });
+
+  // ------------------------------------------------------------- v2: overview
+  // GET /api/v2/overview (claude-scheduler-btv.2, C1a) — one additive
+  // aggregation endpoint for the /v2 Overview tab (C1, btv.8, blocked on this).
+  // Additive only: nothing existing reads this, and nothing here re-derives
+  // logic that already lives in lib/ — it calls the same collaborators the
+  // rest of this file calls and reshapes their answers.
+  //
+  // Every section carries ITS OWN `asOf`, per REVIEW.md #8: usage/budget use
+  // the usage poll's own `checkedAt`, project pulse uses the latest project's
+  // own `lastPollAt`, and attention/next-24h/running/today are read live from
+  // the db at request time, so `now` is an honest as-of for those — never one
+  // global timestamp standing in for all of them.
+  //
+  // `blockReason`'s three sentence shapes (lib/budget.js) and pause.gate's
+  // `paused (<mode>)` (lib/pause.js) are the only place either guard explains
+  // itself, so rather than re-deriving the *decision* here, `decodeReason`
+  // only decomposes the sentence that lib/ already produced into {code,
+  // ...values} — the reason a fire is blocked stays owned by budget.js/pause.js,
+  // this just stops the UI from having to parse English to render it, and
+  // stops a second page inventing different wording for the same reason.
+  const SKIP_REASON_PATTERNS = [
+    // "paused: fable at 90% (critical)" — blockReason's severity-bucket branch.
+    { code: 'bucket_severity', re: /^paused: (.+?) at (-?[\d.]+)% \((\w+)\)$/,
+      map: (m) => ({ bucket: m[1], percent: Number(m[2]), severity: m[3] }) },
+    // "reserving 5h headroom (82% used)" — blockReason's reserve-window branch.
+    { code: 'reserve', re: /^reserving (.+?) headroom \((-?[\d.]+)% used\)$/,
+      map: (m) => ({ windowLabel: m[1], usedPct: Number(m[2]) }) },
+    // "job needs 40% headroom (12% left)" — blockReason's per-job floor branch.
+    { code: 'job_min_headroom', re: /^job needs (-?[\d.]+)% headroom \((-?[\d.]+)% left\)$/,
+      map: (m) => ({ minHeadroomPct: Number(m[1]), leftPct: Number(m[2]) }) },
+    // "paused (hold)" — pause.gate's only sentence shape.
+    { code: 'paused', re: /^paused \((\w+)\)$/, map: (m) => ({ mode: m[1] }) },
+  ];
+  function decodeReason(raw) {
+    if (!raw) return null;
+    for (const { code, re, map } of SKIP_REASON_PATTERNS) {
+      const m = re.exec(raw);
+      if (m) return { code, ...map(m), message: raw };
+    }
+    return { code: 'other', message: raw }; // a future lib/ sentence shape — still surfaced, just undecoded
+  }
+
+  // A run finished more than this long ago is not "needs attention" anymore —
+  // it's history, which the Runs tab already covers.
+  const NEEDS_ATTENTION_LOOKBACK_MS = 48 * 3600_000;
+  const TODAY_STATUSES = ['ok', 'fail', 'timeout', 'skipped', 'killed', 'stopped'];
+  const NEXT24H_HORIZON_MS = 24 * 3600_000;
+
+  app.get('/api/v2/overview', async (req, res) => {
+    const nowIso = new Date().toISOString();
+    const nowMs = Date.now();
+
+    // ---- headroom ---------------------------------------------------------
+    const snap = usage?.snapshot() ?? null;
+    const settingsOut = policy.settings();
+    const overallExplain = policy.explain();
+    const warnPct = usageWarnPct();
+    const critPct = usageCritPct();
+    const namedWindows = [
+      { key: 'five_hour', label: '5-hour window', reservePct: settingsOut.reserveFiveHourPct },
+      { key: 'seven_day', label: 'Week', reservePct: settingsOut.reserveWeeklyPct },
+    ].map(({ key, label, reservePct }) => {
+      const w = snap?.windows?.[key] ?? null;
+      const percent = typeof w?.percent === 'number' ? w.percent : null;
+      return {
+        key, label, reservePct, warnPct, critPct,
+        percent, resetsAt: w?.resetsAt ?? null,
+        // Never 0 for "not known" — a real 0% is a legitimate percent, so absence
+        // is its own flag rather than a value that would render as a healthy meter.
+        unknown: percent === null,
+      };
+    });
+    const modelWindows = (snap?.buckets ?? []).map((b) => ({
+      kind: b.kind, group: b.group, scopeModel: b.scopeModel,
+      percent: typeof b.percent === 'number' ? b.percent : null,
+      severity: b.severity, resetsAt: b.resetsAt, isActive: b.isActive,
+      unknown: typeof b.percent !== 'number',
+    }));
+    const headroom = {
+      // The usage poll's own timestamp, never Date.now() — a stale reading must
+      // read as stale, not as "checked just now".
+      asOf: snap?.checkedAt ?? null,
+      available: snap?.available === true,
+      stale: snap?.stale ?? null,
+      guard: {
+        enforcing: overallExplain.enforcing,
+        why: overallExplain.why, // e.g. "guard is off" or the fail-open reason — never silently omitted
+        reserveFiveHourPct: settingsOut.reserveFiveHourPct,
+        reserveWeeklyPct: settingsOut.reserveWeeklyPct,
+        pauseOnWarning: settingsOut.pauseOnWarning,
+      },
+      windows: namedWindows,
+      modelWindows,
+    };
+
+    const jobs = listJobs(db);
+    const jobById = new Map(jobs.map((j) => [j.id, j]));
+    const explainCache = new Map();
+    const budgetFor = (job) => {
+      if (!explainCache.has(job.id)) explainCache.set(job.id, policy.explain(job));
+      return explainCache.get(job.id);
+    };
+
+    // ---- needs attention ----------------------------------------------------
+    // Every item's reason is inline, structured data (REVIEW.md's single best
+    // property of the design) — never a pre-composed sentence.
+    const attention = [];
+    for (const job of jobs) {
+      const recent = listRuns(db, { jobId: job.id, limit: 10 })
+        .filter((r) => !['running', 'queued'].includes(r.status));
+      const last = recent[0];
+      if (!last?.finishedAt) continue;
+      if (nowMs - new Date(last.finishedAt).getTime() > NEEDS_ATTENTION_LOOKBACK_MS) continue;
+      if (last.status === 'timeout') {
+        let streak = 0;
+        for (const r of recent) { if (r.status === 'timeout') streak++; else break; }
+        attention.push({
+          id: last.id, jobId: job.id, jobName: job.name, kind: 'timeout',
+          occurredAt: last.finishedAt,
+          reason: { code: 'timeout', timeoutMin: job.timeoutMin, streak, retryCount: job.retryCount },
+        });
+      } else if (last.status === 'skipped' && last.meta?.skipReason) {
+        attention.push({
+          id: last.id, jobId: job.id, jobName: job.name, kind: 'skipped',
+          occurredAt: last.finishedAt,
+          reason: decodeReason(last.meta.skipReason),
+        });
+      } else if (last.status === 'killed') {
+        attention.push({
+          id: last.id, jobId: job.id, jobName: job.name, kind: 'killed',
+          occurredAt: last.finishedAt,
+          reason: { code: 'killed' },
+        });
+      } else if (last.status === 'stopped') {
+        attention.push({
+          id: last.id, jobId: job.id, jobName: job.name, kind: 'stopped',
+          occurredAt: last.finishedAt,
+          reason: { code: 'stopped', stopReason: last.meta?.stopReason ?? null, stopRung: last.meta?.stopRung ?? null },
+        });
+      }
+    }
+    // Project issues — bd-busy streaks, warnings, or the poller's own `error`
+    // state. Read entirely off in-memory/db state (busyStreakFor/warningsFor are
+    // maps, not `bd` calls), so this costs zero extra `bd` invocations.
+    if (projects && beads) {
+      for (const p of listProjects(db)) {
+        const busyStreak = projects.busyStreakFor(p.id);
+        const warnings = projects.warningsFor(p.id);
+        if (p.state === 'error' || busyStreak > 0 || warnings.length) {
+          attention.push({
+            id: `project:${p.id}`, jobId: null, jobName: p.name, kind: 'project_issue',
+            occurredAt: p.lastPollAt ?? null,
+            reason: {
+              code: p.state === 'error' ? 'project_error' : busyStreak > 0 ? 'bd_busy' : 'project_warning',
+              busyStreak, warnings, lastError: p.lastError ?? null,
+            },
+          });
+        }
+      }
+    }
+
+    // ---- next 24 hours ------------------------------------------------------
+    // Fire times computed exclusively through previewSchedule (lib/validate.js)
+    // — the scheduler's own parser — so this can never drift from what actually
+    // fires (the "preview said 11:50, fired 11:47" bug the plan calls out).
+    const liveWindows = windows();
+    const fires = [];
+    const beyond = [];
+    let disabledNeverFireCount = 0;
+    const pauseMode = pause?.mode() ?? 'off';
+    const pauseBlocking = pauseMode !== 'off';
+    for (const job of jobs) {
+      if (!job.enabled) { disabledNeverFireCount++; continue; }
+      let preview;
+      try {
+        preview = previewSchedule(job.schedule, 1, { windows: liveWindows, jobId: job.id });
+      } catch {
+        continue; // a schedule that no longer validates — surfaced on the Jobs tab, not here
+      }
+      const at = preview.next[0] ?? null;
+      if (!at && !preview.unknown) continue; // nothing left to fire (e.g. a spent once-entry)
+      const budgetExplain = budgetFor(job);
+      const budgetBlocked = !!budgetExplain.blocked;
+      const entry = {
+        jobId: job.id, jobName: job.name, type: job.type,
+        schedule: job.schedule,
+        at, unknown: preview.unknown && !at,
+        anchoredToReset: hasAfterReset(job.schedule),
+        // Per-fire admission (REVIEW.md #1): the UI must never guess this —
+        // `pause.blocksSchedule()`-equivalent and the budget guard's own
+        // `explain(job)` are both reused verbatim, not re-implemented.
+        admitted: !pauseBlocking && !budgetBlocked,
+        blockedBy: {
+          pause: pauseBlocking ? { mode: pauseMode } : null,
+          budget: budgetBlocked ? decodeReason(budgetExplain.blocked) : null,
+        },
+      };
+      if (at && new Date(at).getTime() - nowMs <= NEXT24H_HORIZON_MS) fires.push(entry);
+      else if (at) beyond.push(entry);
+      else fires.push(entry); // unknown afterReset time — still due, just not resolvable yet
+    }
+    const byAt = (a, b) => (a.at ?? '9999').localeCompare(b.at ?? '9999');
+    fires.sort(byAt);
+    beyond.sort(byAt);
+
+    const next24h = {
+      asOf: nowIso,
+      pauseMode,
+      // The Next-24h panel still lists fires while paused; every one comes back
+      // flagged `admitted: false` with the mode named, rather than the UI having
+      // to infer suppression from the banner alone.
+      suppressedByPause: pauseBlocking,
+      fires,
+      beyond,
+      disabledNeverFireCount,
+    };
+
+    // ---- running now --------------------------------------------------------
+    const runningRows = listRuns(db, { status: 'running', limit: 50 });
+    const running = {
+      asOf: nowIso,
+      runs: runningRows.map((r) => {
+        const job = jobById.get(r.jobId) ?? getJob(db, r.jobId);
+        return {
+          runId: r.id, jobId: r.jobId, jobName: job?.name ?? '(deleted job)',
+          type: job?.type ?? null, trigger: r.trigger,
+          startedAt: r.startedAt,
+          elapsedMs: r.startedAt ? nowMs - new Date(r.startedAt).getTime() : null,
+          sessionId: r.meta?.sessionId ?? null,
+        };
+      }),
+    };
+
+    // ---- today so far ---------------------------------------------------
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+    const startOfDayIso = startOfDay.toISOString();
+    const todayRuns = listRuns(db, { limit: 2000 })
+      .filter((r) => TODAY_STATUSES.includes(r.status) && r.createdAt >= startOfDayIso);
+    const today = {
+      asOf: nowIso,
+      total: todayRuns.length,
+      byStatus: Object.fromEntries(TODAY_STATUSES.map((s) => [s, todayRuns.filter((r) => r.status === s).length])),
+    };
+
+    // ---- automation / project pulse -----------------------------------
+    let automation;
+    if (projects && beads) {
+      const rows = listProjects(db).map(decorateProject);
+      const lastPolls = rows.map((p) => p.lastPollAt).filter(Boolean).sort();
+      automation = {
+        available: true,
+        // The latest project's own lastPollAt — not Date.now(): projects are
+        // polled independently of this request.
+        asOf: lastPolls.length ? lastPolls[lastPolls.length - 1] : null,
+        pollSec: projects.pollSec(),
+        bd: await bdStatus(),
+        projects: rows.map((p) => ({
+          id: p.id, name: p.name, state: p.state,
+          ready: p.ready, busyStreak: p.busyStreak, warnings: p.warnings, reasons: p.reasons,
+          lastPollAt: p.lastPollAt, lastError: p.lastError,
+        })),
+        burst: burst ? { active: burst.status(), recent: burst.history({ limit: 3 }) } : null,
+      };
+    } else {
+      // Not zero, not an empty projects list standing in for "none registered" —
+      // explicitly unavailable, so the UI can render "not known" rather than a
+      // healthy-looking empty state.
+      automation = { available: false, asOf: null, pollSec: null, bd: null, projects: null, burst: null };
+    }
+
+    res.json({
+      generatedAt: nowIso,
+      pause: pause ? pause.status() : null,
+      headroom,
+      attention: { asOf: nowIso, items: attention },
+      next24h,
+      running,
+      today,
+      automation,
+    });
   });
 
   // Settings: core {paused, home} + per-extension blocks from each ext's
