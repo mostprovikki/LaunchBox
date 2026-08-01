@@ -549,3 +549,78 @@ legend { color: var(--muted); padding: 0 6px; font-size: 12.5px; }
 .jt-bool { color: var(--warn); }
 .jt-null { color: var(--muted-2); font-style: italic; }
 .jt-punc { color: var(--muted-2); }
+
+/* ---------- per-tool transcript renderers (claude-scheduler-a6o) ----------
+   Same wrap-not-clip rule the JSON body already follows: a shell command or
+   diff line runs as long as the source line did. */
+.t-shell-cmd, .t-file-path, .t-grep-summary {
+  white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+}
+.t-shell-cmd { margin: 0; background: var(--inset); border-radius: 8px; padding: 8px 10px; }
+.t-cmd-desc { color: var(--muted-2); font-size: 12px; margin: 6px 0 0; }
+.t-file-path { background: var(--inset); border-radius: 8px; padding: 6px 10px; }
+.t-file-range { color: var(--muted-2); }
+
+/* Bash stdout/stderr — visually distinct, not just labelled. */
+.t-stream-label {
+  color: var(--muted-2); font-size: 10.5px; text-transform: uppercase; letter-spacing: .4px; margin: 8px 0 4px;
+}
+.t-stream-label:first-child { margin-top: 0; }
+.t-stdout, .t-stderr {
+  margin: 0; white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+  border-radius: 8px; padding: 8px 10px;
+}
+.t-stdout { background: var(--inset); }
+.t-stderr { background: color-mix(in srgb, var(--fail) 12%, var(--inset)); color: var(--fail); }
+.t-stream-label.t-stderr-label { color: var(--fail); }
+
+/* Edit/Write diff — hunks are pre-computed (structuredPatch), no diffing
+   library; the sign character on each line drives the colouring. */
+.t-diff {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+  background: var(--inset); border-radius: 8px; overflow: hidden;
+}
+.t-diff .diff-hunk + .diff-hunk { border-top: 1px solid var(--border); }
+.diff-hunk-header { color: var(--muted-2); padding: 4px 10px; background: var(--card-h); }
+.diff-line { padding: 1px 10px; white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
+.diff-line.diff-add { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); }
+.diff-line.diff-del { background: color-mix(in srgb, var(--fail) 14%, transparent); color: var(--fail); }
+.diff-line.diff-ctx { color: var(--muted-2); }
+
+/* Nested collapse — used inside a tool body (Read's file content) so it can
+   stay collapsed even once the surrounding .t-block is open. Deliberately
+   lighter chrome than .t-head: this is a second-order disclosure. */
+.t-nested { margin-top: 4px; }
+.t-nested-toggle {
+  background: none; border: none; padding: 2px 0; color: var(--muted-2);
+  font: inherit; font-size: 11.5px; cursor: pointer;
+}
+.t-nested-toggle:hover { color: var(--text-2); }
+.t-nested-caret { display: inline-block; width: 1em; }
+.t-nested-body { margin-top: 4px; }
+
+/* TodoWrite before/after checklist. */
+.t-todo-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.t-todo { font-size: 12.5px; display: flex; gap: 6px; align-items: baseline; }
+.t-todo-glyph { flex: none; width: 1.2em; text-align: center; }
+.t-todo-completed .t-todo-glyph { color: var(--ok); }
+.t-todo-in_progress .t-todo-glyph { color: var(--accent); }
+.t-todo-pending .t-todo-glyph { color: var(--muted-2); }
+.t-todo-completed { color: var(--muted-2); text-decoration: line-through; }
+.t-todo-changed { background: var(--accent-soft); border-radius: 6px; padding: 1px 6px; margin: 0 -6px; }
+
+/* Long-prompt auto-collapse — a pasted file/spec shouldn't dwarf the turns
+   around it. The fade signals there is more below without a hard cut. */
+.t-prompt-wrap { display: flex; flex-direction: column; }
+.t-turn.t-user.t-prompt-clipped {
+  max-height: 220px; overflow: hidden; position: relative;
+  mask-image: linear-gradient(to bottom, #000 75%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, #000 75%, transparent 100%);
+}
+.t-prompt-toggle {
+  align-self: flex-start; margin-top: 6px; font-size: 11.5px; padding: 3px 10px;
+  background: var(--panel2); color: var(--accent); border-color: var(--accent-line);
+}
+.t-prompt-toggle:hover { background: var(--accent-soft); }
