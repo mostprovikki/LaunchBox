@@ -71,7 +71,7 @@ Three disjoint zones. **One owner per zone at a time**; never assign two agents 
   - `tokenMatches(expected: string, provided: unknown): boolean` — constant-time, length-safe.
   - `TOKEN_FILENAME = 'token'`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```js
 import test from 'node:test';
@@ -114,12 +114,12 @@ test('tokenMatches is length-safe and rejects the obvious', () => {
 });
 ```
 
-- [ ] **Step 2: Run it and confirm it fails**
+- [x] **Step 2: Run it and confirm it fails**
 
 Run: `node --test tests/token.test.js`
 Expected: FAIL — `Cannot find module '../lib/token.js'`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```js
 // The capability token. Layer 1 of docs/specs/2026-07-26-local-api-auth-design.md.
@@ -163,11 +163,11 @@ export function tokenMatches(expected, provided) {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `node --test tests/token.test.js` → 3 passing.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/token.js tests/token.test.js
@@ -192,7 +192,7 @@ git commit -m "feat: capability token generation and constant-time comparison"
 `req()` to send the header keeps them green; forgetting to means ~200 spurious failures that
 look like a broken middleware.
 
-- [ ] **Step 1: Write the failing tests** (append to `tests/api.test.js`)
+- [x] **Step 1: Write the failing tests** (append to `tests/api.test.js`)
 
 ```js
 test('every /api route requires the token, and static assets do not', async (t) => {
@@ -236,12 +236,12 @@ test('a wrong, absent, or malformed token is refused; the right one works', asyn
 });
 ```
 
-- [ ] **Step 2: Run and confirm they fail**
+- [x] **Step 2: Run and confirm they fail**
 
 Run: `node --test tests/api.test.js`
 Expected: the two new tests FAIL (200 where 401 expected). Existing tests still pass.
 
-- [ ] **Step 3: Add the middleware to `server.js`**
+- [x] **Step 3: Add the middleware to `server.js`**
 
 Insert immediately **after** the Content-Type guard and **before** `app.use(express.json…)`,
 and add `token = null` to the `createApp` destructured options:
@@ -267,7 +267,7 @@ and add `token = null` to the `createApp` destructured options:
 
 Add the import: `import { ensureToken, tokenMatches } from './lib/token.js';`
 
-- [ ] **Step 4: Teach the test harness the header**
+- [x] **Step 4: Teach the test harness the header**
 
 In `tests/api.test.js`, `boot()` and `bootWithUsage()` must capture the token and pass it to
 `createApp`, then return it; and `req()` must send it:
@@ -297,18 +297,18 @@ Because `req(base(), ...)` is called ~200 times without a token argument, the si
 change is a module-level `let currentToken` that `boot()` sets and `req()` reads by default.
 Do that rather than editing 200 call sites.
 
-- [ ] **Step 5: Run the whole suite**
+- [x] **Step 5: Run the whole suite**
 
 Run: `npm test`
 Expected: **all previous tests still pass**, plus the 2 new ones. If dozens fail with 401, the
 harness change in Step 4 is incomplete — fix that, do not weaken the middleware.
 
-- [ ] **Step 6: Mutation-check that the test bites**
+- [x] **Step 6: Mutation-check that the test bites**
 
 Temporarily make `tokenMatches` in the middleware always return `true`; run `npm test`; the two
 new tests must fail. Revert.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add server.js tests/api.test.js
@@ -329,7 +329,7 @@ git commit -m "feat: require the capability token on every /api route"
 
 Once Task 2 lands there is **no way into the UI without this**, so it is not optional.
 
-- [ ] **Step 1: Write the CLI**
+- [x] **Step 1: Write the CLI**
 
 ```js
 #!/usr/bin/env node
@@ -375,7 +375,7 @@ if (cmd === 'token') {
 }
 ```
 
-- [ ] **Step 2: Register it**
+- [x] **Step 2: Register it**
 
 In `package.json` add:
 
@@ -383,7 +383,7 @@ In `package.json` add:
   "bin": { "claude-scheduler": "./bin/claude-scheduler.mjs" },
 ```
 
-- [ ] **Step 3: Make it executable and verify by hand**
+- [x] **Step 3: Make it executable and verify by hand**
 
 ```bash
 chmod +x bin/claude-scheduler.mjs
@@ -391,7 +391,7 @@ CS_DATA=$(mktemp -d) node bin/claude-scheduler.mjs url
 ```
 Expected: a `http://127.0.0.1:9099/#token=<64 hex>` line. Run `token` and confirm the same value.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add bin/claude-scheduler.mjs package.json
@@ -416,7 +416,7 @@ git commit -m "feat: claude-scheduler CLI for token delivery"
     only on success; **never** clears caller state on failure; sets a busy/"waiting" state.
   - `FAILURE_COPY: Record<string, string>`
 
-- [ ] **Step 1: Write it**
+- [x] **Step 1: Write it**
 
 ```js
 // The one place the token, the failure vocabulary and the "don't lose the user's
@@ -499,7 +499,7 @@ export async function guardedSubmit(el, fn) {
 }
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add public/auth.js
@@ -523,7 +523,7 @@ Upgrading `api()` rather than adding an opt-in module is the whole point: `app.j
 `projects.js`, `usage.js` and `fields.js` already use it, so present and future pages inherit
 the token, the banner and the codes without doing anything.
 
-- [ ] **Step 1: Modify `api()`**
+- [x] **Step 1: Modify `api()`**
 
 ```js
 import { authHeaders, showTokenBanner, FAILURE_COPY } from './auth.js';
@@ -553,13 +553,13 @@ export const api = async (method, path, body) => {
 **cycle**. ES modules tolerate it because both are used at call time, not module-evaluation
 time — but keep `auth.js` free of top-level code that calls into `util.js`.
 
-- [ ] **Step 2: Add the banner markup** (`public/index.html`, immediately before `<main>`)
+- [x] **Step 2: Add the banner markup** (`public/index.html`, immediately before `<main>`)
 
 ```html
     <div id="auth-banner" class="auth-banner" hidden></div>
 ```
 
-- [ ] **Step 3: Style it** (`public/style.css`)
+- [x] **Step 3: Style it** (`public/style.css`)
 
 ```css
 /* Persistent, not a toast: it names an action the user must take. */
@@ -573,7 +573,7 @@ time — but keep `auth.js` free of top-level code that calls into `util.js`.
 }
 ```
 
-- [ ] **Step 4: Verify by hand**
+- [x] **Step 4: Verify by hand**
 
 ```bash
 CS_DATA=$(mktemp -d) CS_PORT=18990 CS_NO_NOTIFY=1 node server.js &
@@ -582,7 +582,7 @@ node bin/claude-scheduler.mjs url   # note the token
 Open the plain `http://127.0.0.1:18990/` with **no** fragment: the page must show the banner and
 no data. Then open the `#token=…` URL: data loads, and the address bar no longer shows the token.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add public/util.js public/index.html public/style.css
@@ -602,7 +602,7 @@ git commit -m "feat: api() carries the token; persistent banner for an invalid k
 `GET /api/runs/:id/log` already exists (`server.js:276`) and returns the whole log as
 `text/plain`, so **no new route is needed**.
 
-- [ ] **Step 1: Replace the two SSE tests**
+- [x] **Step 1: Replace the two SSE tests**
 
 ```js
 test('the log route returns a snapshot of the whole log', async (t) => {
@@ -631,16 +631,16 @@ test('the SSE tail route is gone — EventSource cannot carry the token', async 
 });
 ```
 
-- [ ] **Step 2: Run and confirm the second fails**
+- [x] **Step 2: Run and confirm the second fails**
 
 Run: `node --test tests/api.test.js` — the "tail route is gone" test fails (it still exists).
 
-- [ ] **Step 3: Delete the route from `server.js`**
+- [x] **Step 3: Delete the route from `server.js`**
 
 Remove the whole `app.get('/api/runs/:id/tail', …)` block beginning at line 282 (through its
 closing `});`, immediately before `app.post('/api/schedule/preview'…)`).
 
-- [ ] **Step 4: Rewrite the drawer** (`public/app.js`)
+- [x] **Step 4: Rewrite the drawer** (`public/app.js`)
 
 Delete `let logSource = null;` (line 10) and replace `openLog`/`closeLog`:
 
@@ -695,7 +695,7 @@ $('#log-refresh').addEventListener('click', async () => {
 });
 ```
 
-- [ ] **Step 5: Add the controls** (`public/index.html`, in the log drawer header)
+- [x] **Step 5: Add the controls** (`public/index.html`, in the log drawer header)
 
 ```html
         <span id="log-asof" class="muted small"></span>
@@ -706,11 +706,11 @@ and near the log view, a copyable follow hint:
       <code id="log-follow" class="follow-hint"></code>
 ```
 
-- [ ] **Step 6: Run the suite**
+- [x] **Step 6: Run the suite**
 
 Run: `npm test` → all pass, including the two rewritten tests.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add server.js public/app.js public/index.html tests/api.test.js
@@ -726,7 +726,7 @@ git commit -m "refactor: log drawer is a snapshot with Refresh; delete the SSE t
 
 Must run **after** Tasks 5 and 6, since it asserts the end state.
 
-- [ ] **Step 1: Write it**
+- [x] **Step 1: Write it**
 
 ```js
 import test from 'node:test';
@@ -765,16 +765,16 @@ test('every page module imports from util.js rather than reimplementing helpers'
 });
 ```
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 Run: `node --test tests/frontend-conventions.test.js` → passes.
 
-- [ ] **Step 3: Prove it bites**
+- [x] **Step 3: Prove it bites**
 
 Add `fetch('/api/jobs')` to `public/projects.js` temporarily; the test must fail naming the file.
 Revert.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add tests/frontend-conventions.test.js
@@ -813,18 +813,18 @@ Not optional, and not a test run. Drive the real UI over CDP.
   exit 0 = approved, exit 1 = refused (stdout JSON carries `errorCode`, `-2` = user denied),
   exit 137 = tampered binary.
 
-- [ ] **Step 1: Add the Swift source** — the spike file verbatim, with the 120s wait raised to
+- [x] **Step 1: Add the Swift source** — the spike file verbatim, with the 120s wait raised to
       **180s** per the measurement, and `.deviceOwnerAuthentication` unchanged.
-- [ ] **Step 2: Compile in `install`**: `swiftc -O -o ~/.claude-scheduler/bin/LaunchBox helper/LaunchBox.swift`
+- [x] **Step 2: Compile in `install`**: `swiftc -O -o ~/.claude-scheduler/bin/LaunchBox helper/LaunchBox.swift`
       — the filename **is** the dialog title, so it must be exactly `LaunchBox`.
-- [ ] **Step 3: Verify after compiling**: run `LaunchBox --check`, require exit 0. A tampered or
+- [x] **Step 3: Verify after compiling**: run `LaunchBox --check`, require exit 0. A tampered or
       unsigned binary is SIGKILLed (137), so this doubles as tamper detection. Never `codesign`
       or otherwise post-process the output.
-- [ ] **Step 4: Write `docs/spikes/localauth.sh`** asserting: `--check` exits 0; `--auth` from a
+- [x] **Step 4: Write `docs/spikes/localauth.sh`** asserting: `--check` exits 0; `--auth` from a
       launchd agent prompts and exits 0 on approval, 1 with `errorCode: -2` on denial.
       **Write it, do not run the interactive half** — it is executed once, in Task 13, as part of
       the single batched human session. Only `--check` (which never prompts) may be run here.
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ---
 
@@ -839,13 +839,13 @@ Not optional, and not a test run. Drive the real UI over CDP.
   → `{ request({ action, detail, token, grace }), available(), events }`.
   `request` resolves `{ ok: true }` or `{ ok: false, code: 'approval_denied' | 'approval_timeout' | 'approval_unavailable' | 'approval_busy' }`.
 
-- [ ] **Step 1: Write failing tests** — approve, deny (`-2`), timeout, missing helper, SIGKILL
+- [x] **Step 1: Write failing tests** — approve, deny (`-2`), timeout, missing helper, SIGKILL
       (137) → `approval_unavailable`, queue serialises (second call waits), full queue → busy,
       grace suppresses a second prompt **only** when `grace: true`, grace is per-token, grace
       expires after `graceMs`, non-`darwin` platform returns `{ ok: true, degraded: true }`.
-- [ ] **Step 2** run them, confirm failure. **Step 3** implement. **Step 4** run green.
-- [ ] **Step 5: Mutation-check** — make grace ignore the token; the per-token test must fail.
-- [ ] **Step 6: Commit**
+- [x] **Step 2** run them, confirm failure. **Step 3** implement. **Step 4** run green.
+- [x] **Step 5: Mutation-check** — make grace ignore the token; the per-token test must fail.
+- [x] **Step 6: Commit**
 
 ---
 
@@ -853,20 +853,20 @@ Not optional, and not a test run. Drive the real UI over CDP.
 
 **Files:** Modify `server.js`, `tests/api.test.js`
 
-- [ ] **Step 1: Write failing tests** with a `fakeApprover`, covering each gated action —
+- [x] **Step 1: Write failing tests** with a `fakeApprover`, covering each gated action —
       `POST/PUT /api/jobs` (and enable-only via `PUT`), `PUT /api/projects/:id` to `active`,
       `permMode: auto`, **`PUT /api/settings` changing `claudePath` or `bdPath`**,
       `POST /api/cleanup`, `POST /api/uninstall` — asserting for each: approved → succeeds;
       denied → `403 approval_denied` **and nothing written**; timeout → `408 approval_timeout`
       and nothing written.
-- [ ] **Step 2: Assert the NOT-gated set is not gated** — `POST /api/jobs/:id/run`, disabling a
+- [x] **Step 2: Assert the NOT-gated set is not gated** — `POST /api/jobs/:id/run`, disabling a
       job, `POST /api/projects` (register), `POST /api/bursts`, other settings keys.
-- [ ] **Step 3: Assert grace** applies to job edits and **never** to cleanup / uninstall /
+- [x] **Step 3: Assert grace** applies to job edits and **never** to cleanup / uninstall /
       activation / `claudePath`.
-- [ ] **Step 4: Implement** — the gate runs **before any write** in each handler.
-- [ ] **Step 5: Mutation-check the ordering** — move one gate after its write; the
+- [x] **Step 4: Implement** — the gate runs **before any write** in each handler.
+- [x] **Step 5: Mutation-check the ordering** — move one gate after its write; the
       "nothing written" assertion must fail.
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ---
 
@@ -874,10 +874,10 @@ Not optional, and not a test run. Drive the real UI over CDP.
 
 **Files:** Modify `public/app.js`, `public/projects.js`, `public/index.html`
 
-- [ ] Adopt `guardedSubmit` for the job dialog, project activation, cleanup and uninstall
-- [ ] Confirm the job form keeps its values after a denial and after a timeout
+- [x] Adopt `guardedSubmit` for the job dialog, project activation, cleanup and uninstall
+- [x] Confirm the job form keeps its values after a denial and after a timeout
 - [ ] Show a non-macOS degradation notice when the server reports it
-- [ ] Commit
+- [x] Commit
 
 ---
 
