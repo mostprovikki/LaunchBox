@@ -17,6 +17,12 @@
 // has to re-parse them or invent a second wording. See server.js's
 // `decodeReason()`/`SKIP_REASON_PATTERNS` comment for the sentence shapes.
 
+// The status -> {colour class, dot form, label} table and ordinal() used to be
+// declared in this file too. Both now come from ../state-vocab.js, the single
+// definition every /v2 page shares (claude-scheduler-bmn) — B2 had written its
+// own copy and the two had already drifted on the 'fail' label.
+import { statusMeta, ordinal } from '../state-vocab.js';
+
 export const pad2 = (n) => String(n).padStart(2, '0');
 
 export function fmtClock(iso) {
@@ -46,13 +52,6 @@ export function fmtDuration(ms) {
   const mins = Math.floor(ms / 60000);
   const secs = Math.round((ms % 60000) / 1000);
   return `${mins}m ${pad2(secs)}s`;
-}
-
-export function ordinal(n) {
-  if (!Number.isFinite(n)) return `${n}th`;
-  const v = n % 100;
-  if (v >= 11 && v <= 13) return `${n}th`;
-  return `${n}${{ 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] ?? 'th'}`;
 }
 
 // "in 26m" / "in 4h 19m" / "due now" — next-fire countdown.
@@ -163,66 +162,73 @@ export function runningByJobId(overview) {
   return map;
 }
 
-// The row-grammar decision: state colour class, dot form (REVIEW.md's
-// colour-vision-safe "form is always a bonus channel, never the only one" —
-// every branch below also returns a text `label`), and the reason line.
+// The row-grammar decision: which shared state a row is in, plus the reason
+// line. The colour class / dot form / label triple is NOT decided here — it is
+// looked up in ../state-vocab.js via `vocab()` below, so Jobs can never again
+// word a state differently from Runs. What stays local is the part that is
+// genuinely Jobs-specific: which state a *job* (not a run) is in, and the
+// second line of prose.
 //
 // `attention`/`running` are the Map()s above, already keyed by jobId so this
 // stays a plain lookup — no re-fetching per row.
+const vocab = (status, rest) => {
+  const m = statusMeta(status);
+  return { stateClass: m.cls, dotForm: m.form, label: m.label, ...rest };
+};
+
 export function computeRowState(job, { attention, running, now = Date.now() } = {}) {
   const live = running?.get(job.id);
   if (live) {
-    return {
-      stateClass: 'info', dotForm: '', label: 'running', link: 'runs',
+    return vocab('running', {
+      link: 'runs',
       l2: `since ${fmtClock(live.startedAt) ?? '?'} · ${fmtDuration(live.elapsedMs) ?? '0m 00s'}`,
-    };
+    });
   }
 
   const lr = job.lastRun;
   if (lr?.status === 'queued') {
-    return {
-      stateClass: 'muted', dotForm: 'ring', label: 'queued', link: 'runs',
+    return vocab('queued', {
+      link: 'runs',
       l2: `queued ${fmtClock(lr.startedAt) ?? ''} · waiting for a slot`.replace(/\s+·/, ' ·').trim(),
-    };
+    });
   }
 
   if (!job.enabled) {
     const l2 = lr
       ? `${timeAndDuration(lr.startedAt, lr.finishedAt, now)} ${lr.status}`.trim()
       : 'has never run';
-    return { stateClass: 'muted', dotForm: 'solid', label: 'disabled', link: lr ? 'runs' : null, l2 };
+    return vocab('disabled', { link: lr ? 'runs' : null, l2 });
   }
 
-  if (!lr) return { stateClass: '', dotForm: '', label: 'no runs yet', link: null, l2: 'has never run' };
+  if (!lr) return vocab('never', { link: null, l2: 'has never run' });
 
   const att = attention?.get(job.id);
   const attFor = (kind) => (att && att.kind === kind ? att : null);
 
   switch (lr.status) {
     case 'ok':
-      return { stateClass: 'ok', dotForm: '', label: 'ok', link: 'runs', l2: timeAndDuration(lr.startedAt, lr.finishedAt, now) };
     case 'fail':
-      return { stateClass: 'bad', dotForm: '', label: 'failed', link: 'runs', l2: timeAndDuration(lr.startedAt, lr.finishedAt, now) };
+      return vocab(lr.status, { link: 'runs', l2: timeAndDuration(lr.startedAt, lr.finishedAt, now) });
     case 'timeout': {
       const streak = attFor('timeout')?.reason?.streak;
       const streakTxt = Number.isFinite(streak) && streak > 1 ? ` · ${ordinal(streak)} in a row` : '';
-      return {
-        stateClass: 'bad', dotForm: 'ring', label: 'timeout', link: 'runs',
+      return vocab('timeout', {
+        link: 'runs',
         l2: `${timeAndDuration(lr.startedAt, lr.finishedAt, now)}${streakTxt}`,
-      };
+      });
     }
     case 'killed':
       // lib/runner.js's kill() records no reason in meta (unlike requestStop's
       // stopReason) — a manual /kill and a hard-pause killAll are indistinguishable
       // after the fact, so this never claims "hard stop was active" (the mockup's
       // wording) without data to back it; "stopped immediately" is always true.
-      return { stateClass: 'bad', dotForm: 'square', label: 'killed', link: 'runs', l2: `${fmtWhen(lr.finishedAt ?? lr.startedAt, now) ?? ''} · stopped immediately`.trim() };
+      return vocab('killed', { link: 'runs', l2: `${fmtWhen(lr.finishedAt ?? lr.startedAt, now) ?? ''} · stopped immediately`.trim() });
     case 'stopped':
-      return { stateClass: 'muted', dotForm: 'square', label: 'stopped', link: 'runs', l2: stopReasonText(attFor('stopped')?.reason) };
+      return vocab('stopped', { link: 'runs', l2: stopReasonText(attFor('stopped')?.reason) });
     case 'skipped':
-      return { stateClass: 'muted', dotForm: '', label: 'skipped', link: 'runs', l2: reasonText(attFor('skipped')?.reason) ?? lr.skipReason ?? 'skipped' };
+      return vocab('skipped', { link: 'runs', l2: reasonText(attFor('skipped')?.reason) ?? lr.skipReason ?? 'skipped' });
     default:
-      return { stateClass: '', dotForm: '', label: lr.status ?? 'unknown', link: 'runs', l2: '' };
+      return vocab(lr.status, { link: 'runs', l2: '' });
   }
 }
 

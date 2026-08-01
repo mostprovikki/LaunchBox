@@ -13,9 +13,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 import {
-  fmtDuration, ordinal, scheduleDescribe, reasonText, stopReasonText,
+  fmtDuration, scheduleDescribe, reasonText, stopReasonText,
   computeRowState, filterJobs, attentionByJobId, runningByJobId, jobDetailLine, typeBadge,
 } from '../public/v2/pages/jobs-logic.js';
+// ordinal() and the status table moved to the shared vocabulary module
+// (claude-scheduler-bmn) — jobs-logic no longer owns or re-exports them.
+import { ordinal } from '../public/v2/state-vocab.js';
 
 // ---------------- pure logic ----------------
 

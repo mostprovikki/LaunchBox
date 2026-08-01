@@ -12,8 +12,9 @@ import {
   ICON_RESUME, ICON_WINDDOWN, ICON_STOP, ICON_EMPTY,
 } from './runs-icons.js';
 import {
-  triggerLabel, fmtWhen, fmtDuration, shortId, statusMeta, statusBucket, ordinal,
+  triggerLabel, fmtWhen, fmtDuration, shortId, statusBucket,
 } from './runs-format.js';
+import { statusMeta, ordinal } from '../state-vocab.js';
 
 // ---- module state ----------------------------------------------------
 // One Runs page is ever mounted at a time (the router replaces #v2-page's

@@ -25,8 +25,9 @@ import {
   ICON_CLOSE, ICON_REFRESH, ICON_WINDDOWN, ICON_STOP, ICON_WARN,
 } from './runs-icons.js';
 import {
-  triggerLabel, fmtClock, shortId, statusMeta, stopRungText,
+  triggerLabel, fmtClock, shortId, stopRungText,
 } from './runs-format.js';
+import { statusMeta } from '../state-vocab.js';
 
 let scrim = null;
 let drawer = null;
