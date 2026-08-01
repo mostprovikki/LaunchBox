@@ -13,7 +13,7 @@
 // folder-name decode that, on this machine, produces a path that doesn't
 // exist (M5 acceptance criterion). Every cwd chip below checks cwdGuessed.
 import { $, $$, api, apiErr, esc, toast, relTime, fullTime, duration } from './util.js';
-import { renderConversation } from './transcript.js';
+import { renderConversation, expandSearchHits } from './transcript.js';
 
 let sessions = []; // last /api/sessions body's `sessions`, post-filter is done at render time
 let hiddenCount = 0;
@@ -256,6 +256,7 @@ async function openTranscript(s, mode) {
   $('#session-mode-full').classList.toggle('active', mode === 'full');
   const body = $('#session-transcript');
   body.innerHTML = '<p class="note">Loading…</p>';
+  $('#session-convo-search').value = '';
   $('#session-dialog').showModal();
   try {
     const { turns } = await api('GET', `/api/sessions/${s.id}/conversation`);
@@ -287,6 +288,13 @@ $('#sessions-all-toggle').addEventListener('click', () => { showAll = !showAll; 
 $('#session-dialog-close').addEventListener('click', closeTranscript);
 $('#session-mode-prompts').addEventListener('click', () => switchMode('prompts'));
 $('#session-mode-full').addEventListener('click', () => switchMode('full'));
+$('#session-convo-search').addEventListener('input', (ev) => {
+  const q = ev.target.value.trim();
+  // A shrinking query can't re-collapse what a longer one expanded, so an
+  // emptied box re-renders to restore the default collapsed state.
+  if (!q) { switchMode(convoMode); return; }
+  expandSearchHits($('#session-transcript'), q);
+});
 
 setInterval(() => {
   if ($('#tab-sessions').hidden) return;

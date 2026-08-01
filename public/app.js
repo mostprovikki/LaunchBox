@@ -83,7 +83,10 @@ function showTab() {
     document.querySelector(`.tabs a[data-tab="${s}"]`).classList.toggle('active', s === tab);
   }
   if (tab === 'history') {
-    if (query.has('job')) $('#history-job').value = query.get('job');
+    // Not written to the <select> here: its <option>s are only built inside
+    // refreshRuns(), so on a same-document hash change (a cross-link click)
+    // the value would silently no-op. Carried until the options exist instead.
+    if (query.has('job')) pendingHistoryJob = query.get('job');
     if (query.has('status')) setStatusChip(query.get('status'));
     if (query.toString()) history.replaceState(null, '', '#history');
     refreshRuns();
@@ -644,6 +647,8 @@ function matchesStatusFilter(r) {
   return r.status === runStatusFilter;
 }
 
+let pendingHistoryJob = null;
+
 function syncHistoryJobOptions() {
   const sel = $('#history-job');
   const prev = sel.value;
@@ -654,6 +659,11 @@ function syncHistoryJobOptions() {
   }
   sel.value = prev;
   if (sel.value !== prev) sel.value = ''; // selected job was deleted
+  if (pendingHistoryJob !== null) {
+    sel.value = pendingHistoryJob;
+    if (sel.value !== pendingHistoryJob) sel.value = ''; // unknown job — show all
+    pendingHistoryJob = null;
+  }
 }
 
 async function refreshRuns() {
