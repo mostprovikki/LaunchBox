@@ -3,6 +3,11 @@ import { $, $$, api, apiErr, esc, toast, relTime, fullTime, duration } from './u
 import { renderUsage } from './usage.js';
 import { iconFor } from './icons.js';
 import { refreshProjects } from './projects.js';
+import { refreshSessions } from './sessions.js';
+// Side-effect only: attaches the one delegated `data-tip` listener for the
+// whole app. Only the Sessions tab uses `data-tip` today, but the listener is
+// cheap and global by design (public/tooltip.js), so it loads once here.
+import './tooltip.js';
 // Only for the fragment hand-off below; ordinary calls get the token via api().
 import { getToken, guardedSubmit, FAILURE_COPY } from './auth.js';
 
@@ -59,7 +64,7 @@ function scheduleText(s) {
 }
 
 // ---------- tabs ----------
-const TABS = ['jobs', 'history', 'projects', 'settings'];
+const TABS = ['jobs', 'history', 'projects', 'sessions', 'settings'];
 function hashParts() {
   const [tab, query] = (location.hash || '#jobs').slice(1).split('?');
   // Anything that isn't a tab name falls back to Jobs. Without this, one
@@ -80,6 +85,7 @@ function showTab() {
     refreshRuns();
   }
   if (tab === 'projects') refreshProjects();
+  if (tab === 'sessions') refreshSessions();
   if (tab === 'settings') loadSettings();
 }
 window.addEventListener('hashchange', () => {
@@ -670,6 +676,9 @@ async function refreshRuns() {
             <span>${duration(r.durationMs)}</span>
             ${r.meta?.skipReason ? `<span class="skip-chip" title="Why this fire didn't run">${esc(r.meta.skipReason)}</span>` : ''}
             ${live && r.meta?.stopRung ? `<span class="stopping-chip" title="${esc(r.meta.stopReason ?? 'stopping')} — currently at ${esc(r.meta.stopRung)}">stopping…</span>` : ''}
+            <!-- extensions/claude/formatter.js captures sessionId into runs.meta on
+                 every claude -p run; cross-links to the Sessions tab (M5 §5.4). -->
+            ${r.meta?.sessionId ? `<a class="session-link" href="#sessions?open=${esc(r.meta.sessionId)}" title="Open this run's Claude session transcript">session ↗</a>` : ''}
           </div>
         </div>
         <div class="actions">
@@ -679,6 +688,7 @@ async function refreshRuns() {
         </div>`;
       el.addEventListener('click', () => openLog(r, name(r.jobId)));
       el.querySelector('[data-act="log"]').addEventListener('click', (ev) => { ev.stopPropagation(); openLog(r, name(r.jobId)); });
+      el.querySelector('.session-link')?.addEventListener('click', (ev) => ev.stopPropagation());
       el.querySelector('[data-act="kill"]')?.addEventListener('click', async (ev) => {
         ev.stopPropagation();
         try {
@@ -779,7 +789,20 @@ function openLog(run, jobName = '') {
   $('#log-follow').textContent = '';
   setLogKill(run);
   renderRunActions(run);
+  setSessionLink(run);
   loadLogSnapshot(run);
+}
+
+// Same cross-link as the run row (M5 §5.4), repeated in the drawer since it
+// stays open across a Refresh where the row underneath may have re-rendered.
+function setSessionLink(run) {
+  const a = $('#log-session-link');
+  if (run.meta?.sessionId) {
+    a.hidden = false;
+    a.href = `#sessions?open=${encodeURIComponent(run.meta.sessionId)}`;
+  } else {
+    a.hidden = true;
+  }
 }
 
 function closeLog() {
@@ -799,6 +822,7 @@ async function refreshLog() {
       $('#log-title').textContent = `${logJobName || 'run'} · ${fresh.status}`;
       setLogKill(fresh);
       renderRunActions(fresh);
+      setSessionLink(fresh);
     }
   } catch { /* the snapshot below is the point of the click — still fetch it */ }
   await loadLogSnapshot(logRun);

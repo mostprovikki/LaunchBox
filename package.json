@@ -3,8 +3,12 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=20" },
-  "bin": { "claude-scheduler": "./bin/claude-scheduler.mjs" },
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "claude-scheduler": "./bin/claude-scheduler.mjs"
+  },
   "scripts": {
     "start": "node server.js",
     "test": "node --test tests/*.test.js",
@@ -14,5 +18,8 @@
     "better-sqlite3": "^12.2.0",
     "croner": "^9.1.0",
     "express": "^5.1.0"
+  },
+  "devDependencies": {
+    "jsdom": "^30.0.1"
   }
 }
