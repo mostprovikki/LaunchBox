@@ -15,35 +15,35 @@
 
   /* --- Ink: three steps, and that is enough ------------------------- */
   --ink:   #2E3540;
-  --ink-2: #67717E;
-  --ink-3: #98A2AD;
+  --ink-2: #5F6975;
+  --ink-3: #666F7D;
 
   /* --- Hairlines: structural vs internal ---------------------------- */
   --line:   #E4E7EA;      /* card edges, section dividers */
   --line-2: #EEF1F3;      /* row separators inside a card */
 
   /* --- Semantic hues. One job each. Never reuse a slot. -------------- */
-  --info:      #2C7BE5;   /* actionable: links, primary buttons, in progress */
+  --info:      #2368C9;   /* actionable: links, primary buttons, in progress */
   --info-ink:  #1B62BF;
   --info-wash: #EDF4FE;
 
   --bad:       #B62B22;   /* failure, danger, destructive */
   --bad-wash:  #FCEDEB;
 
-  --warn:      #B0701A;   /* degree, needs attention */
+  --warn:      #9A6217;   /* degree, needs attention */
   --warn-wash: #FDF4E7;
 
-  --ok:        #2A8F45;   /* healthy, passing, safe */
+  --ok:        #25803D;   /* healthy, passing, safe */
   --ok-wash:   #EDF7F0;
 
-  --muted:      #7B8794;  /* indeterminate, unknown, not applicable */
+  --muted:      #68737F;  /* indeterminate, unknown, not applicable */
   --muted-wash: #F1F3F5;
 
   /* Degree scale — for severity/priority style ratings only. */
   --deg-4:     #8E1F19;   /* critical */
-  --deg-3:     #B8933C;   /* high */
+  --deg-3:     #8A6D1F;   /* high */
   --deg-2-bg:  #FAF3E0;   /* medium */
-  --deg-2-ink: #8A6D1F;
+  --deg-2-ink: #7E641C;
 
   /* --- Geometry ------------------------------------------------------ */
   --r-sm: 4px;
@@ -91,7 +91,7 @@ a:hover { color: var(--info-ink); text-decoration: underline; }
 }
 
 .dim  { color: var(--ink-3); }
-.dash { color: #C7CDD4; }
+.dash { color: #6B7683; }
 
 /* ============================================================== Type scale = */
 
@@ -177,7 +177,8 @@ a:hover { color: var(--info-ink); text-decoration: underline; }
 
 /* ================================================================== Inputs = */
 
-select, input[type="date"], input[type="text"].field, input[type="search"].field {
+select, input[type="date"], input[type="text"].field, input[type="search"].field,
+input[type="number"].field, input[type="time"].field {
   width: 100%;
   height: 34px;
   padding: 0 9px;

@@ -34,7 +34,7 @@
     <button class="seg">Soft</button>
     <button class="seg">Hard</button>
   </div>
-  <button class="iconbtn themebtn" onclick="lbToggleTheme()" data-tip="Switch between dark and light">
+  <button class="iconbtn themebtn" onclick="lbToggleTheme()" aria-label="Switch between dark and light" data-tip="Switch between dark and light">
     <svg class="ic ic--sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
     <svg class="ic ic--moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>
   </button>
@@ -407,9 +407,9 @@
         <div>
           <b>The job wasn't saved — 3 fields need fixing.</b> Everything you typed is still here.
           <ul class="errlist">
-            <li>Cron <span class="mono">0 1 * * * 6</span> has 6 fields — LaunchBox uses 5-field cron (minute hour day month weekday).</li>
-            <li>A Claude job needs a prompt — the prompt field is empty.</li>
-            <li>Timeout <span class="mono">600</span> is above the maximum of <span class="mono">240</span> minutes.</li>
+            <li><a href="#">Cron <span class="mono">0 1 * * * 6</span></a> has 6 fields — LaunchBox uses 5-field cron (minute hour day month weekday).</li>
+            <li><a href="#">A Claude job needs a prompt</a> — the prompt field is empty.</li>
+            <li><a href="#">Timeout <span class="mono">600</span></a> is above the maximum of <span class="mono">240</span> minutes.</li>
           </ul>
         </div>
       </div>
@@ -456,7 +456,8 @@
     </div>
     <div class="modal__foot">
       <span class="modal__consequence">Fix the 3 fields above, then save.</span>
-      <button class="btn btn--primary">Create job</button>
+      <button class="btn" style="margin-left:auto;">Cancel</button>
+      <button class="btn btn--primary" style="margin-left:0;">Create job</button>
     </div>
   </div></div>
 </body>
