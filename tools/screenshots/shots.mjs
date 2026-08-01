@@ -471,6 +471,42 @@ export const shots = [
     teardown: closeOverlays,
   },
 
+  // --------------------------------------------------------- sessions -----
+  // Seeded via CS_SESSIONS_ROOT (capture.mjs -> seed.mjs's
+  // buildFixtureSessions), never ~/.claude/projects. Visual language here is
+  // deliberately not the rest of the app — docs/specs/2026-07-27-sessions-
+  // tab-visual-design.md — so these two shots are the only place that new
+  // language is captured.
+  {
+    file: 'sessions-populated', phase: 'main',
+    desc: 'Sessions tab: chip-grid cards for the planted fixture transcripts',
+    async setup(page) {
+      await tab(page, 'sessions');
+      await until(page, () => document.querySelectorAll('#sessions-list .s-card').length >= 4, 'session cards');
+    },
+  },
+  {
+    file: 'sessions-conversation', phase: 'main',
+    desc: 'An open conversation: per-tool turns (Edit diff, TodoWrite before/after, Grep counts) expanded',
+    async setup(page) {
+      await tab(page, 'sessions');
+      await until(page, () => document.querySelectorAll('#sessions-list .s-card').length >= 4, 'session cards');
+      await page.eval(() => {
+        const card = [...document.querySelectorAll('#sessions-list .s-card')]
+          .find((c) => c.dataset.sessionId.includes('sess-basket-totals-refactor'));
+        if (!card) throw new Error('no "sess-basket-totals-refactor" session card');
+        card.querySelector('[data-act="convo"]').click();
+      });
+      await until(page, () => document.querySelector('#session-dialog')?.open, 'the transcript dialog');
+      await sleep(500);
+      await page.eval(() => {
+        document.querySelectorAll('#session-transcript .t-tool .t-head').forEach((b) => b.click());
+      });
+      await sleep(400);
+    },
+    teardown: closeOverlays,
+  },
+
   // --------------------------------------------------------- settings -----
   {
     file: 'settings-seeded', phase: 'main',
