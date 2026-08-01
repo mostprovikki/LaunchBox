@@ -22,7 +22,7 @@
     <a href="settings.html">Settings</a>
   </nav>
   <div class="appbar__spacer"></div>
-  <div class="uchips" title="Claude usage — checked 09:40:12">
+  <div class="uchips" data-tip="Claude usage — checked 09:40:12">
     <span class="uchip"><span class="uchip__k">5h</span><span class="uchip__v">37%</span></span>
     <span class="uchip"><span class="uchip__k">wk</span><span class="uchip__v">64%</span></span>
     <span class="uchip uchip--crit"><span class="uchip__k">fable</span><span class="uchip__v">90%</span></span>
@@ -34,7 +34,7 @@
     <button class="seg">Soft</button>
     <button class="seg">Hard</button>
   </div>
-  <button class="iconbtn themebtn" onclick="lbToggleTheme()" title="Switch between dark and light">
+  <button class="iconbtn themebtn" onclick="lbToggleTheme()" data-tip="Switch between dark and light">
     <svg class="ic ic--sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
     <svg class="ic ic--moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>
   </button>
@@ -60,6 +60,10 @@
       <button class="seg">Interactive <span class="seg__count">124</span></button>
     </div>
     <select style="max-width: 170px;"><option>Newest first</option><option>Largest first</option><option>Most active time</option></select>
+    <div class="segs" data-tip="How much each card shows — same sessions either way">
+      <a class="seg" aria-selected="true" href="sessions.html" style="text-decoration:none;">Detailed</a>
+      <a class="seg" href="sessions-compact.html" style="text-decoration:none;">Compact</a>
+    </div>
   </div>
 
   <div class="stack" style="gap: 14px;">
@@ -68,7 +72,7 @@
     <section class="card">
       <div class="card__head">
         <h2 class="mono" style="font-weight: 500; font-size: 13.5px;">Fix rounding on multi-currency credit notes</h2>
-        <span class="tag" title="Started by LaunchBox">burst · webapp-billing</span>
+        <span class="tag" data-tip="Started by LaunchBox">burst · webapp-billing</span> <a class="t-meta" href="runs.html">run history entry</a>
         <span class="t-meta" style="margin-left:auto;">Fri 23:12 · 10h ago</span>
       </div>
       <div class="card__body" style="padding: 14px 18px;">
@@ -86,7 +90,6 @@
           <a class="btn" href="session-transcript.html">Open transcript</a>
           <button class="btn">Resume in Terminal</button>
           <button class="btn btn--ghost">Rename</button>
-          <a class="btn btn--ghost" href="runs.html">Run history entry</a>
           <button class="btn btn--ghost btn--danger" style="margin-left:auto;">Delete</button>
         </div>
       </div>
@@ -107,6 +110,7 @@
           <div class="fact"><div class="fact__k">Tokens</div><div class="fact__v mono">3.4M in · 96k out</div><div class="fact__d">deduplicated</div></div>
           <div class="fact"><div class="fact__k">Branch</div><div class="fact__v mono">main</div><div class="fact__d">dirty at last turn</div></div>
           <div class="fact fact--off"><div class="fact__k">Cwd</div><div class="fact__v mono">~/mydevelopment/claude-scheduler</div><div class="fact__d">guessed from the folder name — treat as unconfirmed</div></div>
+          <div class="fact"><div class="fact__k">Outcome</div><div class="fact__v dim">— interactive</div><div class="fact__d">not from a job</div></div>
         </div>
         <div class="rowline" style="margin-top: 12px;">
           <a class="btn" href="session-transcript.html">Open transcript</a>
@@ -132,6 +136,7 @@
           <div class="fact"><div class="fact__k">Tokens</div><div class="fact__v mono">204k in · 12k out</div><div class="fact__d">deduplicated</div></div>
           <div class="fact"><div class="fact__k">Branch</div><div class="fact__v mono">main</div><div class="fact__d">clean</div></div>
           <div class="fact"><div class="fact__k">Cwd</div><div class="fact__v mono">~/mydevelopment/webapp-billing</div><div class="fact__d">from transcript</div></div>
+          <div class="fact"><div class="fact__k">Outcome</div><div class="fact__v dim">— interactive</div><div class="fact__d">not from a job</div></div>
         </div>
         <div class="rowline" style="margin-top: 12px;">
           <a class="btn" href="session-transcript.html">Open transcript</a>
@@ -161,6 +166,7 @@
           <div class="fact"><div class="fact__k">Tokens</div><div class="fact__v mono">5.1M in · 142k out</div><div class="fact__d">deduplicated</div></div>
           <div class="fact"><div class="fact__k">Branch</div><div class="fact__v mono">feat/usage-meter</div><div class="fact__d">merged since</div></div>
           <div class="fact"><div class="fact__k">Cwd</div><div class="fact__v mono">~/mydevelopment/claude-scheduler</div><div class="fact__d">from transcript</div></div>
+          <div class="fact"><div class="fact__k">Outcome</div><div class="fact__v dim">— interactive</div><div class="fact__d">not from a job</div></div>
         </div>
         <div class="rowline" style="margin-top: 12px;">
           <a class="btn" href="session-transcript.html">Open transcript</a>
@@ -177,7 +183,7 @@
     <button class="btn">Show 20 more · 138 remaining</button>
   </div>
 
-  <p class="pagefoot">Static redesign mockup · sample data as of Sat 1 Aug 09:41 · <a href="index.html">all pages</a> · states: <a href="sessions-empty.html">empty</a> · <a href="session-transcript.html">transcript viewer</a></p>
+  <p class="pagefoot">Static redesign mockup · sample data as of Sat 1 Aug 09:41 · <a href="index.html">all pages</a> · states: <a href="sessions-empty.html">empty</a> · <a href="session-transcript.html">transcript viewer</a> · <a href="sessions-compact.html">compact view</a></p>
 </main>
 
 </body>
