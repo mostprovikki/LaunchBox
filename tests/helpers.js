@@ -82,6 +82,20 @@ export function fakeSpawn() {
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Polls `cond` until it's truthy or `timeoutMs` elapses (checked every `intervalMs`).
+// Use this instead of a fixed sleep to assert a positive fire happened — a loaded
+// machine gets more time to catch up rather than a flaky miss at a fixed deadline.
+// A fixed `sleep` is still correct for asserting something did NOT fire: there's no
+// condition to poll for an absence, so that case keeps a bounded wait instead.
+export async function waitFor(cond, timeoutMs = 5000, intervalMs = 20) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await cond()) return true;
+    await sleep(intervalMs);
+  }
+  return Boolean(await cond());
+}
+
 // Fake `child_process.execFile` standing in for the `bd` binary. No test may
 // shell out to the real thing — same rule as "no test spawns the real claude" —
 // so every measured bd behaviour is reproduced here instead.

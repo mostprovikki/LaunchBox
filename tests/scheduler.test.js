@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
-import { tmpData, jobPayload, sleep } from './helpers.js';
+import { tmpData, jobPayload, sleep, waitFor } from './helpers.js';
 import { openDb, createJob, getJob, updateJob, setSetting } from '../lib/db.js';
 import { createScheduler } from '../lib/scheduler.js';
 import { afterResetFireAt } from '../lib/validate.js';
@@ -39,7 +39,7 @@ test('cron job fires repeatedly; nextFire reported', async () => {
   const job = createJob(db, jobPayload({ schedule: { type: 'cron', expr: '* * * * * *' } }));
   scheduler.start();
   assert.ok(scheduler.nextFire(job.id));
-  await sleep(2100);
+  await waitFor(() => starts.length >= 1);
   scheduler.stop();
   assert.ok(starts.length >= 1);
   assert.equal(starts[0].trigger, 'schedule');
@@ -50,7 +50,7 @@ test('once job fires once and auto-disables', async () => {
   const { db, starts, scheduler } = setup();
   const job = createJob(db, jobPayload({ schedule: { type: 'once', at: new Date(Date.now() + 200).toISOString() } }));
   scheduler.start();
-  await sleep(700);
+  await waitFor(() => starts.length >= 1);
   assert.equal(starts.length, 1);
   assert.equal(starts[0].trigger, 'once');
   assert.equal(getJob(db, job.id).enabled, false);
@@ -67,10 +67,10 @@ test('multi-schedule: both once-entries fire, job disables after the last', asyn
     ],
   }));
   scheduler.start();
-  await sleep(250);
+  await waitFor(() => starts.length >= 1);
   assert.equal(starts.length, 1);
   assert.equal(getJob(db, job.id).enabled, true); // second entry still pending
-  await sleep(500);
+  await waitFor(() => starts.length >= 2);
   assert.equal(starts.length, 2);
   assert.equal(getJob(db, job.id).enabled, false); // all entries done
   assert.equal(scheduler.nextFire(job.id), null);
@@ -86,7 +86,7 @@ test('multi-schedule: cron + once — once fires, cron keeps job enabled', async
     ],
   }));
   scheduler.start();
-  await sleep(400);
+  await waitFor(() => starts.length >= 1);
   assert.equal(starts.length, 1);
   assert.equal(starts[0].trigger, 'once');
   assert.equal(getJob(db, job.id).enabled, true);
@@ -103,7 +103,7 @@ test('afterReset fires at resetsAt + offset + jitter, with trigger "schedule"', 
   // nextFire is the computed time, not the raw reset — the offset/jitter are part
   // of the schedule, so the UI must see what will actually happen.
   assert.equal(scheduler.nextFire(job.id), afterResetFireAt(RESET_ENTRY, usage.windows.five_hour.resetsAt, job.id));
-  await sleep(400);
+  await waitFor(() => starts.length >= 1);
   scheduler.stop();
   assert.equal(starts.length, 1);
   assert.equal(starts[0].trigger, 'schedule'); // not 'once' — must not auto-disable
@@ -141,12 +141,12 @@ test('afterReset re-arms on a usage event and never fires the same window twice'
   // A new reading carrying a future reset arms it.
   usage.set('five_hour', resetIn(200));
   assert.ok(scheduler.nextFire(job.id));
-  await sleep(400);
+  await waitFor(() => starts.length >= 1);
   assert.equal(starts.length, 1);
 
   // Re-arming against the *same* resetsAt must not fire again: the reset time
   // doesn't move until the window actually rolls over, and every usage poll
-  // re-arms.
+  // re-arms. No condition to poll for an absence, so this stays a bounded wait.
   usage.events.emit('usage', { windows: usage.windows });
   usage.events.emit('usage', { windows: usage.windows });
   await sleep(150);
@@ -154,7 +154,7 @@ test('afterReset re-arms on a usage event and never fires the same window twice'
 
   // A genuinely new window instance does fire again.
   usage.set('five_hour', resetIn(150));
-  await sleep(350);
+  await waitFor(() => starts.length >= 2);
   scheduler.stop();
   assert.equal(starts.length, 2);
 });
@@ -167,7 +167,7 @@ test('afterReset alongside a once-entry: the spent once must not disable the job
     schedule: [{ type: 'once', at: new Date(Date.now() + 150).toISOString() }, RESET_ENTRY],
   }));
   scheduler.start();
-  await sleep(400);
+  await waitFor(() => starts.length >= 1);
   scheduler.stop();
   assert.equal(starts.length, 1);
   assert.equal(starts[0].trigger, 'once');
@@ -207,7 +207,7 @@ test('paused suppresses fires; disabled jobs not scheduled; reload picks up chan
 
   updateJob(db, job.id, { enabled: true });
   scheduler.reload(job.id);
-  await sleep(1500);
+  await waitFor(() => starts.length >= 1);
   scheduler.stop();
   assert.ok(starts.length >= 1);
 });
