@@ -863,6 +863,10 @@ async function loadSettings() {
   } catch { /* daemon briefly down */ }
 }
 
+// One timer for the transient 'saved ✓': a second save inside the 2s window must
+// cancel the first save's wipe, or its own confirmation vanishes almost instantly.
+let settingsMsgTimer;
+
 async function saveSettings(ev) {
   ev.preventDefault();
   const extensions = {};
@@ -886,12 +890,15 @@ async function saveSettings(ev) {
       worktreeRoot: $('#s-worktreeRoot').value.trim(),
       burstMinGapMin: Number($('#s-burstMinGapMin').value),
     });
+    clearTimeout(settingsMsgTimer);
     $('#settings-msg').textContent = 'saved ✓';
-    setTimeout(() => { $('#settings-msg').textContent = ''; }, 2000);
+    settingsMsgTimer = setTimeout(() => { $('#settings-msg').textContent = ''; }, 2000);
     refreshUsage(); // a display-mode change should be visible without a reload
     renderBudgetState();
 
   } catch (e) {
+    // An error must outlive any pending wipe from an earlier success.
+    clearTimeout(settingsMsgTimer);
     $('#settings-msg').textContent = (e.data?.errors || [e.data?.error || 'save failed']).join(' · ');
   }
 }
