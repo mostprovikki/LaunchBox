@@ -6,14 +6,15 @@ import { request as httpRequest } from 'node:http';
 import { tmpData, jobPayload, fakeSpawn, fakeBd, bdReadyRow, sleep, extensions } from './helpers.js';
 import { ensureDirs } from '../lib/paths.js';
 import { ensureToken } from '../lib/token.js';
-import { readFileSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import {
   openDb, listRuns, getSetting, setSetting, recordRunUsage,
   createProject, getProject, acquireLease, listJobsByProject, createJob, getJob, findJobByBead,
-  listJobs, listProjects, insertRun, updateRun,
+  listJobs, listProjects, insertRun, updateRun, upsertSession,
 } from '../lib/db.js';
 import { createBeads } from '../lib/beads.js';
 import { createProjects } from '../lib/projects.js';
+import { createSessionIndex } from '../lib/sessions.js';
 import { createRunner } from '../lib/runner.js';
 import { createScheduler } from '../lib/scheduler.js';
 import { createAwake } from '../lib/awake.js';
@@ -989,6 +990,235 @@ function repoDir(config) {
   }
   return dir;
 }
+
+// ---------------- M5: /api/sessions/* (bead claude-scheduler-cfn.1)
+
+// `boot()` deliberately wires no sessions index — same 501 contract as
+// projects/beads above — so this section boots its own app with a real
+// createSessionIndex over a throwaway root, exactly like tests/sessions.test.js's
+// own bootIndex(). Nothing here touches the real ~/.claude/projects.
+function writeSession(root, id, rows, { project = '-Users-me-proj' } = {}) {
+  mkdirSync(join(root, project), { recursive: true });
+  const file = join(root, project, `${id}.jsonl`);
+  writeFileSync(file, rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
+  return file;
+}
+
+async function bootWithSessions({ activeWindowS = 60 } = {}) {
+  const dir = tmpData();
+  ensureDirs();
+  const db = openDb(join(dir, 'test.db'));
+  const spawnFn = fakeSpawn();
+  const runner = createRunner({ db, extensions, spawnFn, notifyFn: () => {} });
+  const scheduler = createScheduler({ db, runner });
+  const root = mkdtempSync(join(tmpdir(), 'cs-sess-root-'));
+  const sessions = createSessionIndex({ db, root, activeWindowS });
+  const osaCalls = [];
+  currentToken = ensureToken();
+  const app = createApp({
+    db, runner, scheduler, extensions, awake: null, sessions, token: currentToken,
+    execFileFn: (cmd, args, cb) => { osaCalls.push({ cmd, args }); cb(null); },
+  });
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((r) => server.once('listening', r));
+  return {
+    db, sessions, root, osaCalls, server,
+    write: (id, rows, opts) => writeSession(root, id, rows, opts),
+    base: () => `http://127.0.0.1:${server.address().port}`,
+    close() { sessions.stop(); server.close(); },
+  };
+}
+
+const userRow = (text, t = '2026-07-26T10:00:00.000Z', over = {}) =>
+  ({ type: 'user', timestamp: t, cwd: '/Users/me/proj', entrypoint: 'cli', message: { content: text }, ...over });
+
+test('sessions: every route answers 501 with no index wired', async (t) => {
+  const { server, base } = await boot();
+  t.after(() => server.close());
+
+  for (const [method, path, body] of [
+    ['GET', '/api/sessions', null],
+    ['GET', '/api/sessions/abc', null],
+    ['GET', '/api/sessions/abc/conversation', null],
+    ['POST', '/api/sessions/abc/rename', { name: 'x' }],
+    ['DELETE', '/api/sessions/abc', null],
+    ['POST', '/api/sessions/abc/resume', null],
+    ['GET', '/api/sessions/abc/image/0/0', null],
+  ]) {
+    const r = await req(base(), method, path, body);
+    assert.equal(r.status, 501, `${method} ${path}`);
+  }
+});
+
+test('sessions: list (+?all=1), get by id, and 404 on an unknown id', async (t) => {
+  const s = await bootWithSessions();
+  t.after(() => s.close());
+  s.write('ours', [userRow('hello')]);
+  // `claude -p` writes this entrypoint, excluded from the default interactive
+  // view unless a run references it (M5 §5.4's union rule) — not exercised via
+  // a run here, so it should be hidden by default and revealed by ?all=1.
+  s.write('sdk', [{ type: 'assistant', timestamp: '2026-07-26T10:00:00.000Z', cwd: '/Users/me/proj', entrypoint: 'sdk-cli', message: { id: 'm', model: 'claude-opus-5', usage: { output_tokens: 5 } } }]);
+  await s.sessions.scan();
+
+  let r = await req(s.base(), 'GET', '/api/sessions');
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.sessions.map((x) => x.id), ['ours']);
+  assert.equal(r.body.hidden, 1);
+
+  r = await req(s.base(), 'GET', '/api/sessions?all=1');
+  assert.deepEqual(r.body.sessions.map((x) => x.id).sort(), ['ours', 'sdk']);
+
+  r = await req(s.base(), 'GET', '/api/sessions/ours');
+  assert.equal(r.status, 200);
+  assert.equal(r.body.session.id, 'ours');
+
+  r = await req(s.base(), 'GET', '/api/sessions/nope');
+  assert.equal(r.status, 404);
+});
+
+test('sessions: conversation returns turns, 404s on an unknown id', async (t) => {
+  const s = await bootWithSessions();
+  t.after(() => s.close());
+  s.write('ours', [userRow('what should I build')]);
+  await s.sessions.scan();
+
+  let r = await req(s.base(), 'GET', '/api/sessions/ours/conversation');
+  assert.equal(r.status, 200);
+  assert.equal(r.body.session.id, 'ours');
+  assert.ok(Array.isArray(r.body.turns));
+
+  r = await req(s.base(), 'GET', '/api/sessions/nope/conversation');
+  assert.equal(r.status, 404);
+});
+
+test('sessions: rename round-trips, refuses a live session, and 404s on an unknown id', async (t) => {
+  const s = await bootWithSessions();
+  t.after(() => s.close());
+  const file = s.write('ours', [userRow('hi')]);
+  await s.sessions.scan();
+
+  // Backdate the file so it reads idle — a fixture just written is live by
+  // definition, and rename is refused while the session is running.
+  const { utimesSync } = await import('node:fs');
+  const idle = new Date(Date.now() - 3600_000);
+  utimesSync(file, idle, idle);
+  await s.sessions.scan();
+
+  let r = await req(s.base(), 'POST', '/api/sessions/ours/rename', { name: 'my title' });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.session.customTitle, 'my title');
+
+  r = await req(s.base(), 'POST', '/api/sessions/nope/rename', { name: 'x' });
+  assert.equal(r.status, 404);
+
+  r = await req(s.base(), 'POST', '/api/sessions/ours/rename', { name: '' });
+  assert.equal(r.status, 400);
+});
+
+test('sessions: delete removes the transcript and 404s on an unknown id', async (t) => {
+  const s = await bootWithSessions();
+  t.after(() => s.close());
+  const file = s.write('gone', [userRow('bye')]);
+  await s.sessions.scan();
+  const { utimesSync, existsSync } = await import('node:fs');
+  const idle = new Date(Date.now() - 3600_000);
+  utimesSync(file, idle, idle);
+  await s.sessions.scan();
+
+  let r = await req(s.base(), 'DELETE', '/api/sessions/gone');
+  assert.equal(r.status, 200);
+  assert.equal(existsSync(file), false);
+  assert.equal((await req(s.base(), 'GET', '/api/sessions/gone')).status, 404);
+
+  r = await req(s.base(), 'DELETE', '/api/sessions/nope');
+  assert.equal(r.status, 404);
+});
+
+test('sessions: resume shells out via the claude extension\'s own action, and refuses a guessed cwd', async (t) => {
+  const s = await bootWithSessions();
+  t.after(() => s.close());
+  s.write('ours', [userRow('hi')], { project: '-Users-me-proj' });
+  await s.sessions.scan();
+
+  let r = await req(s.base(), 'POST', '/api/sessions/ours/resume');
+  assert.equal(r.status, 200);
+  assert.equal(s.osaCalls.length, 1);
+  assert.equal(s.osaCalls[0].cmd, 'osascript');
+  assert.match(s.osaCalls[0].args[1], /--resume \\"ours\\"/);
+  assert.match(s.osaCalls[0].args[1], /\/Users\/me\/proj/);
+
+  // A guessed cwd (no row in the file carries one) must not be offered as a
+  // real resume target — resuming there would `cd` nowhere.
+  s.write('guessed', [{ type: 'mode', mode: 'default' }], { project: '-Users-x-y' });
+  await s.sessions.scan();
+  r = await req(s.base(), 'POST', '/api/sessions/guessed/resume');
+  assert.equal(r.status, 400);
+  assert.equal(s.osaCalls.length, 1, 'osascript was not invoked for a guessed cwd');
+
+  r = await req(s.base(), 'POST', '/api/sessions/nope/resume');
+  assert.equal(r.status, 404);
+});
+
+test('sessions: image decodes promptList[p].images[i], and refuses an out-of-range index', async (t) => {
+  const s = await bootWithSessions();
+  t.after(() => s.close());
+  const png1x1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+  s.write('ours', [{
+    type: 'user', timestamp: '2026-07-26T10:00:00.000Z', cwd: '/Users/me/proj',
+    message: { content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: png1x1 } }] },
+  }]);
+  await s.sessions.scan();
+
+  let r = await fetch(s.base() + '/api/sessions/ours/image/0/0', {
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${currentToken}` },
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get('content-type'), 'image/png');
+  const buf = Buffer.from(await r.arrayBuffer());
+  assert.equal(buf.toString('base64'), png1x1);
+
+  assert.equal((await req(s.base(), 'GET', '/api/sessions/ours/image/0/9')).status, 404, 'out-of-range image index');
+  assert.equal((await req(s.base(), 'GET', '/api/sessions/ours/image/9/0')).status, 404, 'out-of-range prompt index');
+  assert.equal((await req(s.base(), 'GET', '/api/sessions/ours/image/-1/0')).status, 400, 'not a valid index at all');
+  assert.equal((await req(s.base(), 'GET', '/api/sessions/nope/image/0/0')).status, 404);
+});
+
+test('sessions: traversal — a crafted row pointing outside the index root is refused, not served', async (t) => {
+  const s = await bootWithSessions();
+  t.after(() => s.close());
+
+  // The id alone cannot carry a path (isValidSessionId's charset excludes '/'),
+  // so this simulates the guard's actual threat model per the plan
+  // (docs/plans/2026-07-25-m5-sessions-dashboard.md:151): a cache row whose
+  // filePath was made to point somewhere outside root, whatever the reason.
+  // The secret file carries a real inline image, so that if the guard were
+  // ever bypassed the image route would answer 200 with recognizable bytes
+  // rather than happening to 404 for an unrelated reason (e.g. "no images in
+  // this file") — the assertion below must fail for the right reason.
+  const secretPng = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+  const outside = mkdtempSync(join(tmpdir(), 'cs-outside-'));
+  const secret = join(outside, 'secret.jsonl');
+  writeFileSync(secret, JSON.stringify({
+    type: 'user', timestamp: '2026-07-26T10:00:00.000Z', cwd: '/Users/me/proj',
+    message: { content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: secretPng } }] },
+  }) + '\n');
+  upsertSession(s.db, {
+    id: 'escaped', filePath: secret, mtimeMs: Date.now(), sizeBytes: 10,
+    cwd: '/tmp', cwdGuessed: false, project: 'x', gitBranch: '', version: '',
+    entrypoint: 'cli', customTitle: '', aiTitle: '', firstPrompt: '',
+    firstTs: '', lastTs: '', spanMs: 0, activeMs: 0, prompts: 0, models: {},
+    tokIn: 0, tokOut: 0, tokCacheCreate: 0, tokCacheRead: 0, webSearches: 0, webFetches: 0,
+  });
+
+  assert.equal((await req(s.base(), 'GET', '/api/sessions/escaped/conversation')).status, 404);
+  const imgRes = await req(s.base(), 'GET', '/api/sessions/escaped/image/0/0');
+  assert.equal(imgRes.status, 404);
+  assert.notEqual(imgRes.raw, secretPng, 'the secret bytes must never come back, whatever the status code');
+  // The row itself is still listable (it is a legitimate cache entry) — only
+  // reading the underlying file is refused. Confirms the 404 above is the
+  // traversal guard, not merely "unknown id".
+  assert.equal((await req(s.base(), 'GET', '/api/sessions/escaped')).status, 200);
+});
 
 test('projects: every route answers 501 with no engine wired — except the list', async (t) => {
   const { server, base } = await boot();
