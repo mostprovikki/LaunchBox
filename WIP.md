@@ -726,3 +726,74 @@ things. Only console 404 is the already-filed favicon. Instance stopped; 43400 a
 The project chips themselves are **UNVERIFIED in a browser** — Projects, Overview and Sessions are
 still `renderPlaceholder` stubs, so there is nothing yet that renders them. That verification
 belongs to btv.8/.9/.10, which is the point of extracting the vocabulary before they start.
+
+## 2026-08-02 · btv.8 (C1 Overview) + btv.7 (B3 Settings) — and two refusals that didn't propagate
+
+Both built by Sonnet sub-agents in parallel on disjoint files, both re-verified at the merge bar.
+`btv.7` shipped as `3f633f3`. Between them the merge bar found six defects that the agents' own
+green suites did not, which is now six waves in a row.
+
+**B3's three.** (i) The degraded-sweep test covered the *Uninstall* button only; removing
+`degradedReason()` from the **Cleanup** button's compound disable failed no test, leaving "Wipe
+everything" clickable against an unreachable daemon. Replaced with a table-driven test over all
+three gated controls — cover the guarantee, not one instance of it. (ii) The fail-OPEN approval
+notice had no test at all, because the build host is macOS with the helper merely *uninstalled*,
+which is the fail-CLOSED path and never renders it; `lib/approval.js` draws a sharp line the UI
+must not blur — non-darwin returns `degraded:true` and gated actions **run without an approval**,
+while a missing helper returns `degraded:false` and they are **refused**. Now tested both ways.
+(iii) A route opened while *already* degraded rendered an **empty** `#v2-page` — a blank rectangle
+under the global banner. A2's finding, one page over. Now an explicit unreachable state that names
+the request it tried and offers Try again, and deliberately renders no editable form, because a
+form of blanks invites saving those blanks over real settings; CDP-verified that Try again
+recovers to the full 16-row form. `runs.js` has the same first-load shape and is already merged —
+filed rather than widened into the bead.
+
+**C1's three, and they share one root cause: a refusal recorded in one page's comments does not
+propagate.**
+
+*"failed" was never actually fixed.* `bmn` resolved that status to "fail" against the mockups —
+but the **"Today so far" strip on `runs.js` had carried its own `[['fail','failed'], …]` tuple list
+since B2**, and C1 copied it into `overview-logic.js`. It survived the consolidation because
+`bmn`'s single-source check looks for *keyed tables*, and a tuple array is not one. So the exact
+drift the whole exercise was about was still shipping, in the page that fixed it. Both sites now
+derive from `statusMeta()`; `TODAY_ORDER` lives in the vocabulary carrying **order only**, with a
+test asserting it stays a flat list of keys.
+
+*A sentence three pages had refused, still shipping in three others.* B1 dropped "hard stop was
+active" and wrote down why; C1 refused it again for Overview. Meanwhile `runs.js` told every killed
+run "hard stop was active — SIGKILL, no cleanup ran", and `runs-log.js` and `overview-logic.js`
+carried the SIGKILL half. Reading `lib/runner.js`'s `kill()` shows all three clauses fail: a
+**queued** run is dequeued and marked killed with **no signal at all**; a running one gets
+**SIGTERM** and only reaches SIGKILL after `KILL_GRACE_MS`, so cleanup may well have run; and no
+reason is recorded, so a manual kill and a hard-pause `killAll` are indistinguishable. The
+`overview-logic.js` site is the sharpest illustration — its comment says "never claim a specific
+cause here" and the next line claimed one. All three now say "stopped immediately", which is the
+most that is always true.
+
+*Two of C1's own tests were pinning the falsehoods*, including one literally named "killed never
+claims a specific cause the run record cannot back" whose body asserted
+`/SIGKILL, no cleanup ran/`. A test can enforce a lie as easily as a truth.
+
+**The generalisation, now encoded rather than written down.** A new gate lists claims the data
+cannot support (`hard stop was active`, `no cleanup ran`, the `'failed'` spelling) and fails if any
+`/v2` page contains one. Comments are stripped first so the gate's own explanation doesn't trip it.
+Three prose refusals had been recorded in three separate files' comments and none of them stopped a
+fourth page from making the claim; a regex does.
+
+C1 also honestly reported that ~12 of its 22 tests were reviewed but not individually mutated. Two
+were sampled at the merge bar (`fmtDayTime` losing the weekday, `burstSummary` inventing a
+confidence band) and both went red, so the batch is load-bearing rather than decorative.
+
+**Browser legs.** Settings on 43414 and Overview on 43412, both isolated with throwaway `CS_DATA`,
+both themes. Settings: 16 setrows, Save honestly disabled, danger fields empty and disabled with
+reasons, and clicking Wipe hit the real approval helper and took its honest `approval_unavailable`
+refusal — nothing bypassed, weakened or installed. Overview: 5 cards, chips from the shared
+vocabulary, and the today strip now reads "3 fail" rather than "3 failed" — the fix observed in a
+browser, not just in a test. Zero console errors either page beyond the known favicon 404. Both
+instances stopped; 43400 answers 200.
+
+**Still open from C1, honestly.** Wind-down/Stop-now against a *genuinely runner-tracked* live run
+is UNVERIFIED: the seeded running rows were DB-only, bypassing `lib/runner.js`'s in-memory
+tracking, so the POST fired without error and without effect. The agent declined to route around
+the Touch ID gate to create a real run, which is the correct call. Port 43411 remains held by pid
+39469 from two sessions ago.

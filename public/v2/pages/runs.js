@@ -14,7 +14,7 @@ import {
 import {
   triggerLabel, fmtWhen, fmtDuration, shortId, statusBucket,
 } from './runs-format.js';
-import { statusMeta, ordinal, STATE_VOCAB } from '../state-vocab.js';
+import { statusMeta, ordinal, STATE_VOCAB, TODAY_ORDER } from '../state-vocab.js';
 
 // ---- module state ----------------------------------------------------
 // One Runs page is ever mounted at a time (the router replaces #v2-page's
@@ -89,7 +89,17 @@ function lineForRun(run, job) {
       return parts;
     }
     case 'killed': {
-      const parts = [trig, ' · hard stop was active — SIGKILL, no cleanup ran'];
+      // Was "hard stop was active — SIGKILL, no cleanup ran". Every clause of
+      // that was unsupportable, and B1 had already refused the same sentence on
+      // the Jobs tab (jobs-logic.js's killed branch) — this copy survived.
+      // lib/runner.js's kill(): a QUEUED run is simply dequeued and marked
+      // killed with NO signal sent at all; a RUNNING one gets SIGTERM and only
+      // reaches SIGKILL if it outlives KILL_GRACE_MS, so cleanup may well have
+      // run. And kill() records no reason in meta (unlike requestStop's
+      // stopReason), so a manual kill and a hard-pause killAll are
+      // indistinguishable afterwards. "stopped immediately" is the most that
+      // is always true, and it is what Jobs already says.
+      const parts = [trig, ' · stopped immediately'];
       if (sess) parts.push(' · session ', el('span', { class: 'mono' }, shortId(sess)));
       return parts;
     }
@@ -354,8 +364,13 @@ async function loadAndRender() {
   const byStatus = {};
   for (const r of todaysRuns) byStatus[r.status] = (byStatus[r.status] ?? 0) + 1;
   const subParts = [`Today: `, el('span', { class: 'mono' }, String(todaysRuns.length)), ' runs'];
-  for (const [st, label] of [['ok', 'ok'], ['timeout', 'timeout'], ['skipped', 'skipped'], ['killed', 'killed'], ['stopped', 'stopped'], ['fail', 'failed']]) {
-    if (byStatus[st]) subParts.push(' · ', el('span', { class: 'mono' }, String(byStatus[st])), ` ${label}`);
+  // Order is this strip's own editorial choice; the WORDS are not. Labels come
+  // from the shared vocabulary, because this list used to carry its own — with
+  // `fail` spelled "failed", the very drift claude-scheduler-bmn resolved to
+  // "fail" against the mockups. It survived that consolidation by being a
+  // tuple array rather than a keyed table, and C1 then copied it. Derive it.
+  for (const st of TODAY_ORDER) {
+    if (byStatus[st]) subParts.push(' · ', el('span', { class: 'mono' }, String(byStatus[st])), ` ${statusMeta(st).label}`);
   }
   const head = $('#v2-page')?.querySelector('.pagehead__sub');
   if (head) { clear(head); head.append(...subParts); }

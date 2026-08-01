@@ -62,6 +62,14 @@ export const STATE_VOCAB = Object.freeze({
   stopping: { cls: 'muted', form: 'square', label: 'stopping…' },
 });
 
+// The order the "Today so far" strip lists statuses in, on Runs and on
+// Overview. Only the ORDER lives here — it is editorial and shared, so it
+// should be shared once — while the words come from statusMeta(). Both pages
+// previously carried `[['fail', 'failed'], …]` tuple lists with their own
+// spellings; that is how "failed" survived the bmn consolidation, which only
+// looked for keyed tables. Do not re-add labels to this array.
+export const TODAY_ORDER = Object.freeze(['ok', 'timeout', 'skipped', 'killed', 'stopped', 'fail']);
+
 // The run state to render, including the derived `stopping` case. Pass the run
 // row from /api/runs; anything without a requested stop falls through to its
 // stored status.
