@@ -48,23 +48,10 @@ export function fmtDuration(ms) {
 
 export const shortId = (id) => (id ? `${id.slice(0, 4)}…${id.slice(-2)}` : '');
 
-// Dot form + state class per REVIEW.md's colour-vision-safe encoding: fail
-// solid, timeout ring, killed square, stopped square (muted), queued ring
-// (muted) — always paired with the visible text label below, never the only
-// channel.
-const STATUS_META = {
-  running: { cls: 'info', dot: '', label: 'running' },
-  queued: { cls: 'muted', dot: 'state__dot--ring', label: 'queued' },
-  ok: { cls: 'ok', dot: '', label: 'ok' },
-  fail: { cls: 'bad', dot: '', label: 'fail' },
-  timeout: { cls: 'bad', dot: 'state__dot--ring', label: 'timeout' },
-  killed: { cls: 'bad', dot: 'state__dot--square', label: 'killed' },
-  stopped: { cls: 'muted', dot: 'state__dot--square', label: 'stopped' },
-  skipped: { cls: 'muted', dot: '', label: 'skipped' },
-};
-export function statusMeta(status) {
-  return STATUS_META[status] ?? { cls: 'muted', dot: '', label: status ?? 'unknown' };
-}
+// The status -> {colour class, dot form, label} table used to live here. It
+// now lives in ../state-vocab.js, because B1 had written a second copy of it
+// and the two had already drifted (claude-scheduler-bmn). runs.js and
+// runs-log.js import statusMeta/ordinal from there directly.
 
 // Partitions every known run status into the toolbar's 6 segments (All is the
 // union). Chosen so the 5 non-"All" buckets are a strict partition — their
@@ -91,12 +78,6 @@ export function stopRungText(rung) {
   return STOP_RUNG_TEXT[rung] ?? (rung ? `stop requested (${rung})` : 'stop requested');
 }
 
-// "3rd in a row" — REVIEW.md's called-out best property, reproduced here
-// using GET /api/v2/overview's own attention.items[].reason.streak (server.js
-// computes it identically for the Overview tab's needs-attention list) rather
-// than a second streak-counter. 1st/2nd/3rd/4th…
-export function ordinal(n) {
-  const s = ['th', 'st', 'nd', 'rd'];
-  const v = n % 100;
-  return `${n}${s[(v - 20) % 10] ?? s[v] ?? s[0]}`;
-}
+// ordinal() ("3rd in a row", from GET /api/v2/overview's own
+// attention.items[].reason.streak — never a second streak-counter) also moved
+// to ../state-vocab.js; there had been two copies and one had the teens wrong.

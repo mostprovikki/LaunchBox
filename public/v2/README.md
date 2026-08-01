@@ -115,6 +115,38 @@ not a lint rule someone can ignore. `tip` defaults to `label`; pass it
 explicitly only when the tooltip and the accessible name should genuinely
 differ.
 
+## Render a run state (`state-vocab.js`)
+
+Never write your own status → colour/dot/label table. There is exactly one:
+
+```js
+import { statusMeta, dotClass, ordinal } from '../state-vocab.js';
+
+const m = statusMeta(run.status);            // { cls, form, label, dot }
+el('span', { class: `state state--${m.cls}` }, [
+  el('span', { class: `state__dot ${m.dot}`.trim() }),
+  ` ${m.label}`,
+]);
+```
+
+Covers the eight run statuses plus the Jobs pseudo-states `disabled` and
+`never`. `ordinal()` ("3rd in a row") lives there too. Always render `m.label`
+— per REVIEW.md the dot form is a bonus channel for colour-vision safety, never
+a replacement for words.
+
+This module exists because B1 and B2 each wrote the table independently and the
+two copies drifted within hours (`fail` rendered as "failed" on one page and
+"fail" on the other; one of two `ordinal()` copies produced "11st").
+`tests/frontend-v2-state-vocab.test.js` fails the build if a page re-declares
+the table, hard-codes a `state__dot--*` class, or declares its own `ordinal()`
+— and it pins every label and dot form to what `redesign/*.html` actually
+renders, so a value here can't drift from the audited mockups either.
+
+Not yet covered: the *project/bead* state family the mockups also show
+("active", "pending", "bd busy", "handed back", "stopping…"). That is a second
+vocabulary and C2/C3 should extract it the same way before fanning out, rather
+than each page inventing its own.
+
 ## Page shell helpers (`ui.js`)
 
 - `el(tag, attrs, children)` / `esc(s)` / `clear(node)` — DOM building, same

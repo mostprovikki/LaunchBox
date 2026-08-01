@@ -20,6 +20,7 @@ import {
   typeBadge, jobDetailLine, scheduleDescribe, hasAfterReset, relIn, fmtWhen,
   attentionByJobId, runningByJobId, computeRowState, filterJobs,
 } from './jobs-logic.js';
+import { dotClass } from '../state-vocab.js';
 
 const POLL_MS = 4000;
 
@@ -162,7 +163,7 @@ function scheduleCell(job, now) {
 }
 
 function stateCell(job, rowState) {
-  const dotCls = rowState.dotForm ? `state__dot state__dot--${rowState.dotForm}` : 'state__dot';
+  const dotCls = `state__dot ${dotClass(rowState.dotForm)}`.trim();
   const labelNode = rowState.link
     ? el('a', { href: `#runs?job=${job.id}`, style: 'color:inherit;', 'data-tip': rowState.label === 'running' ? null : 'Full run history for this job lives in Runs' }, rowState.label)
     : el('span', {}, rowState.label);
