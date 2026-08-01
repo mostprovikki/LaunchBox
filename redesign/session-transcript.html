@@ -50,9 +50,25 @@
     </div>
     <div class="pagehead__actions">
       <button class="btn">Resume in Terminal</button>
-      <a class="btn btn--ghost" href="runs.html">Run history entry</a>
+      <button class="btn btn--ghost">Rename</button>
+      <button class="btn btn--ghost btn--danger" data-tip="Deletes the transcript permanently — the session can no longer be resumed">Delete</button>
     </div>
   </div>
+
+  <section class="card" style="margin-bottom: 16px;">
+    <div class="card__body" style="padding: 14px 18px;">
+      <div class="facts" style="grid-template-columns: repeat(4, minmax(0, 1fr));">
+        <div class="fact"><div class="fact__k">Session</div><div class="fact__v mono">7c02…4e</div><div class="fact__d">42 MB on disk</div></div>
+        <div class="fact"><div class="fact__k">Span / active</div><div class="fact__v mono">14m 51s</div><div class="fact__d">active 13m 02s</div></div>
+        <div class="fact"><div class="fact__k">Turns</div><div class="fact__v mono">61</div><div class="fact__d">38 tool calls</div></div>
+        <div class="fact"><div class="fact__k">Models</div><div class="fact__v mono">sonnet 100%</div><div class="fact__d">—</div></div>
+        <div class="fact"><div class="fact__k">Tokens</div><div class="fact__v mono">1.9M in · 31.2k out</div><div class="fact__d">deduplicated</div></div>
+        <div class="fact"><div class="fact__k">Branch</div><div class="fact__v mono">scheduler/wb--wb-142</div><div class="fact__d">worktree</div></div>
+        <div class="fact"><div class="fact__k">Cwd</div><div class="fact__v mono">…/worktrees/wb-142</div><div class="fact__d">from transcript</div></div>
+        <div class="fact fact--ok"><div class="fact__k">Outcome</div><div class="fact__v">TASK-COMPLETE</div><div class="fact__d">bead wb-142 closed · <a href="runs.html">run entry</a></div></div>
+      </div>
+    </div>
+  </section>
 
   <section class="card">
     <div class="rows">
