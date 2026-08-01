@@ -36,3 +36,24 @@ Two things are derived from it:
 MIT permits commercial use, modification and sublicensing; the sole obligation is carrying the
 notice above, which this file and `LICENSES/` discharge. Nothing here requires this project to
 be open-sourced.
+
+## marked 18.0.7 — MIT
+
+  https://github.com/markedjs/marked
+  Licence: `LICENSES/marked-MIT.txt`
+
+Vendored verbatim as `public/vendor/marked.esm.js` (the package's own `lib/marked.esm.js`,
+a single-file, zero-runtime-dependency browser-ESM build) for the Sessions tab's transcript
+markdown rendering. No bundler, no build step — see
+`docs/specs/2026-07-27-sessions-tab-visual-design.md` for why this is safe to vendor and what
+was checked (no bare-specifier imports rewritten in by a CDN).
+
+## DOMPurify 3.4.12 — (MPL-2.0 OR Apache-2.0)
+
+  https://github.com/cure53/DOMPurify
+  Licences: `LICENSES/dompurify-MPL-2.0.txt`, `LICENSES/dompurify-Apache-2.0.txt`
+
+Vendored verbatim as `public/vendor/purify.es.mjs` (the package's own `dist/purify.es.mjs`)
+and used to sanitise every markdown render before it reaches the DOM (`public/md.js`) — the
+Sessions tab's transcript viewer is the first surface in this app to render third-party
+text as HTML.

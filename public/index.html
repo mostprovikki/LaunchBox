@@ -13,6 +13,7 @@
     <a href="#jobs" data-tab="jobs">Jobs</a>
     <a href="#history" data-tab="history">History</a>
     <a href="#projects" data-tab="projects">Projects</a>
+    <a href="#sessions" data-tab="sessions">Sessions</a>
     <a href="#settings" data-tab="settings">Settings</a>
   </nav>
   <div class="header-right">
@@ -105,6 +106,19 @@
     </div>
   </section>
 
+  <section id="tab-sessions" hidden class="sessions-tab">
+    <div class="toolbar">
+      <input id="session-search" type="search" placeholder="Filter sessions…" autocomplete="off">
+      <span class="spacer"></span>
+      <button id="sessions-all-toggle" type="button" class="icon" title="Toggle non-interactive (sdk-cli) sessions">Show all</button>
+    </div>
+    <p id="sessions-hidden-note" class="note" hidden></p>
+    <div id="sessions-list" class="s-list"></div>
+    <div id="sessions-empty" class="empty" hidden>
+      <p>No sessions found under <code>~/.claude/projects</code>.</p>
+    </div>
+  </section>
+
   <section id="tab-settings" hidden>
     <form id="settings-form" class="card">
       <h3>Usage</h3>
@@ -179,6 +193,9 @@
     <button id="log-refresh" class="icon" title="Reload the log">⟳</button>
     <button id="log-stop" hidden title="Ask this run to wind down at its next safe point">⤓ Wind down</button>
     <button id="log-kill" class="danger-btn" hidden>■ Stop now</button>
+    <!-- Cross-link to the Sessions tab for a run that has a Claude session
+         (meta.sessionId, set by extensions/claude/formatter.js). -->
+    <a id="log-session-link" class="session-link" href="#" hidden title="Open this run's Claude session transcript">session ↗</a>
     <span id="run-actions"></span>
     <button id="log-close" class="icon" title="Close">✕</button>
   </div>
@@ -304,6 +321,22 @@
       <button type="button" id="plan-confirm" class="primary" hidden>Schedule these fires</button>
     </div>
   </form>
+</dialog>
+
+<dialog id="session-dialog" class="sessions-tab">
+  <div class="s-dialog-head">
+    <div>
+      <h2 id="session-dialog-title"></h2>
+      <p id="session-dialog-sub" class="muted note"></p>
+    </div>
+    <span class="spacer"></span>
+    <div class="seg">
+      <button type="button" id="session-mode-prompts">Prompts</button>
+      <button type="button" id="session-mode-full" class="active">Full conversation</button>
+    </div>
+    <button type="button" id="session-dialog-close" class="icon" title="Close">✕</button>
+  </div>
+  <div id="session-transcript" class="s-transcript"></div>
 </dialog>
 
 <div id="toasts"></div>
