@@ -332,6 +332,19 @@ export function createApp({
   });
 
   app.use(express.json({ limit: '1mb' }));
+
+  // serve-static (under express.static, registered below) 301-redirects a
+  // directory request with no trailing slash to add one — so a bare `GET /v2`
+  // would never reach 200, it would 301 to `/v2/` first. This exact-path route
+  // has to run *before* the static middleware to pre-empt that redirect; it
+  // matches only the literal string `/v2`, so `/v2/`, `/v2/index.html` and
+  // `/v2/assets/*` are untouched and keep falling through to express.static as
+  // before. Deliberately unauthenticated, same as the rest of `public/`: the
+  // page has to load before it can explain a missing/invalid token.
+  app.get('/v2', (req, res) => {
+    res.sendFile(join(ROOT, 'public', 'v2', 'index.html'));
+  });
+
   // `public/` is the one unauthenticated surface, and express.static does no
   // realpath containment — a symlink dropped in there by a build step, a package
   // manager or a stray `ln -s` would be followed straight out of the root and
