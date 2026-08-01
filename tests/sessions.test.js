@@ -7,6 +7,7 @@ import {
   parseSessionFile, readConversation, discoverSessionFiles, parseTs,
   looksLikeRealPrompt, processImageAnnotations, cleanPrompt, decodeProjectDir,
   INTERACTIVE_ENTRYPOINTS, liveSubagentCount, subagentFinished,
+  capTurnsForClient,
 } from '../lib/sessions.js';
 
 // Every fixture is synthetic and lives in a tmpdir. Nothing here reads the real
@@ -368,11 +369,11 @@ test('the transcript maps each row type to turns, and drops thinking', async () 
         content: [
           { type: 'thinking', thinking: 'private reasoning that must not be shown' },
           { type: 'text', text: 'on it' },
-          { type: 'tool_use', name: 'Edit', input: { file_path: '/a.js', old: 1 } },
+          { type: 'tool_use', id: 'toolu_1', name: 'Edit', input: { file_path: '/a.js', old: 1 } },
         ],
       },
     },
-    { type: 'user', timestamp: 't3', message: { content: [{ type: 'tool_result', content: 'done', is_error: false }] } },
+    { type: 'user', timestamp: 't3', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'done', is_error: false }] } },
     { type: 'user', timestamp: 't4', message: { content: [{ type: 'tool_result', content: 'boom', is_error: true }] } },
     // Non-message rows never become turns.
     { type: 'system', subtype: 'turn_duration', durationMs: 5, timestamp: 't5' },
@@ -383,10 +384,71 @@ test('the transcript maps each row type to turns, and drops thinking', async () 
   assert.equal(turns[1].text, 'on it');
   assert.equal(turns[1].model, 'claude-opus-4-8');
   assert.equal(turns[2].tool, 'Edit');
-  assert.equal(turns[2].input, '{\n  "file_path": "/a.js",\n  "old": 1\n}', 'pretty-printed at indent 2');
+  // Was a pretty-printed, TOOL_CAP-truncated JSON string; now the parsed
+  // object survives parsing untouched, per docs/specs/2026-07-27-….md — the
+  // "parser change that must happen now, not later".
+  assert.deepEqual(turns[2].input, { file_path: '/a.js', old: 1 }, 'the parsed object, not a stringified rendering');
   assert.equal(turns[3].isError, false);
   assert.equal(turns[4].isError, true);
   assert.ok(!JSON.stringify(turns).includes('private reasoning'));
+});
+
+test('a tool_result joins its tool_use by toolUseId', async () => {
+  const { file } = fixture([
+    {
+      type: 'assistant',
+      timestamp: 't1',
+      message: {
+        model: 'claude-opus-4-8',
+        content: [{ type: 'tool_use', id: 'toolu_abc', name: 'Bash', input: { command: 'ls' } }],
+      },
+    },
+    { type: 'user', timestamp: 't2', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_abc', content: 'file.txt', is_error: false }] } },
+  ]);
+  const turns = await readConversation(file);
+  const use = turns.find((t) => t.role === 'tool_use');
+  const result = turns.find((t) => t.role === 'tool_result');
+  assert.equal(use.toolUseId, 'toolu_abc');
+  assert.equal(result.toolUseId, 'toolu_abc');
+  assert.equal(use.toolUseId, result.toolUseId, 'the join key that pairs a result with the call it answers');
+});
+
+test('toolUseResult survives parsing, structuredPatch included, for an Edit', async () => {
+  const structuredPatch = [{ oldStart: 1, oldLines: 2, newStart: 1, newLines: 3, lines: [' unchanged', '-old line', '+new line 1', '+new line 2'] }];
+  const { file } = fixture([
+    { type: 'assistant', timestamp: 't1', message: { model: 'claude-opus-4-8', content: [{ type: 'tool_use', id: 'toolu_edit', name: 'Edit', input: { file_path: '/a.js' } }] } },
+    {
+      type: 'user',
+      timestamp: 't2',
+      toolUseResult: { filePath: '/a.js', structuredPatch, oldTodos: [{ id: 1 }], newTodos: [{ id: 1, status: 'done' }] },
+      message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_edit', content: 'Updated /a.js', is_error: false }] },
+    },
+  ]);
+  const turns = await readConversation(file);
+  const result = turns.find((t) => t.role === 'tool_result');
+  assert.deepEqual(result.toolUseResult.structuredPatch, structuredPatch, 'pre-computed diff hunks survive uncapped from the parser');
+  assert.deepEqual(result.toolUseResult.oldTodos, [{ id: 1 }]);
+  assert.deepEqual(result.toolUseResult.newTodos, [{ id: 1, status: 'done' }]);
+});
+
+test('capTurnsForClient clamps long strings but leaves structuredPatch structure intact', async () => {
+  const longLine = `+${'x'.repeat(5000)}`;
+  const structuredPatch = [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: [longLine] }];
+  const turns = [
+    { role: 'tool_use', tool: 'Bash', toolUseId: 't1', input: { command: 'x'.repeat(5000) }, t: '' },
+    { role: 'tool_result', toolUseId: 't1', text: 'y'.repeat(5000), isError: false, toolUseResult: { structuredPatch }, t: '' },
+  ];
+  const capped = capTurnsForClient(turns, 1200);
+  // The payload is bounded...
+  assert.ok(capped[0].input.command.length < 5000);
+  assert.ok(capped[1].text.length < 5000);
+  assert.ok(capped[1].toolUseResult.structuredPatch[0].lines[0].length < 5000);
+  // ...but structuredPatch's shape — the thing that must survive to be
+  // rendered as a diff — is not swallowed by the cap.
+  assert.equal(capped[1].toolUseResult.structuredPatch[0].oldStart, 1);
+  assert.equal(capped[1].toolUseResult.structuredPatch[0].lines.length, 1);
+  assert.equal(capped[0].toolUseId, 't1');
+  assert.equal(capped[1].toolUseId, 't1');
 });
 
 test('a system-reminder embedded in a tool_result is stripped, and ANSI escapes go', async () => {
