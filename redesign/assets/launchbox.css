@@ -38,16 +38,28 @@
   transition: opacity .1s ease .05s;
   z-index: 90;
 }
-[data-tip]:hover::after { opacity: 1; }
+[data-tip]:hover::after,
+[data-tip]:focus-visible::after { opacity: 1; }   /* keyboard users get the tooltip too */
 .appbar [data-tip]::after { bottom: auto; top: calc(100% + 7px); }
 /* keep edge tooltips on-screen in the fixed action column */
 .rowact [data-tip]:last-child::after { left: auto; right: 0; transform: none; }
+/* same for the bar's right edge — the hidden tooltip box otherwise widens
+   the scrollable area past the viewport on every page */
+.appbar .themebtn::after { left: auto; right: 0; transform: none; }
 
 /* Disabled action affordance: present but visibly impossible, with the why
    in its tooltip — never silently missing. */
 .iconbtn:disabled { opacity: .3; cursor: not-allowed; }
 .iconbtn:disabled:hover { background: transparent; color: var(--ink-2); }
 [data-tip]:disabled { pointer-events: auto; }   /* tooltip still shows the reason */
+
+/* Quiet destructive: rare actions don't shout red on a healthy page —
+   the hue arrives on hover/focus, and the armed confirm state stays red. */
+.btn--del { color: var(--ink-3); }
+.btn--del:hover, .btn--del:focus-visible { color: var(--bad); }
+
+/* Frozen forms (approval pending) look frozen, not just described as frozen. */
+input.field:disabled, textarea.field:disabled, select:disabled { opacity: .55; }
 
 /* Fixed-width, right-aligned action column so every row lines up. */
 .rowact { display: flex; align-items: center; gap: 2px; justify-content: flex-end; }
@@ -88,7 +100,7 @@
   background: var(--surface);
 }
 .uchip__k {
-  font-size: 10px;
+  font-size: 10.5px;
   font-weight: 600;
   letter-spacing: .06em;
   text-transform: uppercase;
@@ -124,6 +136,7 @@
 /* Pause segmented control — compact for the bar */
 .segs--bar { padding: 2px; }
 .segs--bar .seg { height: 26px; padding: 0 11px; font-size: 12px; }
+.seg:disabled { opacity: .45; cursor: not-allowed; }
 
 /* --------------------------------------------------- Full-width app banner */
 /* Pause / auth / daemon banners live between the app bar and the shell.    */
@@ -473,6 +486,8 @@ input.field--mono { font-family: var(--mono) !important; }
   color: var(--ink-2);
 }
 .logview .sig { color: var(--bad); font-weight: 500; }
+/* error lines marked in log excerpts — never the UA's default yellow <mark> */
+.logview mark { background: var(--bad-wash); color: var(--bad); padding: 0 2px; border-radius: 2px; }
 .logview .okline { color: var(--ok); }
 .logview .g { color: var(--ink-3); }
 .asof {
@@ -568,7 +583,7 @@ input.field--mono { font-family: var(--mono) !important; }
 
   --ink:   #E3E7EC;
   --ink-2: #9AA4B0;
-  --ink-3: #68737F;
+  --ink-3: #87919D;   /* ≥4.5:1 on every dark surface incl. surface-3 */
 
   --line:   #272E38;
   --line-2: #20252D;
@@ -590,7 +605,7 @@ input.field--mono { font-family: var(--mono) !important; }
   --muted-wash: #232933;
 
   --deg-4:     #A63028;
-  --deg-3:     #A5843A;
+  --deg-3:     #7A621F;
   --deg-2-bg:  #2E2712;
   --deg-2-ink: #D9BE6A;
 
@@ -600,7 +615,7 @@ input.field--mono { font-family: var(--mono) !important; }
 }
 
 /* system.css rules whose light values are hardcoded */
-[data-theme="dark"] .dash { color: #454F5B; }
+[data-theme="dark"] .dash { color: #7E8994; }
 [data-theme="dark"] .btn:hover { border-color: #333B47; }
 [data-theme="dark"] .btn--danger:hover { border-color: #4A2A26; }
 [data-theme="dark"] .btn--primary { color: #0F1216; }
