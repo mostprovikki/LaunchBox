@@ -27,7 +27,7 @@ import {
 import {
   triggerLabel, fmtClock, shortId, stopRungText,
 } from './runs-format.js';
-import { statusMeta } from '../state-vocab.js';
+import { statusMeta, STATE_VOCAB } from '../state-vocab.js';
 
 let scrim = null;
 let drawer = null;
@@ -88,7 +88,7 @@ function buildLines(text) {
 function stateChip(run) {
   const m = statusMeta(run.status);
   const parts = [el('span', { class: `state__dot ${m.dot}`.trim() }), ` ${m.label}`];
-  if (isWindingDown(run)) parts.push(' · stopping…');
+  if (isWindingDown(run)) parts.push(` · ${STATE_VOCAB.stopping.label}`);
   else if (run.status === 'fail' && run.exitCode != null) parts.push([' · exit ', el('span', { class: 'mono' }, String(run.exitCode))]);
   return el('span', { class: `state state--${m.cls}`, style: 'margin-left:auto;' }, parts);
 }

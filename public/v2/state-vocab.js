@@ -49,7 +49,85 @@ export const STATE_VOCAB = Object.freeze({
 
   disabled: { cls: 'muted', form: 'solid', label: 'disabled' },
   never: { cls: '', form: '', label: 'no runs yet' },
+
+  // Not a stored status: a live run whose stop was requested but which has not
+  // finished yet (lib/runner.js's `stopping()` — entries with `stopRequested`
+  // set; visible per-run as `meta.stopRung`). Derive it with runStateKey()
+  // rather than testing `meta.stopRung` at each call site.
+  //
+  // Audited in redesign/pause-soft.html. It was already being worded three
+  // ways before any page that needs it had even been built: the log drawer
+  // appended "· stopping…", the runs list said "· winding down", and the
+  // mockup drew a chip reading "stopping…". The mockup wins.
+  stopping: { cls: 'muted', form: 'square', label: 'stopping…' },
 });
+
+// The run state to render, including the derived `stopping` case. Pass the run
+// row from /api/runs; anything without a requested stop falls through to its
+// stored status.
+export function runStateKey(run) {
+  if (!run) return 'never';
+  if (run.status === 'running' && run.meta?.stopRung) return 'stopping';
+  return run.status;
+}
+
+// ---------------------------------------------------------------------------
+// Projects (claude-scheduler-1ys)
+//
+// The important structural fact, and the reason this is a function rather than
+// a second lookup table: THE PROJECT CHIP IS NOT A PURE FUNCTION OF `state`.
+// A project row carries `state` ∈ pending|active|paused|error (lib/db.js's
+// PROJECT_STATES), and SEPARATELY a `busyStreak` counter (server.js's
+// decorateProject / overview `automation.projects[]`) that is orthogonal to it,
+// and it may also be a member of a live burst (the burst payload's
+// `projectIds`, not a field on the project itself). The mockups draw one chip,
+// so something has to decide which of the three wins. If that decision is left
+// to the pages, C1, C2 and C3 will each pick their own — which is the whole
+// defect this module exists to prevent.
+export const PROJECT_VOCAB = Object.freeze({
+  active: { cls: 'ok', form: '', label: 'active' },
+  pending: { cls: 'muted', form: 'ring', label: 'pending' },
+  paused: { cls: 'muted', form: 'square', label: 'paused' },
+
+  // UNAUDITED — the one entry in this file with no mockup behind it.
+  // PROJECT_STATES includes 'error' (lib/db.js) but no redesign/*.html ever
+  // draws it, so its colour and label are a choice, not a transcription. `bad`
+  // rather than the muted fallback because a project that cannot be polled at
+  // all is a failure, not an inert row. Revisit if the design ever covers it.
+  error: { cls: 'bad', form: '', label: 'error' },
+
+  // Overlays: conditions, not values of `state`.
+  bd_busy: { cls: 'warn', form: '', label: 'bd busy' },
+  burst: { cls: 'info', form: '', label: 'burst' },
+});
+
+// Precedence when more than one applies. NOT derivable from the mockups — no
+// mockup shows a project that is both bursting and bd-busy — so this is a
+// documented decision rather than a transcription:
+//
+//   bd busy  >  burst  >  state
+//
+// `bd busy` first because it means the project's bead graph could not be read
+// at all; every other thing the row claims (ready counts, burst progress) is
+// stale while it holds, so masking a warn behind an info would be a lie of
+// omission. `burst` second because it is live and transient and outranks the
+// steady state underneath it.
+export function projectStateMeta({ state, busyStreak = 0, inBurst = false } = {}) {
+  const key = busyStreak > 0 ? 'bd_busy' : inBurst ? 'burst' : state;
+  const v = PROJECT_VOCAB[key] ?? { ...UNKNOWN, label: state ?? UNKNOWN.label };
+  return { cls: v.cls, form: v.form, label: v.label, dot: dotClass(v.form), key: PROJECT_VOCAB[key] ? key : 'unknown' };
+}
+
+// Mockup strings that are NOT rendered anywhere, because no field carries them.
+// Recorded here so the next agent re-derives the finding instead of the string:
+//
+// • "handed back" (redesign/project-detail.html) — a bead whose run exited ok
+//   WITHOUT signalling TASK-COMPLETE. lib/projects.js does emit 'handed-back'
+//   and a `finished` event with `closed:false`, but server.js only console.logs
+//   it: no run row column, and nothing on /api/runs, /api/projects/:id or
+//   /api/v2/overview distinguishes closed from handed back. A bead row cannot
+//   show this until the flag is persisted — see the follow-up bead. Same call
+//   B1/B2 made when they dropped "hard stop was active" and "retry 2 of 2".
 
 // A status outside the table is muted, not default-ink: "we do not know what
 // this is" should read as inert rather than as an ordinary healthy row. Runs

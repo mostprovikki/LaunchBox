@@ -142,10 +142,44 @@ the table, hard-codes a `state__dot--*` class, or declares its own `ordinal()`
 — and it pins every label and dot form to what `redesign/*.html` actually
 renders, so a value here can't drift from the audited mockups either.
 
-Not yet covered: the *project/bead* state family the mockups also show
-("active", "pending", "bd busy", "handed back", "stopping…"). That is a second
-vocabulary and C2/C3 should extract it the same way before fanning out, rather
-than each page inventing its own.
+A live run whose stop was requested is **not** a stored status — derive it:
+
+```js
+import { runStateKey, statusMeta } from '../state-vocab.js';
+const m = statusMeta(runStateKey(run));   // 'stopping' when live + meta.stopRung
+```
+
+`STATE_VOCAB.stopping.label` is the one wording for a wind-down. Do not retype
+it: the runs list said "winding down" while the drawer said "stopping…" for the
+same condition, and a test now fails on either string appearing in a page.
+(The log drawer's *banner* still opens "Winding down." — that is separate
+audited prose explaining what the signal did, not the state's name.)
+
+## Render a project state (`state-vocab.js`)
+
+```js
+import { projectStateMeta } from '../state-vocab.js';
+const m = projectStateMeta({ state: p.state, busyStreak: p.busyStreak, inBurst });
+```
+
+**The chip is not a pure function of `state`.** A project row carries `state`
+(`pending|active|paused|error`, `lib/db.js`'s `PROJECT_STATES`) and separately a
+`busyStreak` counter (`server.js`'s `decorateProject`, and overview's
+`automation.projects[]`), and it may be a member of a live burst — which is on
+the burst payload's `projectIds`, not on the project. The mockups draw one chip,
+so something must decide which wins. `projectStateMeta()` is that something:
+**bd busy > burst > state**, because a project whose bead graph cannot be read
+makes every other claim on the row stale. That precedence is a documented
+decision, not a transcription — no mockup shows a project that is both.
+
+`error` is the only entry in the module with no mockup behind it; it is flagged
+as such in the source and in the test's exemption list.
+
+**Not rendered, deliberately:** "handed back" (`redesign/project-detail.html`).
+The event exists in `lib/projects.js` but only reaches a `console.log` — no API
+field distinguishes a closed bead from one handed back, so C2 cannot show it
+truthfully yet. Same call B1/B2 made on "hard stop was active" and
+"retry 2 of 2". See the follow-up bead; do not invent it.
 
 ## Page shell helpers (`ui.js`)
 
