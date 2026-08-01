@@ -8,7 +8,7 @@
 //   * fixture repos live in a temp dir, never in a real checkout.
 
 import { execFile } from 'node:child_process';
-import { mkdtemp, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, writeFile, mkdir, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -249,6 +249,130 @@ function parseBeadId(stdout) {
   } catch {
     return stdout.trim().match(/\b[a-z]+-[a-z0-9]+\b/i)?.[0] ?? null;
   }
+}
+
+// ---------------------------------------------------------------- sessions --
+// Fixture ~/.claude/projects-shaped transcripts for the Sessions tab
+// (docs/specs/2026-07-27-sessions-tab-visual-design.md). Deterministic and
+// planted under CS_SESSIONS_ROOT — never the real ~/.claude/projects — so the
+// list and conversation shots don't depend on whatever happens to exist on
+// the machine running the capture. Shapes mirror what claude-scheduler-cfn.3's
+// CDP drive planted and verified live: parallel tool_use/tool_result pairing,
+// and per-tool bodies (Edit diff, TodoWrite before/after, Grep counts).
+const SESS_T0 = Date.parse('2026-07-28T09:00:00.000Z');
+const sessIso = (offsetMs) => new Date(SESS_T0 + offsetMs).toISOString();
+const sessLine = (obj) => JSON.stringify(obj);
+
+function fixtureSessionParallel() {
+  const rows = [
+    { type: 'user', timestamp: sessIso(0), cwd: '/tmp/fixtures/checkout-service', gitBranch: 'main', version: '2.1.0', entrypoint: 'cli',
+      message: { role: 'user', content: 'Check both the staging and prod webhook endpoints in parallel.' } },
+    { type: 'assistant', timestamp: sessIso(1000),
+      message: { id: 'msg_shots_par_1', model: 'claude-sonnet-4-5-20250514',
+        content: [
+          { type: 'tool_use', id: 'toolu_shots_A', name: 'Bash', input: { command: 'curl -s https://staging.example/webhooks/health' } },
+          { type: 'tool_use', id: 'toolu_shots_B', name: 'Bash', input: { command: 'curl -s https://prod.example/webhooks/health' } },
+        ], usage: { input_tokens: 140, output_tokens: 50 } } },
+    // prod's result lands first — out of order, same as the CDP-verified fixture.
+    { type: 'user', timestamp: sessIso(2000),
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_shots_B', content: '{"status":"ok"}', is_error: false }] },
+      toolUseResult: { stdout: '{"status":"ok"}', stderr: '' } },
+    { type: 'user', timestamp: sessIso(3000),
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_shots_A', content: '{"status":"ok"}', is_error: false }] },
+      toolUseResult: { stdout: '{"status":"ok"}', stderr: '' } },
+    { type: 'assistant', timestamp: sessIso(4000),
+      message: { id: 'msg_shots_par_2', model: 'claude-sonnet-4-5-20250514',
+        content: [{ type: 'text', text: 'Both endpoints are healthy.' }], usage: { input_tokens: 10, output_tokens: 10 } } },
+    { type: 'system', subtype: 'turn_duration', timestamp: sessIso(4000), durationMs: 3800 },
+  ];
+  return rows.map(sessLine).join('\n') + '\n';
+}
+
+function fixtureSessionTools() {
+  const rows = [
+    { type: 'user', timestamp: sessIso(0), cwd: '/tmp/fixtures/checkout-service', gitBranch: 'refactor/basket-totals', version: '2.1.0', entrypoint: 'cli',
+      message: { role: 'user', content: 'Split the basket totals helper out of checkout.js, update the todo list, and check for remaining TODOs.' } },
+    { type: 'assistant', timestamp: sessIso(1000),
+      message: { id: 'msg_shots_t_1', model: 'claude-opus-4-1-20250805',
+        content: [{ type: 'tool_use', id: 'toolu_shots_edit_1', name: 'Edit',
+          input: { file_path: '/tmp/fixtures/checkout-service/src/checkout.js', old_string: 'function total(items) { /* inline */ }', new_string: "const { total } = require('./basket-totals');" } }],
+        usage: { input_tokens: 90, output_tokens: 40 } } },
+    { type: 'user', timestamp: sessIso(2000),
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_shots_edit_1', content: 'Updated checkout.js', is_error: false }] },
+      toolUseResult: { structuredPatch: [{ oldStart: 40, oldLines: 3, newStart: 40, newLines: 2, lines: [' function checkout(cart) {', '-  function total(items) { /* inline */ }', "+  const { total } = require('./basket-totals');", ' }'] }] } },
+    { type: 'assistant', timestamp: sessIso(3000),
+      message: { id: 'msg_shots_t_2', model: 'claude-opus-4-1-20250805',
+        content: [{ type: 'tool_use', id: 'toolu_shots_todo_1', name: 'TodoWrite',
+          input: { todos: [{ content: 'Extract basket totals helper', status: 'completed' }, { content: 'Add unit tests for the helper', status: 'in_progress' }, { content: 'Update call sites', status: 'pending' }] } }],
+        usage: { input_tokens: 60, output_tokens: 25 } } },
+    { type: 'user', timestamp: sessIso(4000),
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_shots_todo_1', content: 'Todos updated', is_error: false }] },
+      toolUseResult: {
+        oldTodos: [{ content: 'Extract basket totals helper', status: 'in_progress' }, { content: 'Add unit tests for the helper', status: 'pending' }, { content: 'Update call sites', status: 'pending' }],
+        newTodos: [{ content: 'Extract basket totals helper', status: 'completed' }, { content: 'Add unit tests for the helper', status: 'in_progress' }, { content: 'Update call sites', status: 'pending' }],
+      } },
+    { type: 'assistant', timestamp: sessIso(5000),
+      message: { id: 'msg_shots_t_3', model: 'claude-opus-4-1-20250805',
+        content: [{ type: 'tool_use', id: 'toolu_shots_grep_1', name: 'Grep', input: { pattern: 'TODO', path: '/tmp/fixtures/checkout-service', glob: '*.js' } }],
+        usage: { input_tokens: 30, output_tokens: 10 } } },
+    { type: 'user', timestamp: sessIso(6000),
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_shots_grep_1', content: '2 files with matches', is_error: false }] },
+      toolUseResult: { numFiles: 2, numMatches: 3 } },
+    { type: 'assistant', timestamp: sessIso(7000),
+      message: { id: 'msg_shots_t_4', model: 'claude-opus-4-1-20250805',
+        content: [{ type: 'text', text: 'Extracted the helper, updated the todo list, and found 3 remaining TODOs across 2 files.' }], usage: { input_tokens: 5, output_tokens: 5 } } },
+  ];
+  return rows.map(sessLine).join('\n') + '\n';
+}
+
+function fixtureSessionMarkdown() {
+  const md = ['## Rollback plan', '', 'If the Adyen SDK bump misbehaves in prod:', '',
+    '```bash', 'git revert <merge-commit-sha>', 'npm ci && npm test', '```', '',
+    '**Note:** contract tests must pass before re-deploying.'].join('\n');
+  const rows = [
+    { type: 'user', timestamp: sessIso(0), cwd: '/tmp/fixtures/checkout-service', gitBranch: 'main', version: '2.1.0', entrypoint: 'cli',
+      message: { role: 'user', content: 'Write a short rollback plan for the Adyen SDK bump.' } },
+    { type: 'assistant', timestamp: sessIso(1000),
+      message: { id: 'msg_shots_md_1', model: 'claude-sonnet-4-5-20250514',
+        content: [{ type: 'text', text: md }], usage: { input_tokens: 20, output_tokens: 60 } } },
+  ];
+  return rows.map(sessLine).join('\n') + '\n';
+}
+
+function fixtureSessionGuessed() {
+  const rows = [
+    { type: 'user', timestamp: sessIso(0), gitBranch: 'main', version: '1.9.2', entrypoint: 'cli',
+      message: { role: 'user', content: 'What time is the next deploy window?' } },
+    { type: 'assistant', timestamp: sessIso(1000),
+      message: { id: 'msg_shots_g_1', model: 'claude-haiku-4-5-20251001',
+        content: [{ type: 'text', text: 'The next deploy window is Tuesday 14:00 UTC.' }], usage: { input_tokens: 10, output_tokens: 15 } } },
+  ];
+  return rows.map(sessLine).join('\n') + '\n';
+}
+
+/**
+ * Plant a throwaway CS_SESSIONS_ROOT with a handful of deterministic
+ * transcripts, backdated well past DEFAULT_ACTIVE_WINDOW_S (60s) so none of
+ * them render as "● live" — lib/sessions.js's own liveness gate would
+ * otherwise be correct to refuse rename/delete on a just-written fixture, but
+ * that isn't what a screenshot of the resting UI wants to show.
+ */
+export async function buildFixtureSessions(log) {
+  const root = await mkdtemp(join(tmpdir(), 'cs-shots-sessions-'));
+  const proj = join(root, 'checkout-service');
+  await mkdir(proj, { recursive: true });
+  const past = new Date(Date.now() - 10 * 60_000);
+  async function plant(name, content) {
+    const p = join(proj, name);
+    await writeFile(p, content);
+    await utimes(p, past, past);
+  }
+  await plant('sess-parallel-webhooks.jsonl', fixtureSessionParallel());
+  await plant('sess-basket-totals-refactor.jsonl', fixtureSessionTools());
+  await plant('sess-rollback-plan.jsonl', fixtureSessionMarkdown());
+  await plant('sess-deploy-window.jsonl', fixtureSessionGuessed());
+  log?.(`  · sessions fixtures planted under ${root}`);
+  return root;
 }
 
 /**

@@ -22,7 +22,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { launchBrowser, sleep } from './cdp.mjs';
-import { Api, buildFixtureRepos, seed, waitFor } from './seed.mjs';
+import { Api, buildFixtureRepos, buildFixtureSessions, seed, waitFor } from './seed.mjs';
 import { shots } from './shots.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -184,6 +184,14 @@ async function main() {
   let server; let browser; let fixtureRoot;
   const results = [];
 
+  // Sessions-tab fixtures have to exist BEFORE the server boots: CS_SESSIONS_ROOT
+  // is read once at startup (server.js's createSessionIndex call), so building
+  // this after spawn would mean the very first scan sees an empty directory.
+  // Cheap (four small file writes) and deterministic, so it's always built
+  // rather than gated behind --only like the bd fixture repos below.
+  log('· sessions fixtures');
+  const sessionsRoot = await buildFixtureSessions(log);
+
   try {
     log('· booting server');
     server = spawn(process.execPath, [join(REPO, 'server.js')], {
@@ -193,6 +201,7 @@ async function main() {
         CS_DATA: dataDir,
         CS_PORT: String(port),
         CS_NO_NOTIFY: '1',
+        CS_SESSIONS_ROOT: sessionsRoot,
         // Inherited by the faked `claude` the usage monitor spawns.
         CS_SHOTS_FIXTURE: fixture,
       },
@@ -295,6 +304,7 @@ async function main() {
       await sleep(400);
       await rm(dataDir, { recursive: true, force: true }).catch(() => {});
       if (fixtureRoot) await rm(fixtureRoot, { recursive: true, force: true }).catch(() => {});
+      await rm(sessionsRoot, { recursive: true, force: true }).catch(() => {});
     }
   }
 
@@ -339,6 +349,11 @@ values (5h 37%, weekly 64%, Fable 90%) and **no real \`claude\` can run** — a 
 no API quota. Only \`command\`-type jobs are ever executed; the three \`claude\` jobs are
 created disabled and never fired. No project is ever activated, which is why the burst
 dialog shows its "No activated projects" state.
+
+The Sessions tab is seeded separately via \`CS_SESSIONS_ROOT\` pointed at four planted
+\`.jsonl\` transcripts (never \`~/.claude/projects\`): a parallel-tool-call session, an
+Edit/TodoWrite/Grep session, a markdown-with-code-fence session, and a \`cwdGuessed\`
+session. See \`tools/screenshots/seed.mjs\`'s \`buildFixtureSessions\`.
 
 Run statuses present: ${ctx.statuses?.join(', ') ?? 'n/a'}. \`queued\` is unreachable without
 firing a claude job past its concurrency cap.
