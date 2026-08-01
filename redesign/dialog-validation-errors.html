@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>New job — validation errors · LaunchBox</title>
+<script src="assets/theme.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/system.css">
+<link rel="stylesheet" href="assets/launchbox.css">
+</head>
+<body>
+
+<header class="appbar">
+  <h1 class="appbar__brand">LaunchBox</h1>
+  <nav class="mainnav">
+    <a href="overview.html">Overview</a>
+    <a href="jobs.html" aria-current="page">Jobs</a>
+    <a href="runs.html">Runs</a>
+    <a href="projects.html">Projects</a>
+    <a href="sessions.html">Sessions</a>
+    <a href="settings.html">Settings</a>
+  </nav>
+  <div class="appbar__spacer"></div>
+  <div class="uchips" title="Claude usage — checked 09:40:12">
+    <span class="uchip"><span class="uchip__k">5h</span><span class="uchip__v">37%</span></span>
+    <span class="uchip"><span class="uchip__k">wk</span><span class="uchip__v">64%</span></span>
+    <span class="uchip uchip--crit"><span class="uchip__k">fable</span><span class="uchip__v">90%</span></span>
+  </div>
+  <a class="runchip" href="runs.html"><span class="state__dot"></span><span class="num">2</span> running</a>
+  <div class="segs segs--bar" role="radiogroup" aria-label="Pause mode">
+    <button class="seg" aria-selected="true">Off</button>
+    <button class="seg">Hold</button>
+    <button class="seg">Soft</button>
+    <button class="seg">Hard</button>
+  </div>
+  <button class="iconbtn themebtn" onclick="lbToggleTheme()" title="Switch between dark and light">
+    <svg class="ic ic--sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+    <svg class="ic ic--moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>
+  </button>
+</header>
+
+<main class="shell">
+
+  <div class="pagehead">
+    <div>
+      <h1>Jobs</h1>
+      <div class="pagehead__sub"><span class="mono">14</span> jobs · <span class="mono">12</span> enabled · <span class="mono">2</span> running</div>
+    </div>
+    <div class="pagehead__actions">
+      <a class="btn" href="dialog-plan-burndown.html"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>Plan burn-down…</a>
+      <a class="btn btn--primary" href="dialog-new-job.html"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>New job</a>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <label class="search">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      <input type="text" placeholder="Filter by name, schedule or command…">
+    </label>
+    <div class="segs">
+      <button class="seg" aria-selected="true">All <span class="seg__count">14</span></button>
+      <button class="seg">Claude <span class="seg__count">6</span></button>
+      <button class="seg">Shell <span class="seg__count">8</span></button>
+    </div>
+  </div>
+
+  <section class="card">
+    <div class="rows">
+      <div class="row row--head jobrow">
+        <span></span><span>Job</span><span>Schedule · next fire</span><span>Last run</span><span></span>
+      </div>
+
+      <div class="row jobrow" data-state="info">
+        <span class="ftype" title="Shell command">SH</span>
+        <div class="cell">
+          <div class="cell__l1"><span class="row__n">Rotate and ship logs</span></div>
+          <div class="cell__l2"><span class="mono">cron 7 * * * *</span></div>
+        </div>
+        <div class="cell">
+          <div class="cell__l1 t-body">hourly at :07</div>
+          <div class="cell__l2"><span class="mono">next 10:07 · in 26m</span></div>
+        </div>
+        <div class="cell">
+          <div class="cell__l1"><span class="state state--info"><span class="state__dot"></span>running</span></div>
+          <div class="cell__l2"><span class="mono">since 09:39 · 2m 11s</span></div>
+        </div>
+        <div class="jobrow__ctl">
+          <a class="iconbtn" href="runs-log-live.html" title="Open the live log"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg></a>
+          <button class="iconbtn" title="Wind down — finish the current step, then stop"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12"/><path d="m7 12 5 5 5-5"/><path d="M5 20h14"/></svg></button>
+          <button class="iconbtn" title="Stop now — SIGKILL immediately"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg></button>
+          <input class="switch" type="checkbox" checked title="Enabled">
+        </div>
+      </div>
+
+      <div class="row jobrow" data-state="info">
+        <span class="ftype" title="Shell command">SH</span>
+        <div class="cell">
+          <div class="cell__l1"><span class="row__n">Drain message queue</span></div>
+          <div class="cell__l2"><span class="mono">cron 23 * * * *</span></div>
+        </div>
+        <div class="cell">
+          <div class="cell__l1 t-body">hourly at :23</div>
+          <div class="cell__l2"><span class="mono">next 10:23 · in 42m</span></div>
+        </div>
+        <div class="cell">
+          <div class="cell__l1"><span class="state state--info"><span class="state__dot"></span>running</span></div>
+          <div class="cell__l2"><span class="mono">since 09:23 · 18m 14s</span></div>
+        </div>
+        <div class="jobrow__ctl">
+          <a class="iconbtn" href="runs-log-live.html" title="Open the live log"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg></a>
+          <button class="iconbtn" title="Wind down — finish the current step, then stop"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12"/><path d="m7 12 5 5 5-5"/><path d="M5 20h14"/></svg></button>
+          <button class="iconbtn" title="Stop now — SIGKILL immediately"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg></button>
+          <input class="switch" type="checkbox" checked title="Enabled">
+        </div>
+      </div>
+
+      <div class="row jobrow" data-state="bad">
+        <span class="ftype ftype--info" title="Claude job">CL</span>
+        <div class="cell">
+          <div class="cell__l1"><span class="row__n">Sync design tokens</span></div>
+          <div class="cell__l2"><span class="mono">every 6h</span> · <span class="mono">~/mydevelopment/design-system</span></div>
+        </div>
+        <div class="cell">
+          <div class="cell__l1 t-body">every 6 hours</div>
+          <div class="cell__l2"><span class="mono">next 14:00 · in 4h 19m</span></div>
+        </div>
+        <div class="cell">
+          <div class="cell__l1"><span class="state state--bad"><span class="state__dot state__dot--ring"></span>timeout</span></div>
+          <div class="cell__l2"><span class="mono">08:12 · 15m 00s</span> · 3rd in a row</div>
+        </div>
+        <div class="jobrow__ctl">
+          <button class="iconbtn" title="Run now"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M7 5v14l11-7z"/></svg></button>
+          <button class="iconbtn" title="Edit"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button>
+          <button class="iconbtn" title="Clone"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button>
+          <button class="iconbtn" title="Delete"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>
+          <input class="switch" type="checkbox" checked title="Enabled">
+        </div>
+      </div>
+
+      <div class="row jobrow">
+        <span class="ftype ftype--info" title="Claude job">CL</span>
+        <div class="cell">
+          <div class="cell__l1"><span class="row__n">Burn leftover quota on docs</span><span class="tag" title="This job intentionally ignores the budget guard">guard off</span></div>
+          <div class="cell__l2"><span class="mono">~/mydevelopment/claude-scheduler</span></div>
+        </div>
+        <div class="cell">
+          <div class="cell__l1 t-body">after 5-hour reset</div>
+          <div class="cell__l2"><span class="mono">+3m ±2 · next ≈11:50</span></div>
+        </div>
+        <div class="cell">
+          <div class="cell__l1"><span class="state state--ok"><span class="state__dot"></span>ok</span></div>
+          <div class="cell__l2"><span class="mono">06:44 · 21m 30s</span></div>
+        </div>
+        <div class="jobrow__ctl">
+          <button class="iconbtn" title="Run now"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M7 5v14l11-7z"/></svg></button>
+          <button class="iconbtn" title="Edit"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button>
+          <button class="iconbtn" title="Clone"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button>
+          <button class="iconbtn" title="Delete"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>
+          <input class="switch" type="checkbox" checked title="Enabled">
+        </div>
+      </div>
+
+      <div class="row jobrow" data-state="muted">
+        <span class="ftype" title="Shell command">SH</span>
+        <div class="cell">
+          <div class="cell__l1"><span class="row__n">Backup to NAS</span></div>
+          <div class="cell__l2"><span class="mono">rsync -a ~/work nas:/backup</span></div>
+        </div>
+        <div class="cell">
+          <div class="cell__l1 t-body">daily 02:15</div>
+          <div class="cell__l2"><span class="mono">next Sun 02:15 · in 16h</span></div>
+        </div>
+        <div class="cell">
+          <div class="cell__l1"><span class="state state--muted"><span class="state__dot"></span>skipped</span></div>
+          <div class="cell__l2">would breach 5h reserve</div>
+        </div>
+        <div class="jobrow__ctl">
+          <button class="iconbtn" title="Run now"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M7 5v14l11-7z"/></svg></button>
+          <button class="iconbtn" title="Edit"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button>
+          <button class="iconbtn" title="Clone"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button>
+          <button class="iconbtn" title="Delete"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>
+          <input class="switch" type="checkbox" checked title="Enabled">
+        </div>
+      </div>
+
+      <div class="row jobrow" data-state="bad">
+        <span class="ftype ftype--info" title="Claude job">CL</span>
+        <div class="cell">
+          <div class="cell__l1"><span class="row__n">Reindex search corpus</span></div>
+          <div class="cell__l2"><span class="mono">~/mydevelopment/webapp-billing</span> · model <span class="mono">sonnet</span></div>
+        </div>
+        <div class="cell">
+          <div class="cell__l1 t-body">daily 03:00</div>
+          <div class="cell__l2"><span class="mono">next Sun 03:00 · in 17h</span></div>
+        </div>
+        <div class="cell">
+          <div class="cell__l1"><span class="state state--bad"><span class="state__dot state__dot--square"></span>killed</span></div>
+          <div class="cell__l2"><span class="mono">03:00</span> · hard stop was active</div>
+        </div>
+        <div class="jobrow__ctl">
+          <button class="iconbtn" title="Run now"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M7 5v14l11-7z"/></svg></button>
+          <button class="iconbtn" title="Edit"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button>
+          <button class="iconbtn" title="Clone"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button>
+          <button class="iconbtn" title="Delete"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>
+          <input class="switch" type="checkbox" checked title="Enabled">
+        </div>
+      </div>
+
+      <div class="row jobrow" data-state="muted">
+        <span class="ftype" title="Shell command">SH</span>
+        <div class="cell">
+          <div class="cell__l1"><span class="row__n">Warm CI cache</span></div>
+          <div class="cell__l2"><span class="mono">./scripts/warm-cache.sh</span></div>
+        </div>
+        <div class="cell">
+          <div class="cell__l1 t-body">weekdays 07:30</div>
+          <div class="cell__l2"><span class="mono">next Mon 07:30</span></div>
+        </div>
+        <div class="cell">
+          <div class="cell__l1"><span class="state state--muted"><span class="state__dot state__dot--square"></span>stopped</span></div>
+          <div class="cell__l2">wound down during soft pause</div>
+        </div>
+        <div class="jobrow__ctl">
+          <button class="iconbtn" title="Run now"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M7 5v14l11-7z"/></svg></button>
+          <button class="iconbtn" title="Edit"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button>
+          <button class="iconbtn" title="Clone"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button>
+          <button class="iconbtn" title="Delete"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>
+          <input class="switch" type="checkbox" checked title="Enabled">
+        </div>
+      </div>
+
+      <div class="row jobrow">
+        <span class="ftype" title="Shell command">SH</span>
+        <div class="cell">
+          <div class="cell__l1"><span class="row__n">Nightly repo pull</span></div>
+          <div class="cell__l2"><span class="mono">git -C ~/mydevelopment pull --all</span></div>
+        </div>
+        <div class="cell">
+          <div class="cell__l1 t-body">daily 04:00</div>
+          <div class="cell__l2"><span class="mono">next Sun 04:00 · in 18h</span></div>
+        </div>
+        <div class="cell">
+          <div class="cell__l1"><span class="state state--ok"><span class="state__dot"></span>ok</span></div>
+          <div class="cell__l2"><span class="mono">04:00 · 2m 04s</span></div>
+        </div>
+        <div class="jobrow__ctl">
+          <button class="iconbtn" title="Run now"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M7 5v14l11-7z"/></svg></button>
+          <button class="iconbtn" title="Edit"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button>
+          <button class="iconbtn" title="Clone"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button>
+          <button class="iconbtn" title="Delete"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>
+          <input class="switch" type="checkbox" checked title="Enabled">
+        </div>
+      </div>
+
+      <div class="row jobrow">
+        <span class="ftype" title="Shell command">SH</span>
+        <div class="cell">
+          <div class="cell__l1"><span class="row__n">Disk usage report</span></div>
+          <div class="cell__l2"><span class="mono">cron */30 9-18 * * 1-5</span></div>
+        </div>
+        <div class="cell">
+          <div class="cell__l1 t-body">half-hourly, working hours</div>
+          <div class="cell__l2"><span class="mono">next Mon 09:00</span></div>
+        </div>
+        <div class="cell">
+          <div class="cell__l1"><span class="state state--ok"><span class="state__dot"></span>ok</span></div>
+          <div class="cell__l2"><span class="mono">Fri 18:00 · 0m 41s</span></div>
+        </div>
+        <div class="jobrow__ctl">
+          <button class="iconbtn" title="Run now"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M7 5v14l11-7z"/></svg></button>
+          <button class="iconbtn" title="Edit"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button>
+          <button class="iconbtn" title="Clone"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button>
+          <button class="iconbtn" title="Delete"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>
+          <input class="switch" type="checkbox" checked title="Enabled">
+        </div>
+      </div>
+
+      <div class="row jobrow">
+        <span class="ftype" title="Shell command">SH</span>
+        <div class="cell">
+          <div class="cell__l1"><span class="row__n">Prune docker images</span></div>
+          <div class="cell__l2"><span class="mono">docker system prune -af</span></div>
+        </div>
+        <div class="cell">
+          <div class="cell__l1 t-body">weekly · Sundays 05:00</div>
+          <div class="cell__l2"><span class="mono">next Sun 05:00 · in 19h</span></div>
+        </div>
+        <div class="cell">
+          <div class="cell__l1"><span class="state state--ok"><span class="state__dot"></span>ok</span></div>
+          <div class="cell__l2"><span class="mono">26 Jul · 1m 12s</span></div>
+        </div>
+        <div class="jobrow__ctl">
+          <button class="iconbtn" title="Run now"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M7 5v14l11-7z"/></svg></button>
+          <button class="iconbtn" title="Edit"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button>
+          <button class="iconbtn" title="Clone"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button>
+          <button class="iconbtn" title="Delete"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>
+          <input class="switch" type="checkbox" checked title="Enabled">
+        </div>
+      </div>
+
+      <div class="row jobrow" data-state="muted">
+        <span class="ftype ftype--info" title="Claude job">CL</span>
+        <div class="cell">
+          <div class="cell__l1"><span class="row__n">Flaky test hunter</span></div>
+          <div class="cell__l2"><span class="mono">~/mydevelopment/webapp-billing</span> · queued behind concurrency cap when fired</div>
+        </div>
+        <div class="cell">
+          <div class="cell__l1 t-body">daily 22:00</div>
+          <div class="cell__l2"><span class="mono">next 22:00 · in 12h</span></div>
+        </div>
+        <div class="cell">
+          <div class="cell__l1"><span class="state state--muted"><span class="state__dot state__dot--ring"></span>queued</span></div>
+          <div class="cell__l2"><span class="mono">22:00 Fri</span> · ran <span class="mono">22:41</span>, ok</div>
+        </div>
+        <div class="jobrow__ctl">
+          <button class="iconbtn" title="Run now"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M7 5v14l11-7z"/></svg></button>
+          <button class="iconbtn" title="Edit"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button>
+          <button class="iconbtn" title="Clone"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button>
+          <button class="iconbtn" title="Delete"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>
+          <input class="switch" type="checkbox" checked title="Enabled">
+        </div>
+      </div>
+
+      <div class="row jobrow jobrow--disabled">
+        <span class="ftype" title="Shell command">SH</span>
+        <div class="cell">
+          <div class="cell__l1"><span class="row__n">Vacuum sqlite</span></div>
+          <div class="cell__l2"><span class="mono">cron 0 1 * * 6</span> · disabled — will not fire</div>
+        </div>
+        <div class="cell">
+          <div class="cell__l1 t-body">Saturdays 01:00</div>
+          <div class="cell__l2"><span class="dash">—</span></div>
+        </div>
+        <div class="cell">
+          <div class="cell__l1"><span class="state state--muted"><span class="state__dot state__dot--solid"></span>disabled</span></div>
+          <div class="cell__l2"><span class="mono">19 Jul · 0m 18s</span> ok</div>
+        </div>
+        <div class="jobrow__ctl">
+          <button class="iconbtn" title="Run now"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M7 5v14l11-7z"/></svg></button>
+          <button class="iconbtn" title="Edit"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button>
+          <button class="iconbtn" title="Clone"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button>
+          <button class="iconbtn" title="Delete"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>
+          <input class="switch" type="checkbox" title="Disabled — enabling asks for your approval">
+        </div>
+      </div>
+
+      <div class="row jobrow jobrow--disabled">
+        <span class="ftype ftype--info" title="Claude job">CL</span>
+        <div class="cell">
+          <div class="cell__l1"><span class="row__n">Weekly dependency triage</span></div>
+          <div class="cell__l2"><span class="mono">cron 0 6 * * 1</span> · disabled — will not fire</div>
+        </div>
+        <div class="cell">
+          <div class="cell__l1 t-body">Mondays 06:00</div>
+          <div class="cell__l2"><span class="dash">—</span></div>
+        </div>
+        <div class="cell">
+          <div class="cell__l1"><span class="state state--muted"><span class="state__dot state__dot--solid"></span>disabled</span></div>
+          <div class="cell__l2">has never run</div>
+        </div>
+        <div class="jobrow__ctl">
+          <button class="iconbtn" title="Run now"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M7 5v14l11-7z"/></svg></button>
+          <button class="iconbtn" title="Edit"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button>
+          <button class="iconbtn" title="Clone"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button>
+          <button class="iconbtn" title="Delete"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>
+          <input class="switch" type="checkbox" title="Disabled — enabling asks for your approval">
+        </div>
+      </div>
+
+      <div class="row jobrow" data-state="muted">
+        <span class="ftype ftype--info" title="Claude job">CL</span>
+        <div class="cell">
+          <div class="cell__l1"><span class="row__n">Summarise weekend alerts</span></div>
+          <div class="cell__l2">model <span class="mono">fable</span> — pinned model is past its critical line</div>
+        </div>
+        <div class="cell">
+          <div class="cell__l1 t-body">daily 08:30</div>
+          <div class="cell__l2"><span class="mono">next Sun 08:30 · in 22h</span></div>
+        </div>
+        <div class="cell">
+          <div class="cell__l1"><span class="state state--muted"><span class="state__dot"></span>skipped</span></div>
+          <div class="cell__l2">fable at <span class="mono">90%</span> · resumes Wed</div>
+        </div>
+        <div class="jobrow__ctl">
+          <button class="iconbtn" title="Run now"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M7 5v14l11-7z"/></svg></button>
+          <button class="iconbtn" title="Edit"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button>
+          <button class="iconbtn" title="Clone"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button>
+          <button class="iconbtn" title="Delete"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>
+          <input class="switch" type="checkbox" checked title="Enabled">
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <p class="pagefoot">Static redesign mockup · sample data as of Sat 1 Aug 09:41 · <a href="index.html">all pages</a> · states: <a href="jobs-empty.html">empty</a> · <a href="jobs-filter-no-match.html">no filter match</a></p>
+</main>
+
+<div class="modalwrap">
+  <div class="modal modal--wide">
+    <div class="modal__head"><h2>New job</h2><a class="iconbtn" href="jobs.html" title="Close without saving" style="margin-left:auto;"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></a></div>
+    <div class="modal__body">
+      <div class="banner banner--bad" style="margin-bottom: 16px;">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></svg>
+        <div>
+          <b>The job wasn't saved — 3 fields need fixing.</b> Everything you typed is still here.
+          <ul class="errlist">
+            <li>Cron <span class="mono">0 1 * * * 6</span> has 6 fields — LaunchBox uses 5-field cron (minute hour day month weekday).</li>
+            <li>A Claude job needs a prompt — the prompt field is empty.</li>
+            <li>Timeout <span class="mono">600</span> is above the maximum of <span class="mono">240</span> minutes.</li>
+          </ul>
+        </div>
+      </div>
+      <fieldset class="fset">
+        <div class="fgrid">
+          <span class="flabel">Name</span>
+          <input type="text" class="field" value="Nightly changelog draft">
+          <span class="flabel">Type</span>
+          <div class="segs" style="max-width:320px;">
+            <button class="seg" aria-selected="true">Claude prompt</button>
+            <button class="seg">Shell command</button>
+          </div>
+          <span class="flabel">Prompt</span>
+          <textarea class="field" style="border-color: var(--bad); box-shadow: 0 0 0 3px var(--bad-wash);" placeholder="Empty — a Claude job needs a prompt"></textarea>
+          <span class="flabel">Working directory</span>
+          <input type="text" class="field field--mono" value="~/mydevelopment/webapp-billing">
+        </div>
+      </fieldset>
+      <fieldset class="fset">
+        <legend class="fset__t">Schedule</legend>
+        <div class="sched">
+          <div class="schedrow">
+            <div class="schedrow__line">
+              <div class="segs">
+                <button class="seg">Preset</button>
+                <button class="seg" aria-selected="true">Cron</button>
+                <button class="seg">Once</button>
+                <button class="seg">After reset</button>
+              </div>
+              <input type="text" class="field field--mono" value="0 1 * * * 6" style="max-width:160px; border-color: var(--bad); box-shadow: 0 0 0 3px var(--bad-wash);">
+              <button class="iconbtn" title="Remove this schedule"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+            </div>
+            <div class="schedrow__fires"><span style="color: var(--bad);">6 fields — expected 5</span></div>
+          </div>
+        </div>
+      </fieldset>
+      <fieldset class="fset">
+        <legend class="fset__t">Advanced</legend>
+        <div class="fgrid">
+          <span class="flabel">Timeout</span>
+          <div class="frow"><input type="number" class="field" value="600" style="max-width:90px; border-color: var(--bad); box-shadow: 0 0 0 3px var(--bad-wash);"><span class="t-meta" style="color: var(--bad);">maximum 240 minutes</span></div>
+        </div>
+      </fieldset>
+    </div>
+    <div class="modal__foot">
+      <span class="modal__consequence">Fix the 3 fields above, then save.</span>
+      <button class="btn btn--primary">Create job</button>
+    </div>
+  </div></div>
+</body>
+</html>

@@ -373,3 +373,28 @@ identical to SIGINT, so it buys nothing.
   below, and evidence that this class is easy to write here.
 - **✅ Identified 2026-07-31 (bead `0p5`): the intermittent failure is `tests/scheduler.test.js:162` — "afterReset alongside a once-entry: the spent once must not disable the job".** Caught on run 1 of a 40-run soak executed while the machine was under real load (a subagent, a CDP browser session and the daemon all running) — confirming the load-sensitivity suspicion recorded here on 2026-07-25, when it appeared alongside Chrome and two dev servers and then hid for 10 idle runs. Failure mode: `starts.length` is `0` not `1` at `:172` — the `once` entry gets 150ms of lead and a fixed 400ms window, and under load the scheduler tick slips past it, so the fire never happens inside the sleep. Full output: the soak kept the failing log. Fix filed as its own bead (poll-until-deadline instead of fixed sleeps); the same fixed-sleep pattern in the surrounding afterReset tests (e.g. `:152`, `:157`, `:183`) is worth sweeping in the same pass.
 - Usage probe (ground truth, ~2s, $0): `printf '%s\n' '{"type":"control_request","request_id":"1","request":{"subtype":"get_usage"}}' | claude -p --input-format stream-json --output-format stream-json --verbose`
+
+## 2026-08-01 — Full-app redesign mockups under `redesign/` (bead `dby`)
+
+29 static, cross-linked HTML pages redesigning every screen and state, built on the
+dense-product-ui system (IBM Plex, closed type scale, one-hue-one-meaning) with a **dark theme
+as default** plus a persisted light/dark toggle — the dark layer is token overrides in
+`redesign/assets/launchbox.css`, the skill's `system.css` is vendored untouched.
+
+Decisions that need remembering:
+
+- **IA is Overview + 5 tabs (History renamed Runs), chosen provisionally** — the explicit deal
+  is that it gets judged by clicking through, not locked. Overview adds a needs-attention feed,
+  a next-24h fire list and a daemon-unreachable banner; all render data the daemon already has.
+- **Run-state colour system:** red family split by dot *form* (fail solid · timeout ring ·
+  killed square); deliberate non-events (skipped/stopped/queued/disabled) are muted with their
+  own forms; amber is reserved for degree (bead priority pills, usage past warn, pause
+  escalation HOLD→SOFT→HARD); blue = actionable/in-progress.
+- Sessions pages are the visual target for the M5 build happening in parallel — mockups only,
+  nothing outside `redesign/` touched.
+
+Verification: every page rendered headless in **both themes** (58 captures); 7 dark pages
+reviewed by hand, the rest split across two subagent QA passes with a defect checklist —
+0 genuine defects, 2 fixes applied along the way (queued-row copy, after-reset jitter field
+wrapping as a group). Type-scale audit via grep: all sizes on the closed scale, weights
+400/500/600 only, no hex colours in markup.
