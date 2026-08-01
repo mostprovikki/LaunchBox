@@ -331,6 +331,37 @@ test('GET/PUT /api/pause: modes, what they block, and the runs winding down', as
   assert.equal(r.status, 400);
 });
 
+test('jobs: GET /api/jobs reports the active run, not a later overlap-skip stub, as lastRun (claude-scheduler-3ut)', async (t) => {
+  // lib/runner.js's overlap guard inserts a zero-duration `skipped` run the
+  // instant a job fires while its own previous run is still active — that
+  // stub's createdAt is later than the real run's, so a naive "most recent by
+  // createdAt" reported the job as `skipped` while it was genuinely still
+  // running, hiding the Jobs tab's wind-down/stop controls behind a stale row.
+  const { db, spawnFn, server, base } = await boot();
+  t.after(() => server.close());
+
+  const { body: job } = await req(base(), 'POST', '/api/jobs', jobPayload());
+  const { body: run } = await req(base(), 'POST', `/api/jobs/${job.id}/run`);
+  assert.equal(run.status, 'running');
+
+  const { body: skip } = await req(base(), 'POST', `/api/jobs/${job.id}/run`);
+  assert.equal(skip.status, 'skipped', 'the overlap guard skips the second fire');
+
+  let r = await req(base(), 'GET', '/api/jobs');
+  let seen = r.body.jobs.find((j) => j.id === job.id);
+  assert.equal(seen.lastRun.id, run.id, 'the real running run wins over the newer stale stub');
+  assert.equal(seen.lastRun.status, 'running');
+
+  // Mutation check: once the real run finishes, nothing is active any more —
+  // the stub (now genuinely the newest row) is reported again. Proves the
+  // fix reads live state rather than hardcoding "ignore skipped".
+  spawnFn.calls[0].child.kill('SIGTERM');
+  await sleep(50);
+  r = await req(base(), 'GET', '/api/jobs');
+  seen = r.body.jobs.find((j) => j.id === job.id);
+  assert.equal(seen.lastRun.id, skip.id, 'once nothing is active, the newest row is reported again');
+});
+
 test('pause: the legacy settings alias still works and cannot weaken a stronger mode', async (t) => {
   const { server, base } = await boot();
   t.after(() => server.close());
@@ -436,6 +467,10 @@ test('schedule preview + settings round-trip (per-extension)', async (t) => {
     // burst spending its whole slice in three minutes, and keeps attempts far
     // enough apart that the reading driving the ceiling has refreshed between them.
     burstMinGapMin: 15,
+    // No approval wired in this boot(), so the degradation notice reports
+    // nothing to say rather than guessing.
+    approvalDegraded: false,
+    approvalDegradedReason: null,
     // Budget guard defaults ship conservative — see lib/budget.js.
     budgetGuard: true,
     reserveFiveHourPct: 80,
@@ -529,6 +564,41 @@ test('settings: budget keys round-trip and reject out-of-range values', async (t
   }
   r = await req(base(), 'GET', '/api/settings');
   assert.equal(r.body.reserveFiveHourPct, 60, 'a rejected write changes nothing');
+});
+
+test('settings: exposes the approval degradation notice, read-only', async (t) => {
+  // No approval wired at all (mirrors a route that never passed one): must not
+  // crash and must default to "not degraded" rather than throwing on a null deref.
+  const plain = await boot();
+  t.after(() => plain.server.close());
+  let r = await req(plain.base(), 'GET', '/api/settings');
+  assert.equal(r.body.approvalDegraded, false);
+  assert.equal(r.body.approvalDegradedReason, null);
+
+  // A real approval helper reporting degraded (the non-macOS fail-open path in
+  // lib/approval.js's available()) must surface on the payload.
+  const { server, base, approval } = await bootGated({ ok: true });
+  t.after(() => server.close());
+  approval.available = () => ({
+    ok: false, degraded: true, platform: 'linux',
+    reason: 'approvals are not implemented on linux yet — gated actions run without one',
+  });
+  r = await req(base(), 'GET', '/api/settings');
+  assert.equal(r.body.approvalDegraded, true);
+  assert.equal(r.body.approvalDegradedReason, 'approvals are not implemented on linux yet — gated actions run without one');
+
+  // Read-only: PUT must not be able to clear it by sending a falsy value.
+  await req(base(), 'PUT', '/api/settings', { approvalDegraded: false, approvalDegradedReason: null });
+  r = await req(base(), 'GET', '/api/settings');
+  assert.equal(r.body.approvalDegraded, true, 'the field cannot be written by the client');
+
+  // Mutation check: flipping the underlying state back to not-degraded must
+  // flip the payload too, proving the field is actually derived from
+  // available() and not a hardcoded true.
+  approval.available = () => ({ ok: true, degraded: false, platform: 'darwin' });
+  r = await req(base(), 'GET', '/api/settings');
+  assert.equal(r.body.approvalDegraded, false);
+  assert.equal(r.body.approvalDegradedReason, null);
 });
 
 test('budget: explain reflects the live snapshot and the guard fails open', async (t) => {
