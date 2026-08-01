@@ -428,3 +428,49 @@ cutover; API policy is additive-only, changed semantics go to `/api/v2/*`), **So
 sub-agents** in waves, epic `claude-scheduler-btv` with 15 children and verified `blocks`
 edges — `bd ready` offers only A1. Full plan: `redesign/IMPLEMENTATION-PLAN.md`. No
 autoLabel on any of it: code beads can't verify their own work unattended.
+
+## 2026-08-01 · /v2 wave 0 begins — A1 shell, and why its four green tests meant nothing
+
+`btv.1` (A1) merged as `b293818`: `/v2` serves the audited shell — `redesign/assets/{system,
+launchbox}.css` + `theme.js` copied byte-identical (`cmp`-verified, and kept that way; they are
+the AA-clean token layer, not a starting point) — plus an explicit exact-path `GET /v2` route.
+That route exists because `serve-static` 301-redirects a slash-less directory request, so a bare
+`/v2` could never reach the 200 the bead's acceptance asks for. `/v2` stays deliberately
+unauthenticated like the rest of `public/`; only `/api` is token-gated, so the page can load in
+order to explain a missing key.
+
+**The lesson of the wave, recorded because it nearly shipped.** The first pass was reported
+complete with 4 new tests, 448/448 green, and a mutation table. The first real-browser load was
+a white unstyled page: `bodyBg rgba(0,0,0,0)`, `document.styleSheets` empty, `pageerror:
+lbToggleTheme is not defined`. The document sat at `/v2` with no trailing slash, so every
+document-relative `assets/…` reference resolved against `/` and 404'd. Two of the tests were
+individually true and jointly worthless — one asserted the response *body contains* the
+stylesheet link, the other fetched `/v2/assets/system.css` directly, which is not the URL a
+browser requests from a document at `/v2`. Fixed with root-absolute asset paths (not a redirect,
+which the acceptance forbids, and not `<base href>`, which would silently rewrite A2's router
+URLs too). The replacement test resolves each `href`/`src` the way a browser does — `new
+URL(attr, documentUrl)` — then fetches it and asserts 200 with a real content-type, explicitly
+asserting `text/html` is *not* what comes back, since that MIME is the 404-fallthrough's
+signature. Generalised to memory as `assert-resolved-subresources-not-markup`.
+
+Three mutations were re-run independently at the merge bar rather than taken on report (route
+removed → 301; `/v2` put behind the `/api` gate; asset href back to relative → 404): all three
+red, restored green. Browser leg: headless Chromium 1280×900, both themes — zero console errors,
+zero failed requests, dark set before first paint, toggle persists across reload,
+`scrollWidth === clientWidth` in both themes and on hover (the 48px tooltip overflow stayed
+fixed), `[data-tip]:focus-visible` tooltip appears on Tab.
+
+Owner decisions this session: **fonts stay on the Google Fonts CDN link** as the mockups have it
+— so type is correct online and silently falls back to the system stack offline, which means the
+E1 gate measures fallback metrics if it ever runs without network. Verified the CDN actually
+loads and that IBM Plex Mono reads `false` from `document.fonts.check` only because the bare
+skeleton renders no mono glyph yet; it resolves to Plex Mono the moment mono content exists.
+Second decision: the orchestrator commits per merge bar, sub-agents never commit.
+
+Sequencing note: **C1a (`server.js`) and A2 (`public/v2/`) were dispatched concurrently** — the
+plan puts them in different waves, but its actual constraint is file-disjointness and these two
+share no file. Verification runs against an isolated instance on **43410** (this project's
+allocated QA/sandbox port) started with its own `CS_DATA`; an empty DB is what makes it safe to
+run a second scheduler at all, since one sharing the live DB could fire real jobs. The owner's
+daemon on 43400 is a foreground `npm start`, not launchd-supervised, so it is never restarted to
+test — a second isolated instance is.
