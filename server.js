@@ -392,6 +392,19 @@ export function createApp({
   // known windows rather than rejecting the job.
   const windows = () => usage?.snapshot()?.windows ?? null;
 
+  // lib/runner.js's overlap guard (createRunner's start()) inserts a
+  // zero-duration `skipped` run the instant a job fires while its own
+  // previous run is still active — correct (WIP.md's pinned "already-running
+  // wins, no skipReason" behaviour, see tests/api.test.js's soft-pause test —
+  // do not re-judge that here). But that stub's createdAt is *later* than the
+  // real run's, so a plain "most recent by createdAt" reports the job's state
+  // as `skipped` while it is genuinely still running — which hid the Jobs
+  // tab's wind-down (⤓) and stop (■) controls behind a stale row and offered
+  // ▶ instead (claude-scheduler-3ut). An actually-active run always wins.
+  const activeRunFor = (jobId) => listRuns(db, { jobId, status: 'running', limit: 1 })[0]
+    ?? listRuns(db, { jobId, status: 'queued', limit: 1 })[0]
+    ?? null;
+
   const decorate = (job) => ({
     ...job,
     nextFire: scheduler.nextFire(job.id),
@@ -399,7 +412,7 @@ export function createApp({
     // run without fetching the run's meta separately.
     lastRun: (({ id, status, finishedAt, startedAt, meta } = {}) => (id
       ? { id, status, finishedAt, startedAt, skipReason: meta?.skipReason ?? null }
-      : null))(lastRun(db, job.id) ?? {}),
+      : null))(activeRunFor(job.id) ?? lastRun(db, job.id) ?? {}),
   });
 
   app.get('/api/extensions', (req, res) => {
@@ -1234,6 +1247,14 @@ export function createApp({
       // and it keeps attempts far enough apart that the usage reading driving the
       // ceiling has actually refreshed between them.
       burstMinGapMin: Number(getSetting(db, 'burstMinGapMin', BURST_DEFAULTS.burstMinGapMin)) || BURST_DEFAULTS.burstMinGapMin,
+      // Read-only. lib/approval.js's available() reports `degraded` on a
+      // non-macOS host: the Touch ID gate fails OPEN there (see its comment),
+      // so every high-power action (job create/edit, executable-path changes,
+      // activation, deletes) proceeds with NO approval prompt at all. Without
+      // this the only record of that was a console.warn at boot — nothing a
+      // browser user would ever see. Never written by PUT /api/settings.
+      approvalDegraded: approval ? approval.available().degraded === true : false,
+      approvalDegradedReason: approval && approval.available().degraded ? approval.available().reason : null,
       ...policy.settings(),
       extensions: extSettingsOut(),
     });
@@ -1547,7 +1568,11 @@ export async function main() {
   // an error (Claude Code may simply never have run here) — createSessionIndex
   // only warns when something is listening, so this listener is what makes that
   // warning reach daemon.log instead of being silently dropped.
-  const sessions = createSessionIndex({ db });
+  // Overridable for the same reason as CS_APPROVAL_TIMEOUT_MS / CS_FORCE_PLATFORM
+  // above: a sandboxed verification run needs a throwaway transcript root
+  // rather than the real ~/.claude/projects. Never set outside a throwaway
+  // CS_DATA.
+  const sessions = createSessionIndex({ db, root: process.env.CS_SESSIONS_ROOT || undefined });
   sessions.events.on('error', (err) => console.warn(`sessions: ${err?.message ?? err}`));
   sessions.start();
   sessions.scan().catch((err) => console.error(`sessions: initial scan failed — ${err?.message ?? err}`));
@@ -1562,6 +1587,10 @@ export async function main() {
     // through 180s twice. The real default stays covered by a unit test with an
     // injected clock.
     timeoutMs: Number(process.env.CS_APPROVAL_TIMEOUT_MS) || undefined,
+    // Same idea, for the degraded (non-macOS) path: there is no Linux box to
+    // verify the Settings-tab notice against, so a sandboxed verification run
+    // can force it without needing one. Never set outside a throwaway CS_DATA.
+    platform: process.env.CS_FORCE_PLATFORM || undefined,
   });
   const av = approval.available();
   if (av.degraded) console.warn(`approval: ${av.reason} — high-power actions are NOT gated on this platform`);

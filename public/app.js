@@ -4,6 +4,10 @@ import { renderUsage } from './usage.js';
 import { iconFor } from './icons.js';
 import { refreshProjects } from './projects.js';
 import { refreshSessions } from './sessions.js';
+// Shared with the Sessions tab (public/sessions.js) — same turn renderer, a
+// different data source. Treated read-only here: only its documented export
+// is called, never its internals.
+import { renderConversation } from './transcript.js';
 // Side-effect only: attaches the one delegated `data-tip` listener for the
 // whole app. Only the Sessions tab uses `data-tip` today, but the listener is
 // cheap and global by design (public/tooltip.js), so it loads once here.
@@ -750,21 +754,67 @@ function renderRunActions(run) {
   }
 }
 
+// A raw <pre> tail reads fine for a shell job, but for a claude run it is the
+// exact same NDJSON transcript the Sessions tab renders as a conversation
+// (extensions/claude/formatter.js:20 captures meta.sessionId for this reason).
+// Created here rather than in index.html — see the settings-tab notice above
+// for the same reasoning — and styled with the Sessions tab's own class so it
+// doesn't need a style.css change either.
+function ensureLogTranscriptEl() {
+  let el = $('#log-transcript');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'log-transcript';
+    el.className = 's-transcript';
+    el.style.height = '260px';
+    el.style.overflow = 'auto';
+    el.style.background = 'var(--bg)';
+    el.hidden = true;
+    $('#log-view').insertAdjacentElement('afterend', el);
+  }
+  return el;
+}
+
 // The drawer is a snapshot, not a stream. There is no SSE tail any more:
 // `EventSource` cannot send an Authorization header, so a live tail would have
 // meant a second auth path with the token in the URL. What replaces it is this
 // plus Refresh, plus the `tail -f` line for anyone who wants output as it lands.
 async function loadLogSnapshot(run) {
   const view = $('#log-view');
-  try {
-    // api() returns the parsed body, or the raw text when it isn't JSON — a log
-    // is text/plain, so this is the log itself.
-    const text = await api('GET', `/api/runs/${run.id}/log`);
-    view.textContent = typeof text === 'string' ? text : '';
-    view.scrollTop = view.scrollHeight;
+  const transcriptEl = ensureLogTranscriptEl();
+  const job = jobs.find((j) => j.id === run.jobId);
+  const isClaude = extById(job?.type)?.id === 'claude';
+  const sessionId = run.meta?.sessionId;
+  let renderedTurns = false;
+  // Only attempted for a claude run that actually carries a sessionId. A shell
+  // run has no transcript to fetch at all, so it never leaves the raw view.
+  if (isClaude && sessionId) {
+    try {
+      const { turns } = await api('GET', `/api/sessions/${encodeURIComponent(sessionId)}/conversation`);
+      transcriptEl.innerHTML = '';
+      transcriptEl.appendChild(renderConversation(turns ?? []));
+      renderedTurns = true;
+    } catch {
+      // Unknown session, the index unavailable (501 — no instance wired), or
+      // any other fetch failure: fall back to the raw tail below rather than
+      // showing an error, since that raw tail is itself a complete answer.
+    }
+  }
+  transcriptEl.hidden = !renderedTurns;
+  view.hidden = renderedTurns;
+  if (renderedTurns) {
     $('#log-asof').textContent = `as of ${new Date().toLocaleTimeString()}`;
-  } catch (e) {
-    apiErr(e, 'could not load the log');
+  } else {
+    try {
+      // api() returns the parsed body, or the raw text when it isn't JSON — a log
+      // is text/plain, so this is the log itself.
+      const text = await api('GET', `/api/runs/${run.id}/log`);
+      view.textContent = typeof text === 'string' ? text : '';
+      view.scrollTop = view.scrollHeight;
+      $('#log-asof').textContent = `as of ${new Date().toLocaleTimeString()}`;
+    } catch (e) {
+      apiErr(e, 'could not load the log');
+    }
   }
   // Progress used to arrive as a stream event; it now rides on the run row, which
   // /api/runs already returns, so it is only as fresh as the last read.
@@ -784,6 +834,10 @@ function openLog(run, jobName = '') {
   // request resolves, and until then the previous run's log path and progress
   // would still be sitting in the header describing a different run.
   $('#log-view').textContent = '';
+  $('#log-view').hidden = false;
+  const transcriptEl = ensureLogTranscriptEl();
+  transcriptEl.innerHTML = '';
+  transcriptEl.hidden = true;
   $('#log-asof').textContent = '';
   $('#log-progress').textContent = '';
   $('#log-follow').textContent = '';
@@ -845,6 +899,30 @@ function renderExtSettings(values) {
   if (!wrap.children.length) wrap.innerHTML = '<p class="muted">No extension settings.</p>';
 }
 
+// Non-macOS hosts fail the Touch ID gate OPEN (lib/approval.js's `available()`
+// — no helper exists there, so it can't fail closed). Before this the only
+// record of that was a server console.warn at boot; a browser user had no way
+// to know that job create/edit, executable-path changes, activation and
+// deletes were all going through with no confirmation prompt. Created here
+// rather than in index.html so a platform that isn't degraded ships no extra
+// DOM at all.
+function renderApprovalNotice(s) {
+  const form = $('#settings-form');
+  if (!form) return;
+  let el = $('#approval-degraded-notice');
+  if (!s?.approvalDegraded) { el?.remove(); return; }
+  if (!el) {
+    el = document.createElement('p');
+    el.id = 'approval-degraded-notice';
+    el.className = 'note';
+    el.style.color = 'var(--warn)';
+    form.insertBefore(el, form.firstChild);
+  }
+  el.textContent = `⚠ Touch ID approval is unavailable on this platform, so job creation/edits, `
+    + `executable-path changes, activation and deletes all proceed WITHOUT a confirmation prompt. `
+    + `${s.approvalDegradedReason || ''}`.trim();
+}
+
 // Whether the guard is actually enforcing right now — it fails open, so
 // "not enforcing" is normal and has to be said out loud rather than implied.
 async function renderBudgetState() {
@@ -883,6 +961,7 @@ async function loadSettings() {
     $('#s-bdPath').value = s.bdPath ?? '';
     $('#s-worktreeRoot').value = s.worktreeRoot ?? '';
     $('#s-burstMinGapMin').value = s.burstMinGapMin ?? 15;
+    renderApprovalNotice(s);
     renderBudgetState();
   } catch { /* daemon briefly down */ }
 }
