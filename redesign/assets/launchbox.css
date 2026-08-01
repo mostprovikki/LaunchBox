@@ -10,6 +10,48 @@
      fail = solid dot · timeout = ring · killed = square
    ========================================================================== */
 
+/* ---------------------------------------------------------- Page width */
+/* Lists read better pillar-boxed than full-bleed. One width everywhere;
+   settings and the transcript narrow further with inline styles. */
+.shell { max-width: 1120px; }
+
+/* -------------------------------------------------- Instant tooltips */
+/* Native title waits ~1s; these appear on hover immediately. */
+[data-tip] { position: relative; }
+[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 7px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: 240px;
+  padding: 5px 9px;
+  border-radius: var(--r-sm);
+  background: var(--ink);
+  color: var(--page);
+  font: 400 11.5px/1.4 var(--sans);
+  text-align: left;
+  white-space: normal;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .1s ease .05s;
+  z-index: 90;
+}
+[data-tip]:hover::after { opacity: 1; }
+.appbar [data-tip]::after { bottom: auto; top: calc(100% + 7px); }
+/* keep edge tooltips on-screen in the fixed action column */
+.rowact [data-tip]:last-child::after { left: auto; right: 0; transform: none; }
+
+/* Disabled action affordance: present but visibly impossible, with the why
+   in its tooltip — never silently missing. */
+.iconbtn:disabled { opacity: .3; cursor: not-allowed; }
+.iconbtn:disabled:hover { background: transparent; color: var(--ink-2); }
+[data-tip]:disabled { pointer-events: auto; }   /* tooltip still shows the reason */
+
+/* Fixed-width, right-aligned action column so every row lines up. */
+.rowact { display: flex; align-items: center; gap: 2px; justify-content: flex-end; }
+
 /* ------------------------------------------------------------ App bar nav */
 
 .mainnav { display: flex; gap: 2px; height: 56px; margin-left: 6px; }
@@ -213,7 +255,7 @@
 
 /* ------------------------------------------------------------- Run rows */
 
-.runrow { grid-template-columns: 120px minmax(0, 1fr) 150px 90px auto; }
+.runrow { grid-template-columns: 110px minmax(0, 1fr) 92px 84px 176px; align-items: center; }
 
 /* --------------------------------------------------------- Project rows */
 
@@ -224,6 +266,34 @@
 /* ------------------------------------------------------------- Sessions */
 
 .sesrow { grid-template-columns: minmax(0, 1.4fr) 110px 130px 110px 130px auto; }
+
+/* Compact session cards */
+.sesgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.sescard {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-1);
+  padding: 13px 15px;
+  display: grid;
+  gap: 7px;
+}
+.sescard__t {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sescard__m {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--ink-3);
+}
+.sescard__a { display: flex; gap: 6px; align-items: center; }
+.sescard__a .btn { height: 26px; padding: 0 9px; font-size: 12px; }
 
 /* Transcript */
 .msg { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 14px; padding: 14px 18px; border-bottom: 1px solid var(--line-2); }
