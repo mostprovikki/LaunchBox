@@ -9,8 +9,8 @@ import { refreshSessions } from './sessions.js';
 // is called, never its internals.
 import { renderConversation } from './transcript.js';
 // Side-effect only: attaches the one delegated `data-tip` listener for the
-// whole app. Only the Sessions tab uses `data-tip` today, but the listener is
-// cheap and global by design (public/tooltip.js), so it loads once here.
+// whole app — every tab uses `data-tip` now, and the listener is cheap and
+// global by design (public/tooltip.js), so it loads once here.
 import './tooltip.js';
 // Only for the fragment hand-off below; ordinary calls get the token via api().
 import { getToken, guardedSubmit, FAILURE_COPY } from './auth.js';
@@ -127,25 +127,25 @@ function renderJobs() {
     el.className = 'item' + (j.enabled ? '' : ' disabled');
     el.innerHTML = `
       <div class="grow">
-        <div class="title"><span class="type-ico" title="${esc(extById(j.type)?.name ?? j.type)}">${iconFor(extById(j.type))}</span>${esc(j.name)}</div>
+        <div class="title"><span class="type-ico" data-tip="${esc(extById(j.type)?.name ?? j.type)}">${iconFor(extById(j.type))}</span>${esc(j.name)}</div>
         <div class="sub">
           <span>${esc(scheduleText(j.schedule))}</span>
-          <span title="${esc(fullTime(j.nextFire))}">${j.nextFire ? 'next ' + relTime(j.nextFire) : j.enabled ? '' : 'disabled'}</span>
-          ${j.lastRun ? `<span class="linkish" data-act="last" title="${esc(fullTime(j.lastRun.finishedAt || j.lastRun.startedAt))}">last: ${statusHtml(j.lastRun.status)}</span>` : ''}
-          ${j.lastRun?.skipReason ? `<span class="skip-chip" title="${esc(j.lastRun.skipReason)}">⛔ skipped</span>` : ''}
+          <span data-tip="${esc(fullTime(j.nextFire))}">${j.nextFire ? 'next ' + relTime(j.nextFire) : j.enabled ? '' : 'disabled'}</span>
+          ${j.lastRun ? `<span class="linkish" data-act="last" data-tip="${esc(fullTime(j.lastRun.finishedAt || j.lastRun.startedAt))}">last: ${statusHtml(j.lastRun.status)}</span>` : ''}
+          ${j.lastRun?.skipReason ? `<span class="skip-chip" data-tip="${esc(j.lastRun.skipReason)}">⛔ skipped</span>` : ''}
         </div>
       </div>
       <div class="actions">
         ${live
           // ⤓ not ⏹: next to ■ the two squares are indistinguishable at 12px,
           // and these two buttons do very different things to your work.
-          ? `<button class="icon soft-stop-btn" data-act="stop" title="Wind down — let this run stop at its next safe point">⤓</button>
-             <button class="icon stop-btn" data-act="kill" title="Stop this run now">■</button>`
-          : '<button class="icon run-btn" data-act="run" title="Run once now (even if disabled)">▶</button>'}
-        <label class="switch" title="${j.enabled ? 'Disable schedule' : 'Enable schedule'}"><input type="checkbox" data-act="toggle" ${j.enabled ? 'checked' : ''}><i></i></label>
-        <button class="icon" data-act="edit" title="Edit">✎</button>
-        <button class="icon" data-act="clone" title="Clone">⧉</button>
-        <button class="icon" data-act="del" title="Delete">🗑</button>
+          ? `<button class="icon soft-stop-btn" data-act="stop" aria-label="Wind down" data-tip="Wind down — let this run stop at its next safe point">⤓</button>
+             <button class="icon stop-btn" data-act="kill" aria-label="Stop this run now" data-tip="Stop this run now">■</button>`
+          : '<button class="icon run-btn" data-act="run" aria-label="Run once now" data-tip="Run once now (even if disabled)">▶</button>'}
+        <label class="switch" data-tip="${j.enabled ? 'Disable schedule' : 'Enable schedule'}"><input type="checkbox" data-act="toggle" aria-label="${j.enabled ? 'Disable schedule' : 'Enable schedule'}" ${j.enabled ? 'checked' : ''}><i></i></label>
+        <button class="icon" data-act="edit" aria-label="Edit" data-tip="Edit">✎</button>
+        <button class="icon" data-act="clone" aria-label="Clone" data-tip="Clone">⧉</button>
+        <button class="icon" data-act="del" aria-label="Delete" data-tip="Delete">🗑</button>
       </div>`;
     el.querySelectorAll('[data-act]').forEach((n) => {
       n.addEventListener(n.dataset.act === 'toggle' ? 'change' : 'click', () => onJobAction(j, n.dataset.act, n));
@@ -330,9 +330,9 @@ function addSchedRow(entry = null) {
     <input class="sr-once" type="datetime-local" hidden>
     <input class="sr-cron" placeholder="0 9 * * *" hidden>
     <select class="sr-window" hidden>${resetWindows().map((w) => `<option value="${esc(w)}">${esc(resetWindowLabel(w))} window</option>`).join('')}</select>
-    <input class="sr-offset" type="number" min="0" max="240" value="3" title="Minutes after the reset" hidden>
-    <input class="sr-jitter" type="number" min="0" max="60" value="2" title="Spread: up to this many extra minutes (same every time for this job)" hidden>
-    <button type="button" class="icon sr-del" title="Remove this time">✕</button>`;
+    <input class="sr-offset" type="number" min="0" max="240" value="3" aria-label="Minutes after the reset" data-tip="Minutes after the reset" hidden>
+    <input class="sr-jitter" type="number" min="0" max="60" value="2" aria-label="Spread: up to this many extra minutes (same every time for this job)" data-tip="Spread: up to this many extra minutes (same every time for this job)" hidden>
+    <button type="button" class="icon sr-del" aria-label="Remove this time" data-tip="Remove this time">✕</button>`;
   const sel = row.querySelector('.sr-preset');
 
   if (entry?.type === 'once') {
@@ -676,19 +676,19 @@ async function refreshRuns() {
           <div class="title">${esc(name(r.jobId))}</div>
           <div class="sub">
             <span>${r.trigger}</span>
-            <span title="${esc(fullTime(r.startedAt || r.createdAt))}">${relTime(r.startedAt || r.createdAt)}</span>
+            <span data-tip="${esc(fullTime(r.startedAt || r.createdAt))}">${relTime(r.startedAt || r.createdAt)}</span>
             <span>${duration(r.durationMs)}</span>
-            ${r.meta?.skipReason ? `<span class="skip-chip" title="Why this fire didn't run">${esc(r.meta.skipReason)}</span>` : ''}
-            ${live && r.meta?.stopRung ? `<span class="stopping-chip" title="${esc(r.meta.stopReason ?? 'stopping')} — currently at ${esc(r.meta.stopRung)}">stopping…</span>` : ''}
+            ${r.meta?.skipReason ? `<span class="skip-chip" data-tip="Why this fire didn't run">${esc(r.meta.skipReason)}</span>` : ''}
+            ${live && r.meta?.stopRung ? `<span class="stopping-chip" data-tip="${esc(r.meta.stopReason ?? 'stopping')} — currently at ${esc(r.meta.stopRung)}">stopping…</span>` : ''}
             <!-- extensions/claude/formatter.js captures sessionId into runs.meta on
                  every claude -p run; cross-links to the Sessions tab (M5 §5.4). -->
-            ${r.meta?.sessionId ? `<a class="session-link" href="#sessions?open=${esc(r.meta.sessionId)}" title="Open this run's Claude session transcript">session ↗</a>` : ''}
+            ${r.meta?.sessionId ? `<a class="session-link" href="#sessions?open=${esc(r.meta.sessionId)}" data-tip="Open this run's Claude session transcript">session ↗</a>` : ''}
           </div>
         </div>
         <div class="actions">
-          ${live && !r.meta?.stopRung ? '<button class="icon soft-stop-btn" data-act="stop" title="Wind down at the next safe point">⤓</button>' : ''}
-          ${live ? '<button class="icon stop-btn" data-act="kill" title="Stop now">■</button>' : ''}
-          <button class="icon" data-act="log" title="View log">☰</button>
+          ${live && !r.meta?.stopRung ? '<button class="icon soft-stop-btn" data-act="stop" aria-label="Wind down" data-tip="Wind down at the next safe point">⤓</button>' : ''}
+          ${live ? '<button class="icon stop-btn" data-act="kill" aria-label="Stop now" data-tip="Stop now">■</button>' : ''}
+          <button class="icon" data-act="log" aria-label="View log" data-tip="View log">☰</button>
         </div>`;
       el.addEventListener('click', () => openLog(r, name(r.jobId)));
       el.querySelector('[data-act="log"]').addEventListener('click', (ev) => { ev.stopPropagation(); openLog(r, name(r.jobId)); });

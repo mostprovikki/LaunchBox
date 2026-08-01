@@ -64,7 +64,7 @@ const meterHtml = (m, t) => {
   const title = [m.label, typeof m.percent === 'number' ? `${m.percent}%` : 'unknown', m.note,
     untilText(m.resetsAt), m.resetsAt ? `(${fullTime(m.resetsAt)})` : '']
     .filter(Boolean).join(' · ');
-  return `<span class="meter ${level(m, t)}" title="${esc(title)}">
+  return `<span class="meter ${level(m, t)}" data-tip="${esc(title)}">
     <span class="m-label">${esc(m.label)}</span>
     <span class="m-bar"><i style="width:${pct}%"></i></span>
     <span class="m-pct">${typeof m.percent === 'number' ? `${m.percent}%` : '—'}</span>
@@ -100,7 +100,7 @@ export function renderUsage(data) {
 
   if (mode === 'banner') {
     strip.classList.toggle('stale', !!data?.stale);
-    strip.title = data ? staleTitle(data) : '';
+    if (data) strip.dataset.tip = staleTitle(data); else strip.removeAttribute('data-tip');
     strip.innerHTML = list.length
       ? list.map((m) => meterHtml(m, t)).join('')
       : `<span class="muted">${esc(noteFor(data ?? {}))}</span>`;
@@ -112,5 +112,5 @@ export function renderUsage(data) {
   if (!worst) return;
   chip.className = `pill usage-chip ${level(worst, t)}${data?.stale ? ' stale' : ''}`;
   chip.textContent = `◔ ${worst.label} ${worst.percent}%`;
-  chip.title = `${list.map((m) => `${m.label} ${m.percent}% · ${untilText(m.resetsAt)}`).join('\n')}\n${staleTitle(data)}`;
+  chip.dataset.tip = `${list.map((m) => `${m.label} ${m.percent}% · ${untilText(m.resetsAt)}`).join(' · ')} · ${staleTitle(data)}`;
 }

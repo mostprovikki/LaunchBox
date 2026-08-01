@@ -35,7 +35,7 @@ const STATE_TITLE = {
 
 // ---------- rendering ----------
 const stateChip = (state) =>
-  `<span class="chip pstate pstate-${esc(state)}" title="${esc(STATE_TITLE[state] ?? '')}">${esc(state)}</span>`;
+  `<span class="chip pstate pstate-${esc(state)}" data-tip="${esc(STATE_TITLE[state] ?? '')}">${esc(state)}</span>`;
 
 // `ready.count === null` means "never polled", which is a different fact from
 // "polled, nothing ready" — a zero there would be a lie about what we know.
@@ -52,7 +52,7 @@ function lines(cls, items) {
 // same repo is the expected collision, so it gets informational styling and the
 // consecutive count rather than an alarm on the first miss.
 const busyChip = (n) =>
-  `<span class="busy-chip" title="Another bd or dolt process holds the beads database. The scheduler backs off and tries again.">`
+  `<span class="busy-chip" data-tip="Another bd or dolt process holds the beads database. The scheduler backs off and tries again.">`
   + `database busy, will retry${n > 1 ? ` · ${n} polls in a row` : ''}</span>`;
 
 // `lastError` is written only by a poll that genuinely failed and is cleared on
@@ -75,11 +75,11 @@ function projectRow(p) {
     <div class="grow">
       <div class="title">${esc(p.name)}${stateChip(p.state)}</div>
       <div class="sub">
-        <span class="ppath" title="${esc(p.path)}">${esc(p.path)}</span>
-        <span title="${esc(p.beadsDir ? `beads directory: ${p.beadsDir}` : 'beads directory not resolved yet')}">${esc(p.bdVersion || 'bd version unknown')}</span>
-        <span title="${esc(p.lastPollAt ? fullTime(p.lastPollAt) : 'never polled')}">${p.lastPollAt ? `polled ${relTime(p.lastPollAt)}` : 'never polled'}</span>
+        <span class="ppath" data-tip="${esc(p.path)}">${esc(p.path)}</span>
+        <span data-tip="${esc(p.beadsDir ? `beads directory: ${p.beadsDir}` : 'beads directory not resolved yet')}">${esc(p.bdVersion || 'bd version unknown')}</span>
+        <span data-tip="${esc(p.lastPollAt ? fullTime(p.lastPollAt) : 'never polled')}">${p.lastPollAt ? `polled ${relTime(p.lastPollAt)}` : 'never polled'}</span>
         <span>${esc(readyText(p))}</span>
-        ${held ? `<span title="Beads checked out to a run right now — deleting the project would abandon them.">${held} lease${held === 1 ? '' : 's'} held</span>` : ''}
+        ${held ? `<span data-tip="Beads checked out to a run right now — deleting the project would abandon them.">${held} lease${held === 1 ? '' : 's'} held</span>` : ''}
         ${p.busyStreak > 0 ? busyChip(p.busyStreak) : ''}
       </div>
       ${lines('p-reason p-config-error', p.configErrors)}
@@ -89,11 +89,11 @@ function projectRow(p) {
       <div class="ready-panel" hidden></div>
     </div>
     <div class="actions">
-      ${canActivate ? '<button data-act="activate" class="activate-btn" title="Let the scheduler run this repo\'s ready, labelled beads unattended">Activate</button>' : ''}
-      ${canPause ? '<button data-act="pause" title="Stop starting new beads from this repo">Pause</button>' : ''}
-      <button data-act="poll" class="icon" title="Poll this project now">↻</button>
-      <button data-act="ready" class="icon" title="Show the beads that are ready right now">Ready…</button>
-      <button data-act="del" class="icon" title="Remove from the scheduler">🗑</button>
+      ${canActivate ? '<button data-act="activate" class="activate-btn" data-tip="Let the scheduler run this repo\'s ready, labelled beads unattended">Activate</button>' : ''}
+      ${canPause ? '<button data-act="pause" data-tip="Stop starting new beads from this repo">Pause</button>' : ''}
+      <button data-act="poll" class="icon" aria-label="Poll this project now" data-tip="Poll this project now">↻</button>
+      <button data-act="ready" class="icon" data-tip="Show the beads that are ready right now">Ready…</button>
+      <button data-act="del" class="icon" aria-label="Remove from the scheduler" data-tip="Remove from the scheduler">🗑</button>
     </div>`;
   el.querySelectorAll('[data-act]').forEach((n) =>
     n.addEventListener('click', () => onProjectAction(p, n.dataset.act, n)));
