@@ -109,7 +109,11 @@ async function buildBody(run, logText) {
     ]));
   } else if (isFinalBad(run)) {
     const detail = run.status === 'killed'
-      ? 'Hard stop was active — SIGKILL, no cleanup ran.'
+      // Not "Hard stop was active — SIGKILL, no cleanup ran": lib/runner.js's
+      // kill() records no reason (so a manual kill and a hard-pause killAll
+      // are indistinguishable), sends SIGTERM before SIGKILL, and sends
+      // nothing at all for a queued run. Only the immediacy is always true.
+      ? 'Stopped immediately — this run was killed rather than wound down.'
       : run.status === 'timeout'
         ? 'The run did not finish inside its timeout and was signalled to stop.'
         : `Exited with code ${run.exitCode ?? '?'}.`;

@@ -23,7 +23,7 @@ import { join, dirname, relative } from 'node:path';
 import { JSDOM } from 'jsdom';
 
 import {
-  STATE_VOCAB, statusMeta, dotClass, ordinal, runStateKey,
+  STATE_VOCAB, statusMeta, dotClass, ordinal, runStateKey, TODAY_ORDER,
   PROJECT_VOCAB, projectStateMeta,
 } from '../public/v2/state-vocab.js';
 import { computeRowState } from '../public/v2/pages/jobs-logic.js';
@@ -267,4 +267,53 @@ test('ordinal: teens are -th whatever the last digit, and non-finite input does 
   assert.equal(ordinal(21), '21st');
   assert.equal(ordinal(111), '111th');
   assert.equal(ordinal(NaN), 'NaNth');
+});
+
+// ---------------- claims the data cannot support ----------------
+//
+// Added at C1's merge bar, after two separate escapes showed the existing
+// gates had the wrong shape.
+//
+// 1. `fail` was STILL spelled "failed" in the "Today so far" strip on BOTH
+//    runs.js and (copied from it) overview-logic.js. bmn was supposed to have
+//    settled that word, and its single-source check missed it because the
+//    strip is a TUPLE ARRAY (`[['fail','failed'], …]`), not a keyed table.
+//    Both now derive from statusMeta(); TODAY_ORDER carries order only.
+// 2. runs.js told every killed run "hard stop was active — SIGKILL, no cleanup
+//    ran". B1 had explicitly refused that exact sentence on Jobs and recorded
+//    why, and C1 refused it again for Overview — but B2's copy shipped. It is
+//    false three ways: lib/runner.js's kill() sends NO signal for a queued run,
+//    sends SIGTERM first for a running one (so cleanup may have run), and
+//    records no reason, so a manual kill is indistinguishable from a
+//    hard-pause killAll.
+//
+// The lesson both share: a refusal recorded in one page's comments does not
+// propagate. Encode it.
+
+const FORBIDDEN_CLAIMS = [
+  { re: /hard stop was active/, why: 'kill() records no reason — a manual kill and a hard-pause killAll are indistinguishable (jobs-logic.js refused this first)' },
+  { re: /no cleanup ran/, why: 'kill() sends SIGTERM before SIGKILL, so cleanup may well have run' },
+  { re: /['"]failed['"]/, why: 'the mockups spell this status "fail" — use statusMeta(status).label, never a retyped spelling' },
+];
+
+test('no /v2 page states a cause the run record cannot back', () => {
+  const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const offenders = [];
+  for (const f of jsFiles()) {
+    if (f === VOCAB_MODULE) continue;
+    const src = stripComments(read(f));
+    for (const c of FORBIDDEN_CLAIMS) {
+      if (c.re.test(src)) offenders.push(`${f}: ${c.re} — ${c.why}`);
+    }
+  }
+  assert.deepEqual(offenders, [], `these render claims the data does not support:\n${offenders.join('\n')}`);
+});
+
+test('the Today strip carries order only — never its own labels', () => {
+  // The precise shape that let "failed" survive bmn: a tuple array pairing a
+  // status with a hand-written word. TODAY_ORDER must stay a flat list.
+  for (const entry of TODAY_ORDER) {
+    assert.equal(typeof entry, 'string', `TODAY_ORDER must be plain status keys — found ${JSON.stringify(entry)}, which is a label table wearing a different shape`);
+    assert.ok(STATE_VOCAB[entry], `TODAY_ORDER lists '${entry}', which is not a known state`);
+  }
 });
