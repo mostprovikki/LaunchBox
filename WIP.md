@@ -665,3 +665,64 @@ mine, not the plan's — drop them if C1 should absorb the work instead.
 
 Housekeeping. Port 43411 is *still* occupied by pid 39469, the isolated instance from the earlier
 session flagged in the last entry. Not this session's, not killed, still flagged.
+
+## 2026-08-02 · 1ys — the project vocabulary, and a chip that isn't a function of `state`
+
+`claude-scheduler-1ys` done. `public/v2/state-vocab.js` now also carries `PROJECT_VOCAB` +
+`projectStateMeta()`, and the run family gained a derived `stopping` entry with `runStateKey()`.
+
+**The structural finding, and the reason this is a function rather than a second lookup table:
+the project chip is not a pure function of `state`.** A project row carries `state` ∈
+`pending|active|paused|error` (`lib/db.js`'s `PROJECT_STATES`) and, orthogonally, a `busyStreak`
+counter (`server.js`'s `decorateProject`, overview's `automation.projects[]`); burst membership
+isn't on the project at all but on the burst payload's `projectIds`. The mockups draw **one** chip,
+so something has to decide which of the three wins — and if that isn't decided here, C1, C2 and C3
+each decide separately, which is the same defect one level up from the one bmn just fixed. Encoded
+as **bd busy > burst > state**, with the reasoning written down: a project whose bead graph can't
+be read makes every other claim on the row (ready counts, burst progress) stale, so masking a warn
+behind an info would be a lie of omission. No mockup shows a project that is both, so that
+precedence is flagged in the source as a decision rather than a transcription.
+
+**Two mockup strings resolved the honest way.** `error` is a real member of `PROJECT_STATES` that
+**no mockup ever draws** — encoded as `bad`/"error" rather than left to the muted fallback (a
+project that cannot be polled is a failure, not an inert row), and it is the single entry in the
+file with no mockup behind it. Rather than let that be a silent gap, the test carries an explicit
+`UNAUDITED_PROJECT_KEYS` list and fails if anything *else* joins it. Conversely `handed back`
+(`project-detail.html`) is **UNMAPPABLE and was not encoded**: `lib/projects.js:749` emits
+`handed-back` and the `onDone` path emits `closed:false`, but `server.js:1826-1828` only
+`console.log`s it — `rowToRun` exposes just the raw status column and no endpoint distinguishes
+closed from handed back. Same call B1/B2 made on "hard stop was active" and "retry 2 of 2". Filed
+as a follow-up to give the outcome somewhere durable to live.
+
+**A fourth wording was already forming for the wind-down.** Tracing "stopping…" showed it is a
+*run* concept, not a project one (`lib/runner.js`'s `stopping()`, per-run `meta.stopRung`) — and it
+was already being said three ways before the page that needs it exists: `runs.js:63` rendered
+"· winding down", `runs-log.js:91` rendered "· stopping…", and `pause-soft.html` draws a chip
+reading "stopping…". The mockup wins; all three now read `STATE_VOCAB.stopping.label`, and a test
+fails on either string being retyped in a page. The drawer's *banner* still opens "Winding down." —
+checked against `runs-log-winding-down.html`, which is where that sentence comes from; it explains
+what the signal did rather than naming the state, so it was deliberately left alone.
+
+**B2's own test caught the change, which is the system working.** `tests/v2-runs.test.js` asserted
+the row said "winding down" — a green test pinning a wording that already contradicted the drawer
+sitting next to it. Updated to assert `STATE_VOCAB.stopping.label` rather than a retyped string, so
+it can't re-drift.
+
+Nine mutations run and reverted: project `paused` square→ring, "bd busy"→"beads busy", `error`
+dropped from the table, precedence flipped to burst-first, `busyStreak > 0` weakened to `>= 0`,
+`PROJECT_STATES` grown a member the vocabulary lacks (caught, because the test imports the enum
+from `lib/db.js` instead of retyping it), `runs.js` retyping "winding down", `runStateKey` no longer
+deriving `stopping`, and the `stopping` label drifting off the mockup. Each turned the intended
+test red. One gate needed narrowing first: the retyped-wording scan flagged its own explanatory
+comment and `STOP_RUNG_TEXT`'s SIGINT sentence, so it now strips comments and targets the label.
+533/533 green.
+
+**Browser leg.** Same isolated instance on 43410, with a live winding-down run seeded *after*
+startup — seeding it before would have been reaped by `failOrphanRuns`, which is how the earlier
+`queued` fixture quietly became a `fail`. The list row reads `scheduled fire · d1f9…fa · stopping…`
+and the drawer chip reads `running · stopping…`; before this change those two said different
+things. Only console 404 is the already-filed favicon. Instance stopped; 43400 answers 200.
+
+The project chips themselves are **UNVERIFIED in a browser** — Projects, Overview and Sessions are
+still `renderPlaceholder` stubs, so there is nothing yet that renders them. That verification
+belongs to btv.8/.9/.10, which is the point of extracting the vocabulary before they start.
