@@ -5,6 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
+import { STATE_VOCAB } from '../public/v2/state-vocab.js';
 
 function freshDom(url = 'http://127.0.0.1:43410/v2#runs') {
   const dom = new JSDOM('<!doctype html><html><body>'
@@ -253,8 +254,13 @@ test('opening the log drawer on a run already winding down shows the winding-dow
   const runs = baseRuns();
   runs.push({ id: 'run-winding', jobId: 'job-a', status: 'running', trigger: 'schedule', startedAt: new Date().toISOString(), meta: { stopReason: 'soft pause', stopRung: 'SIGINT' }, logPath: '/tmp/w.log' });
   await mountRuns(mockFetch({ runs }));
-  const row = [...document.querySelectorAll('.row.runrow')].find((r) => r.querySelector('.cell__l2')?.textContent.includes('winding down'));
-  assert.ok(row, 'a live run with stopRung set must say "winding down" inline');
+  // Asserts the SHARED label, not a retyped string: this row used to say
+  // "winding down" while the drawer's own chip said "stopping…" for the very
+  // same condition, and redesign/pause-soft.html draws it as "stopping…".
+  // claude-scheduler-1ys unified all three on STATE_VOCAB.stopping.label.
+  const windDown = STATE_VOCAB.stopping.label;
+  const row = [...document.querySelectorAll('.row.runrow')].find((r) => r.querySelector('.cell__l2')?.textContent.includes(windDown));
+  assert.ok(row, `a live run with stopRung set must say "${windDown}" inline`);
   row.querySelector('a.btn').click();
   await tick(60);
   const drawer = document.querySelector('.drawer--log');

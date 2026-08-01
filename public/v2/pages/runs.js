@@ -14,7 +14,7 @@ import {
 import {
   triggerLabel, fmtWhen, fmtDuration, shortId, statusBucket,
 } from './runs-format.js';
-import { statusMeta, ordinal } from '../state-vocab.js';
+import { statusMeta, ordinal, STATE_VOCAB } from '../state-vocab.js';
 
 // ---- module state ----------------------------------------------------
 // One Runs page is ever mounted at a time (the router replaces #v2-page's
@@ -60,7 +60,10 @@ function lineForRun(run, job) {
     case 'running': {
       const parts = [trig];
       parts.push(' · ', el('span', { class: 'mono' }, sess ? shortId(sess) : shortId(run.id)));
-      if (run.meta?.stopRung) parts.push(' · winding down');
+      // One wording for a wind-down, shared with the log drawer and with the
+      // pause pages C1 still has to build (claude-scheduler-1ys). This line
+      // used to say "winding down" while the drawer said "stopping…".
+      if (run.meta?.stopRung) parts.push(` · ${STATE_VOCAB.stopping.label}`);
       return parts;
     }
     case 'ok': {
