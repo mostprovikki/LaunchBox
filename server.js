@@ -33,6 +33,7 @@ import {
   DEFAULT_POLL_SEC as BEADS_DEFAULT_POLL_SEC, POLL_FLOOR_SEC as BEADS_POLL_FLOOR_SEC,
 } from './lib/projects.js';
 import { startUninstall } from './lib/uninstall.js';
+import { parseSessionFile, createSessionIndex } from './lib/sessions.js';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 // Ceiling on one confirmed burn-down plan. A plan is a preview a human read: at
@@ -242,7 +243,7 @@ function assertNoSymlinks(dir, depth = 0) {
 
 export function createApp({
   db, runner, scheduler, extensions, awake, usage = null, budget = null, pause = null,
-  projects = null, beads = null, burst = null,
+  projects = null, beads = null, burst = null, sessions = null,
   execFileFn = execFile, uninstallFn = startUninstall,
   usageRefreshFloorMs = POLL_FLOOR_SEC * 1000,
   // Injectable so a test can pin a known value; otherwise read from (or created
@@ -994,6 +995,130 @@ export function createApp({
     }
   });
 
+  // ------------------------------------------------------------------ sessions (M5 §5.6)
+  // 501 rather than 404, same reason as needProjects: the routes exist, the
+  // index behind them was not started for this instance.
+  const needSessions = (res) => {
+    if (sessions) return true;
+    res.status(501).json({ error: 'the sessions index is not available in this instance' });
+    return false;
+  };
+
+  // Resolve a cached row's filePath against the index root, exactly like
+  // lib/sessions.js's own (unexported) fileFor. get() does not apply that guard
+  // — only conversation()/rename()/remove() do — so the image route, which
+  // reads the file directly rather than through those, has to repeat it: the id
+  // regex alone would not survive someone storing a crafted row (docs/plans/
+  // 2026-07-25-m5-sessions-dashboard.md:151, "keep the upstream path-traversal
+  // guards").
+  function resolvedSessionFile(idx, row) {
+    if (!row?.filePath) return null;
+    const resolved = resolvePath(row.filePath);
+    const base = resolvePath(idx.root());
+    return resolved === base || resolved.startsWith(base + '/') ? resolved : null;
+  }
+
+  app.get('/api/sessions', (req, res) => {
+    if (!needSessions(res)) return;
+    res.json(sessions.list({ all: req.query.all === '1' || req.query.all === 'true' }));
+  });
+
+  app.get('/api/sessions/:id', (req, res) => {
+    if (!needSessions(res)) return;
+    const session = sessions.get(req.params.id);
+    if (!session) return res.status(404).json({ error: 'not found' });
+    res.json({ session });
+  });
+
+  app.get('/api/sessions/:id/conversation', async (req, res) => {
+    if (!needSessions(res)) return;
+    // sessions.conversation() applies both traversal guards itself (id regex,
+    // then the realpath-under-root check on the resolved file) and returns
+    // null on either failure — same shape as "not found" so a probe cannot
+    // distinguish "no such session" from "that file escaped the root".
+    const convo = await sessions.conversation(req.params.id);
+    if (!convo) return res.status(404).json({ error: 'not found' });
+    res.json(convo);
+  });
+
+  app.post('/api/sessions/:id/rename', async (req, res) => {
+    if (!needSessions(res)) return;
+    const result = await sessions.rename(req.params.id, req.body?.name);
+    if (!result.ok) return res.status(result.status ?? 400).json({ error: result.error });
+    res.json({ session: result.session });
+  });
+
+  app.delete('/api/sessions/:id', async (req, res) => {
+    if (!needSessions(res)) return;
+    const result = await sessions.remove(req.params.id);
+    if (!result.ok) return res.status(result.status ?? 400).json({ error: result.error });
+    res.json({ ok: true, id: result.id });
+  });
+
+  // osascript -> Terminal, reusing the claude extension's own "Resume in
+  // Terminal" run action rather than re-deriving its shell-escaping: one place
+  // knows how to build that command line, whether it is reached from a run or
+  // from the sessions index.
+  app.post('/api/sessions/:id/resume', async (req, res) => {
+    if (!needSessions(res)) return;
+    const spec = sessions.resumeSpec(req.params.id);
+    if (!spec) return res.status(404).json({ error: 'not found' });
+    // A guessed cwd does not exist on disk (lib/sessions.js's own cwdGuessed
+    // comment): `cd`-ing into it before --resume would fail confusingly rather
+    // than usefully, so this is refused with the reason instead of attempted.
+    if (spec.cwdGuessed) {
+      return res.status(400).json({
+        error: `the working directory for this session could not be recovered (decoded to "${spec.cwd}", which does not exist) — resuming here would land nowhere`,
+      });
+    }
+    const action = extensions.get('claude')?.runActions?.find((a) => a.id === 'resume');
+    if (!action) return res.status(501).json({ error: 'the claude extension is not loaded' });
+    try {
+      const result = await action.exec({
+        run: { meta: { sessionId: spec.id } },
+        job: { cwd: spec.cwd },
+        setting: (k, d) => getSetting(db, k, d),
+        execFileFn,
+      });
+      res.json({ ...(result ?? { ok: true }), cwd: spec.cwd });
+    } catch (err) {
+      res.status(500).json({ error: String(err?.message ?? err) });
+    }
+  });
+
+  // Decoded on demand from promptList[p].images[i] — never externalised to a
+  // sidecar dir (M5 §5.6). promptList is deliberately not cached in the
+  // sessions table (lib/db.js's upsertSession comment), so this re-parses the
+  // file rather than reading it off the row.
+  app.get('/api/sessions/:id/image/:p/:i', async (req, res) => {
+    if (!needSessions(res)) return;
+    const row = sessions.get(req.params.id);
+    if (!row) return res.status(404).json({ error: 'not found' });
+    const file = resolvedSessionFile(sessions, row);
+    if (!file) return res.status(404).json({ error: 'not found' });
+    const p = Number(req.params.p);
+    const i = Number(req.params.i);
+    if (!Number.isInteger(p) || p < 0 || !Number.isInteger(i) || i < 0) {
+      return res.status(400).json({ error: 'p and i must be non-negative integers' });
+    }
+    let meta;
+    try {
+      meta = await parseSessionFile(file);
+    } catch (err) {
+      return res.status(500).json({ error: err?.message ?? String(err) });
+    }
+    const image = meta?.promptList?.[p]?.images?.[i];
+    if (!image?.data) return res.status(404).json({ error: 'not found' });
+    let buf;
+    try {
+      buf = Buffer.from(image.data, 'base64');
+    } catch {
+      return res.status(500).json({ error: 'could not decode image data' });
+    }
+    res.set('Content-Type', image.mediaType || 'image/png');
+    res.send(buf);
+  });
+
   // ------------------------------------------------------------------ bursts
   // "Spend ~15% of this window working through ready beads." The burst owns *when*
   // to attempt and *whether the budget still allows it*; the attempt itself goes
@@ -1418,6 +1543,15 @@ export async function main() {
   const resumed = burst.resume();
   if (resumed) console.log(`burst: resuming — ${resumed.slots.length} attempt(s) left of ${resumed.budgetPct}% of ${resumed.window}`);
 
+  // M5: the sessions index over ~/.claude/projects. A missing directory is not
+  // an error (Claude Code may simply never have run here) — createSessionIndex
+  // only warns when something is listening, so this listener is what makes that
+  // warning reach daemon.log instead of being silently dropped.
+  const sessions = createSessionIndex({ db });
+  sessions.events.on('error', (err) => console.warn(`sessions: ${err?.message ?? err}`));
+  sessions.start();
+  sessions.scan().catch((err) => console.error(`sessions: initial scan failed — ${err?.message ?? err}`));
+
   // The helper is compiled into the data dir by install.sh. Absent means gated
   // actions are refused, never allowed — except on a platform with no
   // authenticator at all, which lib/approval.js reports as degraded.
@@ -1456,7 +1590,7 @@ export async function main() {
   // declared after, and moving the use above the declaration cost a TDZ
   // ReferenceError that stopped the daemon booting at all — caught by running it.
   const port = Number(process.env.CS_PORT) || PORT_BASE;
-  const app = createApp({ db, runner, scheduler, extensions, awake, usage, budget, pause, projects, beads, burst, approval, originPort: port });
+  const app = createApp({ db, runner, scheduler, extensions, awake, usage, budget, pause, projects, beads, burst, sessions, approval, originPort: port });
   // Deliberately no callback arg here: Express's app.listen(port, host, cb) wraps
   // cb with once() and registers it via BOTH server.once('error', done) and
   // server.listen(..., done) — so on EADDRINUSE the "success" callback fires
