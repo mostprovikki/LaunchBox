@@ -551,3 +551,54 @@ review message to the wrong concurrent agent; it correctly refused to act on ano
 Wave 2 is dispatching in owner-approved batches of two rather than all six at once, because both
 A1 and A2 shipped defects that only a careful browser leg caught, and six simultaneous merge bars
 is how the next one gets through.
+
+## 2026-08-01 · Wave 2 batch 1 — Jobs and Runs, and a vocabulary already drifting
+
+`btv.5` (B1, Jobs) merged as `4f674a2`, `btv.6` (B2, Runs + log drawer) as `6fdad89`. Dispatched
+in an owner-approved batch of two rather than all six of wave 2 at once, on the grounds that both
+A1 and A2 had shipped defects only a careful browser leg caught, and six simultaneous merge bars
+is how the next one gets through. That decision paid for itself twice over.
+
+**Both beads were verified against seeded, real data — not fixtures.** This was the explicit fix
+for A2's honest "UNVERIFIED: populated chrome": each agent stood up its own isolated instance on
+its own QA port with a throwaway `CS_DATA` and drove the real API. B2 produced a genuine 70-second
+timeout and a real overlap-skip, and killed and stopped live processes through the real endpoints;
+B1 created nine jobs and killed/stopped real runs to get true `ok`/`fail`/`killed`/`stopped`/
+`disabled`/`running` rows. An empty database exercises neither a jobs table nor a log drawer, and
+neither bead would have been trustworthy without this.
+
+**B1's bug is the one worth remembering.** `GET /api/v2/overview` wraps attention as
+`{asOf, items}`, not a bare array. B1's jsdom fixtures had been hand-built in the *wrong* shape, so
+the unit tests were green while the real page threw `TypeError: object is not iterable` and
+rendered **zero rows** beneath a correct row count. Same failure family as A1's asset 404s: a test
+that asserts against a shape you invented tells you only that your invention is self-consistent.
+Fixed, fixtures corrected, and a regression test now names the real wrapper — mutation-verified by
+the orchestrator by reverting to the flat-array read.
+
+**Refusals to fabricate, recorded rather than papered over.** Three mockup strings turned out not
+to be derivable from the data model and were replaced with things that are true rather than
+invented: `killed` says "stopped immediately" instead of "hard stop was active", because
+`lib/runner.js`'s `kill()` stores no reason in `meta` (unlike `requestStop()`'s `stopReason`), so a
+manual kill and a hard-pause `killAll` are indistinguishable after the fact; the queued row drops
+the trigger-source word, absent from `/api/jobs`'s `lastRun` summary; a `bucket_severity` skip
+omits "resumes Wed" for want of a reset time. B2 likewise dropped "retry 2 of 2" (no persisted
+attempt count) and an exact "SIGINT sent HH:MM:SS" (no stop-request time is stored). These belong
+in the mockups' errata, not in the code as plausible-looking lies.
+
+**The finding that stops batch 2: the run-state vocabulary is duplicated and already drifting.**
+B1 and B2 independently wrote the same encoding — per status, a colour class, a dot form and a
+label — in `pages/jobs-logic.js` and `pages/runs-format.js`. The dot forms agree, but by luck:
+nothing tests that the two tables match. The labels have *already* diverged, with status `fail`
+rendering as "failed" on Jobs and "fail" on Runs. `ordinal()` was written twice, and one copy got
+the teens wrong (`11st`) — caught only because the sibling agent's concurrent test run happened to
+trip over it. Four more pages (Overview, Projects, Sessions) render these same states, so the cost
+triples if this waits. Filed as `claude-scheduler-bmn` at P1, blocking `btv.8`/`.9`/`.10`, with
+the direction of every `blocks` edge verified after filing rather than inferred. Generalised to
+memory as `extract-shared-vocabulary-before-fanning-out`: the shared vocabulary is a wave-0 task,
+and if it isn't extracted before the fan-out, every agent correctly writes its own.
+
+Housekeeping. Port 43411 was found occupied by pid 39469 — an isolated instance (temp `CS_DATA`)
+from an earlier session, started 16:50, predating this session's agents. B1 identified it, refused
+to kill it, and used a different port, which is the right call; it is left running and flagged for
+the owner. The orchestrator's own verification instance on 43410 was stopped at wind-down. The
+owner's daemon on 43400 was never touched and answers 200.
