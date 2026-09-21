@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { tmpData, validJob, fakeSpawn, sleep, extensions } from './helpers.js';
+import { tmpData, validJob, fakeSpawn, sleep, waitFor, extensions } from './helpers.js';
 import { ensureDirs } from '../lib/paths.js';
 import { openDb, createJob, getRun, getSetting, setSetting } from '../lib/db.js';
 import { createRunner } from '../lib/runner.js';
@@ -245,7 +245,15 @@ test('every pause mode drops a scheduled fire identically', async () => {
   }
 
   pause.set({ mode: 'off' });
-  await sleep(1100);
+  // waitFor, not sleep. helpers.js says it in its own comment: a fixed sleep is
+  // right for asserting something did NOT fire (there is no condition to poll
+  // for an absence), and wrong for asserting a fire DID happen. A per-second
+  // cron gets exactly one chance inside 1100ms, so under full-suite load this
+  // assertion could mean "the tick did not get scheduler time" rather than
+  // "unpausing is broken" — a gate that can mean "didn't run"
+  // (claude-scheduler-2wf). Observed failing once in ~15 full-suite runs and
+  // never in isolation, which is the signature.
+  await waitFor(() => starts.length >= 1);
   assert.ok(starts.length >= 1, 'and unpausing lets it fire again');
   scheduler.stop();
 });
