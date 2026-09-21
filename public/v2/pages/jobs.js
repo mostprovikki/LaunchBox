@@ -206,17 +206,46 @@ function rowActions(job, rowState) {
     onclick: () => deleteJob(job),
   });
 
+  // `data-tip` renders through `[data-tip]::after`, and ::after does NOT
+  // render on a replaced element — an <input> cannot carry a generated
+  // pseudo-element in any browser. So this switch has been advertising a
+  // tooltip nobody, hovering or tabbing, has ever seen. Found by E2's focus-
+  // tooltip gate (claude-scheduler-btv.14) measuring `content: none` on it.
+  //
+  // The tip moves to a wrapper span, which is not replaced and can render it;
+  // the input keeps `aria-label` (its accessible name) and `data-mutating`
+  // (the sweep acts on the control, not the wrapper). setDisabledReason() then
+  // writes the degraded reason onto the INPUT, where it still would not
+  // render — so the wrapper mirrors it, which is why the sweep's reason is
+  // copied across below.
   const sw = el('input', {
     class: 'switch',
     type: 'checkbox',
     checked: job.enabled,
     'data-mutating': true,
     'aria-label': job.enabled ? 'Disable schedule' : 'Enable schedule',
-    'data-tip': job.enabled ? 'Enabled — turn off to stop scheduling' : 'Disabled — enabling asks for your approval',
   });
   sw.addEventListener('change', () => toggleJob(job, sw));
+  const swWrap = el('span', {
+    class: 'switchwrap',
+    // Inline rather than a stylesheet rule: assets/system.css and
+    // assets/launchbox.css are byte-identical copies of the audited spec and
+    // are not edited. The wrapper only has to not disturb the row's layout.
+    style: 'display:inline-flex;align-items:center;position:relative;',
+    // The wrapper is ALSO data-mutating, which is what keeps its visible
+    // tooltip honest for free: the central sweep writes the degraded reason
+    // into `data-tip` on every marked element and restores the original on
+    // recovery, so the wrapper shows "Unavailable — …" exactly while the
+    // switch is dead. Setting `.disabled` on a <span> is a harmless no-op.
+    //
+    // The first version mirrored the input's tip with a per-row
+    // MutationObserver — one observer per job row, to do what the existing
+    // frozen contract already does.
+    'data-mutating': true,
+    'data-tip': job.enabled ? 'Enabled — turn off to stop scheduling' : 'Disabled — enabling asks for your approval',
+  }, sw);
 
-  return el('div', { class: 'rowact' }, [runBtn, editBtn, cloneBtn, delBtn, sw]);
+  return el('div', { class: 'rowact' }, [runBtn, editBtn, cloneBtn, delBtn, swWrap]);
 }
 
 function buildRow(job, ctx) {

@@ -69,6 +69,18 @@ function shell({ title, label }) {
   cancelBtn.addEventListener('click', () => { if (!busy) close(); });
   backdrop.addEventListener('click', (ev) => { if (ev.target === backdrop && !busy) close(); });
 
+  // Opening a modal MUST move focus into it. Without this a keyboard user is
+  // left on whatever opened the dialog, behind an aria-modal overlay they
+  // cannot tab into — found by E2's dialog gate (claude-scheduler-btv.14),
+  // which measured focus still on BODY for both planners. The job dialog
+  // already did this by focusing its first field.
+  //
+  // The close button is the target rather than the first input: these dialogs
+  // build their body asynchronously (the candidate list, the project list), so
+  // at this point there is no field to focus yet — and the way OUT is the one
+  // control that is certainly present.
+  closeBtn.focus();
+
   return {
     backdrop, body, foot, consequence, confirmBtn, cancelBtn, close,
     setBusy(v) { busy = v; },

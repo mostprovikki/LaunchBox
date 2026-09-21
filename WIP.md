@@ -1139,3 +1139,57 @@ fixtures nothing is skipped.
 **Watched it fail, assembled.** Beyond the 18 unit mutations, the whole gate was run against a
 deliberately blanked Settings route: exit code 1, two `stranded_page` findings (dark and light),
 naming the bead. Reverted; clean again.
+
+## 2026-09-22 · btv.14 (E2 interaction gates) — the sweep's promise was false on three pages
+
+`claude-scheduler-btv.14` is done: `npm run qa:v2:interactions` drives dialogs, live filters, a
+real keyboard walk, focus tooltips and the daemon-down disabling contract. Clean. 744/744 tests
+green, 20 gate mutations verified red (after four escapes were closed). E1's route walk re-run
+clean afterwards, because a fix is exactly as unverified as the original code.
+
+Built per the `ui-verify` method. **Phase 0a was answered from what this repo already records
+rather than by asking**: both themes ship (the toggle and REVIEW.md), the design system is
+`system.css`/`launchbox.css` (declared tokens, and byte-identical to the audited spec so not
+editable), the bar is WCAG AA with keyboard use a REVIEW #5 requirement, scope is the eight `/v2`
+routes plus four overlays with the old UI explicitly untouched, permanent gates not a one-off
+audit, and the blast radius is an isolated 43410 sandbox only. Deliberately **not** tested:
+responsive/phone widths and RTL (the redesign is desktop, with one `@media (max-width:1080px)`
+rule), and the old UI.
+
+**THE FIND: REVIEW #2's central sweep did not cover a page re-rendering from its own poll.** The
+sweep fired on auth-state change and on route render — neither of which happens when `jobs.js`'s
+4s poll rebuilds its rows. So with the daemon unreachable the page showed the "Unavailable" banner
+above seven live, clickable controls, and every poll resurrected them. `runs.js`, `settings.js`,
+`overview.js`, `projects.js` and `sessions.js` each carried their own re-sweep; `jobs.js`,
+`project.js` and `session.js` did not. Fixed **centrally** with a `MutationObserver` in `main.js`
+that sweeps added subtrees while degraded — because the README promises that adding
+`data-mutating` is the *whole* job, and "remember to call the sweep" is not a contract. Same
+lesson as B3's Cleanup button: cover the guarantee, not one instance of it.
+
+**A second real defect: a tooltip nobody had ever seen.** The enable switch is an `<input>`, and
+`::after` does not render on a replaced element — so its `data-tip` was invisible to hover *and*
+keyboard, on every job row, since B1. The tip moved to a wrapper span; the input keeps its
+`aria-label` and `data-mutating`. The wrapper is marked `data-mutating` too, which is what keeps
+the visible tooltip honest for free: the existing sweep writes the degraded reason into `data-tip`
+and restores the original on recovery. (The first version mirrored the tip with one
+`MutationObserver` *per job row* — doing by hand what the frozen contract already does.)
+
+**A third: the planner dialogs never moved focus.** Opening either left focus on `BODY`, behind an
+`aria-modal` overlay. The shared shell now focuses its close control — the way *out* is the one
+control certainly present, since those dialogs build their bodies asynchronously.
+
+**Three of the first seven findings were my own harness, and saying so matters.** Nine controls
+reported as having no focus indicator, and every tooltip reported as never revealing: both because
+`el.focus()` does not apply `:focus-visible`. Real `Input.dispatchKeyEvent` Tab presses fixed it.
+Then the search input still reported unindicated — its ring lives on the `.search` wrapper via
+`:focus-within`, so the rule now accepts an ancestor's ring; a gate with false reds is one everyone
+learns to ignore. And every tooltip read as unrevealed because the CSS transition is
+`opacity .1s ease .05s` — 150ms — while the probe read at 35ms. The product was right; the
+stopwatch was wrong.
+
+**Four mutation escapes, all in the dialog-focus area, all closed.** Deleting `focusInside` from
+the contract deleted its own test with it, so the contract's contents are now asserted by name;
+deleting the planners' focus call escaped the unit suite entirely, so a source gate now requires
+every dialog module to move focus; and the "presses a real Tab" test was slicing the file's own
+header prose rather than the walk, so it examined a few lines of comment — it now anchors on the
+section markers and fails loudly if they do not resolve.

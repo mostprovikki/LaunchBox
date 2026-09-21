@@ -103,6 +103,15 @@ function freshDom(url = 'http://127.0.0.1:43410/v2') {
   globalThis.location = dom.window.location;
   globalThis.history = dom.window.history;
   globalThis.localStorage = dom.window.localStorage;
+  // main.js observes the document for controls added between sweeps
+  // (claude-scheduler-btv.14 — a page re-rendering from its own poll rebuilt
+  // live controls that neither existing trigger touched). jsdom provides
+  // MutationObserver on `window`; this harness had simply never exposed it as
+  // a global, so importing main.js threw ReferenceError rather than testing
+  // anything. Exposed here rather than made optional in main.js: a sweep that
+  // silently does not exist in some environment is the failure mode the
+  // observer was added to close.
+  globalThis.MutationObserver = dom.window.MutationObserver;
   return dom;
 }
 
