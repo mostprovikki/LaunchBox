@@ -50,6 +50,8 @@ function svgNode(html) {
 }
 
 let data = null; // last successful GET /api/v2/overview payload
+// True only while this page owns #v2-page. See render()'s guard.
+let mounted = false;
 let pollTimer = null;
 
 // ---------------- data ----------------
@@ -452,6 +454,14 @@ function buildAutomation() {
 function render() {
   const page = $('#v2-page');
   if (!page) return;
+  // An in-flight load from BEFORE a route change must not paint over the page
+  // that now owns #v2-page. Clearing the poll timer on route change does not
+  // cover this: the request already in the air still resolves and calls
+  // render(), which clears #v2-page and rebuilds it for a route the reader has
+  // already left. Measured in a real browser during C2's verification
+  // (claude-scheduler-btv.9) — Projects → project detail → Projects rendered
+  // the DETAIL page under the Projects route, and the reverse going back.
+  if (!mounted) return;
 
   const stale = !!getAuthState();
   document.querySelector('main.shell')?.classList.toggle('is-stale', stale);
@@ -491,6 +501,7 @@ function render() {
 
 export default function overview(params) {
   void params; // no deep-link query params defined for this route
+  mounted = true;
   const page = $('#v2-page');
   if (!page) return;
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
@@ -509,6 +520,7 @@ export default function overview(params) {
 // /api/v2/overview forever in the background against a #v2-page that now
 // belongs to a different route.
 onRender((route) => {
+  mounted = route === 'overview';
   if (route !== 'overview' && pollTimer) { clearInterval(pollTimer); pollTimer = null; }
 });
 // The is-stale dimming and per-card "as of" stamps must react the instant the
