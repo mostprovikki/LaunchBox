@@ -264,8 +264,17 @@ test('jobs tab: a runnable (not currently running) row\'s Run/Edit/Clone/Delete/
 
   const page = document.getElementById('v2-page');
   const rowact = page.querySelector('.rowact');
-  const mutatingCount = rowact.querySelectorAll('[data-mutating]').length;
-  assert.equal(mutatingCount, 5, 'expected run+edit+clone+delete+switch all marked data-mutating');
+  // Six, not five: the enable switch is an <input>, and ::after cannot render
+  // on a replaced element — so its tooltip lives on a wrapper span, and that
+  // wrapper is data-mutating too, which is how the central sweep keeps the
+  // VISIBLE tooltip honest while the switch is dead (claude-scheduler-btv.14).
+  // Asserted by role rather than by count alone, so a sixth marked control
+  // appearing for some other reason still fails.
+  const marked = [...rowact.querySelectorAll('[data-mutating]')];
+  assert.equal(marked.length, 6, 'expected run+edit+clone+delete+switch+switch-wrapper marked data-mutating');
+  assert.equal(marked.filter((n) => n.classList.contains('iconbtn')).length, 4, 'run/edit/clone/delete');
+  assert.equal(marked.filter((n) => n.classList.contains('switch')).length, 1, 'the input itself');
+  assert.equal(marked.filter((n) => n.classList.contains('switchwrap')).length, 1, 'and its tooltip wrapper');
 });
 
 test('jobs tab: typing in the filter narrows the rows and never rebuilds the search input node (focus survives)', async () => {
