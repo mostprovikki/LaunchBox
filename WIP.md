@@ -1061,3 +1061,36 @@ harness before the product.
 
 Housekeeping. The isolated instance on 43410 was torn down. The owner's daemon on 43400 was not
 running and was not started.
+
+## 2026-09-22 · 7j2 (Runs blanks on a failed first load) — and a mutation harness that lied
+
+`claude-scheduler-7j2` is fixed. `runs.js`'s catch kept the last render — right for a REFRESH, wrong
+for a FIRST load, where there was nothing to keep and `#v2-page` stayed empty under the global
+banner with no way to retry once the toast faded. It now renders an explicit unreachable state that
+names the requests it tried and offers Try again, and deliberately renders **no** run table: an
+empty list reads as "no runs" when the truth is "we could not ask". 702/702 green.
+
+**The retry was broken by the fix, and only a test that clicked it found out.** `renderUnreachable()`
+replaces the whole page, so the toolbar and card the render path writes into were gone; the first
+Try again fetched successfully and painted into two detached nodes. The shell build is now
+`mountShell()`, and — better — `loadAndRender()` self-heals: if the shell is missing or detached it
+rebuilds before rendering. That removed the ordering dependency entirely, and made the retry
+handler's own `mountShell()` call redundant, which a mutation proved by staying green when it was
+deleted. Deleted.
+
+**A mutation that hangs is not a mutation that is caught.** The first battery reported "3/5", of
+which two were hangs I had scored as red. The cause: `tests/v2-runs.test.js` wraps `setInterval`
+with `.unref()` but not `setTimeout`, and under a *permanently* failing fetch every 3s poll fires a
+toast, each arming a 3.5s removal timer — so a live timer always exists and `node --test` never
+exits. Both are wrapped now; the same battery is **6/6 cleanly red**, no hangs. Two further
+harness lessons, both paid for: a killed batch stranded a mutation in the working tree (found by
+grepping for the call site, not by `git status`, which showed only "modified"), so the revert now
+lives in a `finally`; and the verdict is read from the runner's own `ℹ fail N` line rather than the
+absence of `fail 0`, because absence is also what a hang produces. Written to memory as
+*a-hanging-test-is-not-a-failing-test*.
+
+**C2's own gate went red on this fix, correctly and then incorrectly.** "Every /v2 page paints a
+shell before its first load" searched the entry function for a literal `pageHead(`; extracting
+`mountShell()` moved it one call away, so the gate failed a page that had just been made *more*
+correct. It now resolves one level of indirection — and was re-mutated (swap `mountShell()` and
+`loadAndRender()`) to confirm the relaxed version still catches a page that genuinely paints late.

@@ -719,8 +719,17 @@ test('every /v2 page paints a shell before its first load, not after it', () => 
     // await/load — i.e. a pageHead call appears in the same function body
     // ahead of the loadAndRender()/load() call.
     const entry = /export default function \w+\(params\)\s*\{[\s\S]*?\n\}/.exec(src)?.[0] ?? '';
-    const headAt = entry.search(/pageHead\(/);
-    const loadAt = entry.search(/load(AndRender)?\(\)/);
+    // One level of indirection is resolved: a page may paint its shell through
+    // a named helper (runs.js's mountShell()) rather than calling pageHead()
+    // inline. The first version of this gate only looked for a literal
+    // pageHead( and went red when 7j2's fix extracted exactly such a helper —
+    // a false positive on a page that had just been made MORE correct.
+    const inlined = entry.replace(/\b([a-z]\w*)\(\)/g, (whole, name) => {
+      const helper = new RegExp(`function ${name}\\(\\)\\s*\\{[\\s\\S]*?\\n\\}`).exec(src)?.[0];
+      return helper && /pageHead\(/.test(helper) ? 'pageHead()' : whole;
+    });
+    const headAt = inlined.search(/pageHead\(/);
+    const loadAt = inlined.search(/load(AndRender)?\(\)/);
     if (headAt === -1 || (loadAt !== -1 && headAt > loadAt)) offenders.push(`${f} (head@${headAt} load@${loadAt})`);
   }
   assert.deepEqual(offenders, [], `these pages leave the previous route on screen while they load:\n${offenders.join('\n')}`);

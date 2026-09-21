@@ -26,6 +26,9 @@ let extsById = new Map();
 let allRuns = []; // already job-filtered (server-side); status bucketing is client-side
 let streakByRunId = new Map();
 let jobFilter = '';
+// False until a load has succeeded once — the difference between "keep what
+// is on screen" and "there is nothing on screen to keep".
+let loadedOnce = false;
 let statusFilter = 'all';
 let pollTimer = null;
 let els = null; // {toolbar, card, page}
@@ -339,8 +342,23 @@ async function loadAndRender() {
     allRuns = runsRes.runs ?? [];
   } catch (err) {
     toast(failureToast(err) ?? 'could not load runs', 'err');
-    return; // keep whatever was last rendered rather than blanking the page on a transient failure
+    // Keeping the last render is right for a REFRESH — a transient failure
+    // must not blank a page the reader is using. It is wrong for a FIRST load:
+    // there is nothing to keep, so #v2-page stayed completely empty under the
+    // global degraded banner, with nothing naming what failed and no way to
+    // retry once the toast had faded (claude-scheduler-7j2; the same defect
+    // btv.7 found and fixed on Settings).
+    if (!loadedOnce) renderUnreachable();
+    return;
   }
+  loadedOnce = true;
+  // The shell may have been replaced since this request went out — by
+  // renderUnreachable(), or by a poll that resolved after the reader left and
+  // came back. Rebuilding is cheap and removes the ordering dependency
+  // entirely; without it a recovering load painted into two detached nodes,
+  // or threw on a null one.
+  if (!els?.toolbar || !els?.card || !els.page?.isConnected) mountShell();
+  if (!els?.toolbar || !els?.card) return;
 
   // Best-effort only — /api/v2/overview (btv.2) is reused unmodified purely
   // for its already-computed timeout streak (server.js's needs-attention
@@ -388,6 +406,55 @@ async function loadAndRender() {
   disableMutatingControls(els.page, degradedReason());
 }
 
+// The first-load failure state. Names the requests it tried and offers a
+// retry; deliberately renders no run list, because an empty table would read
+// as "no runs" when the truth is "we could not ask".
+function renderUnreachable() {
+  const page = els?.page ?? $('#v2-page');
+  if (!page) return;
+  clear(page);
+  page.appendChild(pageHead({ title: 'Runs', sub: 'Not loaded' }));
+  const retry = el('button', { class: 'btn btn--primary' }, 'Try again');
+  // No mountShell() here: loadAndRender()'s own self-heal rebuilds the shell
+  // when it finds it missing. A mutation removing a mountShell() call from
+  // this handler stayed green, which is what proved it redundant.
+  retry.addEventListener('click', loadAndRender);
+  page.appendChild(el('section', { class: 'card' }, el('div', { class: 'card__body' },
+    el('div', { class: 'blank', style: 'border:0;background:transparent;padding:24px 8px;' }, [
+      el('div', {}, [
+        el('h4', {}, 'Could not read your runs'),
+        el('p', {}, 'GET /api/jobs and GET /api/runs did not answer, so this page has nothing to show — '
+          + 'not even an empty list. Nothing has changed; LaunchBox is simply not reachable from this page '
+          + 'right now.'),
+        el('div', { class: 'blank__act' }, [retry]),
+      ]),
+    ]))));
+  // The toolbar and card this replaced are gone, so the handles the render
+  // path writes into are cleared rather than left pointing at detached nodes.
+  // Try again calls mountShell() to rebuild them.
+  els = { toolbar: null, card: null, page };
+}
+
+// The page shell every successful render writes into. Extracted so the
+// first-load failure state can rebuild it on Try again: renderUnreachable()
+// replaces the whole page, so recovering has to re-create the toolbar and card
+// the render path targets. Without this the retry fetched successfully and
+// then painted into two detached nodes — caught by the retry test, which is
+// the half of a failure state that is easy to ship broken because nobody
+// clicks it.
+function mountShell() {
+  const page = $('#v2-page');
+  if (!page) return null;
+  clear(page);
+  page.appendChild(pageHead({ title: 'Runs', sub: 'Loading…' }));
+  const toolbar = el('div', { class: 'toolbar' });
+  const card = el('section', { class: 'card' });
+  page.appendChild(toolbar);
+  page.appendChild(card);
+  els = { toolbar, card, page };
+  return els;
+}
+
 export default function runs(params) {
   const page = $('#v2-page');
   if (!page) return;
@@ -398,14 +465,7 @@ export default function runs(params) {
   const wantStatus = params.get('status') ?? 'all';
   statusFilter = STATUS_SEGS.some(([k]) => k === wantStatus) ? wantStatus : 'all';
 
-  clear(page);
-  page.appendChild(pageHead({ title: 'Runs', sub: 'Loading…' }));
-  const toolbar = el('div', { class: 'toolbar' });
-  const card = el('section', { class: 'card' });
-  page.appendChild(toolbar);
-  page.appendChild(card);
-  els = { toolbar, card, page };
-
+  mountShell();
   loadAndRender();
   pollTimer = setInterval(loadAndRender, 3000);
 }

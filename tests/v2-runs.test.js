@@ -34,6 +34,19 @@ globalThis.setInterval = (fn, ms, ...rest) => {
   t?.unref?.();
   return t;
 };
+// setTimeout needs the same treatment, for a reason that only shows up under a
+// PERMANENTLY failing fetch: every poll tick calls toast(), which arms a 3.5s
+// setTimeout to remove the node. Ticks arrive every 3s, so there is always a
+// live toast timer and `node --test` never exits — it HANGS instead of
+// reporting the failing assertion. Two 7j2 mutations hung rather than going
+// red because of this, and a gate that can mean "didn't run" is not a gate
+// (claude-scheduler-2wf, same family).
+const realSetTimeout = globalThis.setTimeout;
+globalThis.setTimeout = (fn, ms, ...rest) => {
+  const t = realSetTimeout(fn, ms, ...rest);
+  t?.unref?.();
+  return t;
+};
 
 const JOB_A = { id: 'job-a', name: 'Rotate and ship logs', type: 'claude', timeoutMin: 60, enabled: true };
 const JOB_B = { id: 'job-b', name: 'Backup to NAS', type: 'command', timeoutMin: 30, enabled: true };
@@ -340,4 +353,74 @@ test('the OWN end-of-render sweep catches degraded state even when it arrives AF
   const anyMutating = document.querySelector('[data-mutating]');
   assert.ok(anyMutating, 'sanity: some data-mutating control must have rendered');
   assert.equal(anyMutating.disabled, true, 'a control built while the app is (now) degraded must render disabled, even though the row DATA itself loaded fine');
+});
+
+// ------------------------------------------------ first-load failure (7j2)
+//
+// Found at btv.7's merge bar on Settings and filed for Runs, which had the
+// identical shape. loadAndRender()'s catch kept whatever was last rendered —
+// right for a REFRESH, wrong for a FIRST load, where there is nothing to keep
+// and #v2-page stayed completely empty under the global degraded banner, with
+// nothing naming what failed and no way to retry once the toast had faded.
+
+test('a FIRST load that fails renders an explained state, never an empty page', async () => {
+  freshDom();
+  globalThis.fetch = async () => { throw new TypeError('connection refused'); };
+  const mod = await import(`../public/v2/pages/runs.js?firstload=${Date.now()}`);
+  mod.default(new URLSearchParams());
+  await tick(60);
+
+  const page = document.querySelector('#v2-page');
+  assert.ok(page.textContent.trim().length > 0, 'the page is not blank');
+  assert.match(page.textContent, /Could not read your runs/);
+  assert.match(page.textContent, /Try again/);
+  assert.match(page.querySelector('h1').textContent, /Runs/, 'the reader can still see which route they are on');
+  // No table: an empty run list would read as "no runs" when the truth is
+  // "we could not ask".
+  assert.equal(page.querySelectorAll('.row.runrow:not(.row--head)').length, 0);
+});
+
+test('a LATER failure keeps the runs already on screen rather than replacing them', async () => {
+  // The other half of the same rule — the behaviour the original catch was
+  // right about, which the fix must not undo.
+  //
+  // This has to drive the module's REAL 3s poll. The first version re-imported
+  // the module instead, which starts a fresh instance with loadedOnce=false —
+  // so it exercised nothing, and a mutation making EVERY failure render the
+  // unreachable card stayed green. Waiting out one real tick is slower and
+  // actually tests the thing.
+  let fail = false;
+  const good = mockFetch();
+  await mountRuns(async (url, opts) => {
+    if (fail) throw new TypeError('connection refused');
+    return good(url, opts);
+  });
+  const before = document.querySelectorAll('.row.runrow:not(.row--head)').length;
+  assert.ok(before > 0);
+
+  fail = true;
+  await tick(3400); // one real poll tick (runs.js polls every 3s)
+  assert.equal(document.querySelectorAll('.row.runrow:not(.row--head)').length, before,
+    'a transient failure must not blank a page the reader is using');
+  assert.ok(!/Could not read your runs/.test(document.querySelector('#v2-page').textContent));
+});
+
+test('Try again re-attempts the load and recovers to the real list', async () => {
+  freshDom();
+  let down = true;
+  const good = mockFetch();
+  globalThis.fetch = async (url, opts) => {
+    if (down) throw new TypeError('connection refused');
+    return good(url, opts);
+  };
+  const mod = await import(`../public/v2/pages/runs.js?retry=${Date.now()}`);
+  mod.default(new URLSearchParams());
+  await tick(60);
+  assert.match(document.querySelector('#v2-page').textContent, /Could not read your runs/);
+
+  down = false;
+  [...document.querySelectorAll('button')].find((b) => /Try again/.test(b.textContent)).click();
+  await tick(80);
+  assert.ok(document.querySelectorAll('.row.runrow:not(.row--head)').length > 0, 'the real list comes back');
+  assert.ok(!/Could not read your runs/.test(document.querySelector('#v2-page').textContent));
 });
