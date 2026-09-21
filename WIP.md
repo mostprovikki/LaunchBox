@@ -874,3 +874,61 @@ which is the same family. `runs.js` still blanks on a failed first load (`claude
 
 Housekeeping. The isolated instance on 43410 was torn down; a second probe used 43411 and is also
 gone. The owner's daemon on 43400 was not running at the start of this session and was not started.
+
+## 2026-09-22 · btv.10 (C3 Sessions + transcript) — a refusal that cost the page a sentence
+
+`claude-scheduler-btv.10` is done: `sessions-logic.js` (pure), `sessions.js` (list, both
+densities) and `session.js` (transcript), with `tests/frontend-v2-sessions.test.js`. 646/646 green,
+29 mutations verified red. Browser leg 49/49 on an isolated 43410 instance reading planted
+transcript fixtures, both themes.
+
+**Five more mockup claims refused.** "38 tool calls" on a LIST card has no column behind it — the
+sessions table carries `prompts`, `models`, the token counts and the two durations, and counting
+tool calls means parsing the transcript, one file read per card. The TRANSCRIPT page *does* count
+them, because it already holds the parsed turns, and the gate asserts exactly that split: if
+`sessions.js` ever imports `transcriptCounts` it is about to pay a parse per card. "Outcome:
+TASK-COMPLETE · bead wb-142 closed" fails twice over — the same cost problem, plus `dc9`'s missing
+fact. "burst · webapp-billing" as a card tag: `runs[]` carries the job NAME and no trigger.
+"Branch … worktree": `gitBranch` is recorded, whether it is a worktree branch is not.
+
+**The marker is the one outcome claim this page may make, and only in its narrow form.**
+`TASK-COMPLETE: <bead>` is literally text in the final assistant message, so it is read out of the
+transcript and shown — but `taskCompleteMarker()` inspects *only the last* assistant turn, because
+the scheduler's own prompt asks the agent to quote the instruction, and an agent that quoted it and
+then gave up is a handed-back bead, not a closed one. Reading any assistant turn would call that
+run finished. What the SCHEDULER then did is still unrenderable (`dc9`), so the fact says "marker
+for wb-142 in the final message" and never "closed".
+
+**The refusal that cost a sentence, and the bead that buys it back.** Both sessions mockups name
+`~/.claude/projects` — including the empty state, where the single most likely cause is that Claude
+Code runs under a different `HOME`, or `CS_SESSIONS_ROOT` points elsewhere. The index root is real
+but is never sent to the browser, so hard-coding it would be wrong on exactly the machines where
+that sentence matters. The page now says "the Claude Code transcript directory" and names
+`CS_SESSIONS_ROOT` as the thing that moves it. Filed as `claude-scheduler-nc5` — one additive field
+recovers the better wording.
+
+**Two mutation escapes, and both were the test's fault rather than the code's.** `toolSummary`'s
+"degrades instead of throwing" case was asserted with `null` input — which `asObj()` turns into
+`{}`, after which every summariser reads undefined fields perfectly safely. The guard was never
+exercised, and removing it stayed green. An input whose getter actually throws turned it red — and
+then *failed anyway*, because the guard wrapped only the summariser call: the fallback
+`JSON.stringify(i[key])` one line below re-threw on the identical shape. The guard now covers both,
+which is what it was supposed to do the whole time. The second escape was a bad mutation, not a
+weak test: a dead `_multi: true` field changes no behaviour. Re-run as `state.armed === s.id` →
+`state.armed != null` (arming one row arms all), it went red.
+
+**REVIEW #4's quiet delete, verified by what it does NOT send.** The property worth testing is not
+that the dialog appears — it is that the first click issues no request. Three tests assert exactly
+that: arming sends nothing, cancelling sends nothing, and only the second click reaches DELETE.
+Arming a second row disarms the first, so there is never more than one primed destructive control
+on screen, and leaving the route disarms it entirely — a primed delete that survives a navigation
+is one the reader has forgotten about. In the browser both themes confirm the danger-styled button
+is the only one on the page and is actually painted (`#B62B22` light, `#E06158` dark).
+
+**Transcript text never touches innerHTML.** Turn text is agent-authored and comes straight off
+disk; a gate asserts the only `html:` keys in `session.js` are the literal SVG constants, and a
+jsdom test feeds a turn containing `<img onerror>` and asserts zero elements are created.
+
+Housekeeping. The isolated instance on 43410 was torn down; `CS_SESSIONS_ROOT` pointed at planted
+fixtures throughout, so the owner's real `~/.claude/projects` was never read. The owner's daemon on
+43400 was not running and was not started.
