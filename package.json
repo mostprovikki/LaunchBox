@@ -14,7 +14,8 @@
     "test": "node --test tests/*.test.js",
     "screenshots": "node tools/screenshots/capture.mjs",
     "qa:v2": "node tools/qa/v2-route-walk.mjs",
-    "qa:v2:interactions": "node tools/qa/v2-interactions.mjs"
+    "qa:v2:interactions": "node tools/qa/v2-interactions.mjs",
+    "qa:v2:parity": "node tools/qa/v2-parity.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^12.2.0",

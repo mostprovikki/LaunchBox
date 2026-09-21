@@ -1193,3 +1193,49 @@ deleting the planners' focus call escaped the unit suite entirely, so a source g
 every dialog module to move focus; and the "presses a real Tab" test was slicing the file's own
 header prose rather than the walk, so it examined a few lines of comment — it now anchors on the
 section markers and fails loudly if they do not resolve.
+
+## 2026-09-22 · btv.15 (E3 cutover prep) — prepared, NOT flipped
+
+The mechanism is built and tested; the flip is the owner's. `claude-scheduler-btv.15` stays **open**
+on purpose: its acceptance criteria end with "owner sign-off recorded", and that is not mine to
+record. 753/753 tests green, 10 mutations verified red, all three gates clean.
+
+**The flag.** `v2Default` decides what the ROOT path serves, and it ships `'0'`:
+
+| flag | `/` | `/v1` | `/v2` |
+|---|---|---|---|
+| off (today) | the existing UI | the existing UI | /v2 |
+| on | /v2 | the existing UI | /v2 |
+
+`/v1` answers the existing UI in **both** states, so a link written today survives the flip and
+there is always a way back without touching the setting — which is what "kept at /v1 for one
+release" has to mean. A test asserts the default is off, that the value is read in exactly one
+place, and that **no production file anywhere writes it**: the flip is a human action against a
+running instance, the same airlock rule as project activation. (`tests/` is excluded from that
+walk, and the exclusion says why — this very file flips it in a throwaway DB, which is how the
+flipped state gets tested at all.)
+
+**Parity is a gate, not a checklist.** A hand-written parity list is stale the day after it is
+written, so `npm run qa:v2:parity` derives the comparison mechanically — every `/api/` path each UI
+actually calls — and holds it against a DECLARED list of differences, each with a reason. Anything
+undeclared fails, **in either direction**, and so does a declared difference that is no longer one
+(a stale exemption is how a real gap later slips through). 29 endpoints are called by both UIs.
+
+**The one real gap, and it is the owner's call.** The existing UI has a live keep-awake popover —
+off / while jobs are scheduled / timed 30m, 1h, 4h — driving `PUT /api/awake`. **No redesign mockup
+draws that control.** The only "awake" content in `redesign/*.html` is the `awakeResetLeadMin`
+setting, which /v2 does implement. So /v2 can configure how long to stay awake *before a reset*,
+but cannot hold the Mac awake on demand, and cutting over would remove that capability. Declared as
+`GAP — needs the owner's decision`, printed as a warning by the gate every run, and pinned by a test
+that fails if it is quietly downgraded to "covered". `/api/budget` is the only other old-only call
+and it genuinely is covered differently (through `/api/v2/overview` and the Settings reserves).
+
+**The gate had a real bug before the product did.** `covers()` treated `:id` as a wildcard on only
+one side, so `/api/runs/:id/:id` — which is how `runs-log.js` builds `/api/runs/${id}/${action}` —
+was reported as an undeclared v2-only endpoint even though the existing UI calls both concrete forms
+it stands for. A one-directional wildcard is a false-positive generator, and a parity gate that
+cries wolf is one nobody reads before a cutover. Fixed symmetrically and mutation-pinned in both
+directions.
+
+**What remains, and it is yours:** decide the keep-awake question, then flip `v2Default` to `'1'` on
+the running daemon when you want `/` to be the new UI. Nothing in this repo will do either.

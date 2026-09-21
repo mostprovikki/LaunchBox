@@ -345,6 +345,30 @@ export function createApp({
     res.sendFile(join(ROOT, 'public', 'v2', 'index.html'));
   });
 
+  // ------------------------------------------------- the cutover flag (E3)
+  // claude-scheduler-btv.15. `v2Default` decides which UI the ROOT path
+  // serves. It ships OFF, and flipping it is the owner's click — the same
+  // airlock principle the project activation uses: an agent may prepare the
+  // mechanism, only a human may throw it.
+  //
+  //   off (default)  /  → the existing UI      /v1 → the existing UI   /v2 → v2
+  //   on             /  → v2                   /v1 → the existing UI   /v2 → v2
+  //
+  // `/v1` answers the existing UI in BOTH states, so a link written today
+  // keeps working after the flip and there is always a way back without
+  // touching the setting — which is what "kept at /v1 for one release" means.
+  const v2IsDefault = () => String(getSetting(db, 'v2Default', '0')) === '1';
+  const sendExistingUi = (res) => res.sendFile(join(ROOT, 'public', 'index.html'));
+
+  app.get('/v1', (req, res) => sendExistingUi(res));
+
+  // Ahead of express.static, which would otherwise serve public/index.html for
+  // `/` before this could choose. Only the literal root is matched.
+  app.get('/', (req, res) => {
+    if (v2IsDefault()) return res.sendFile(join(ROOT, 'public', 'v2', 'index.html'));
+    return sendExistingUi(res);
+  });
+
   // `public/` is the one unauthenticated surface, and express.static does no
   // realpath containment — a symlink dropped in there by a build step, a package
   // manager or a stray `ln -s` would be followed straight out of the root and
