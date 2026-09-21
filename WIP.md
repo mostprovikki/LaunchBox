@@ -932,3 +932,73 @@ jsdom test feeds a turn containing `<img onerror>` and asserts zero elements are
 Housekeeping. The isolated instance on 43410 was torn down; `CS_SESSIONS_ROOT` pointed at planted
 fixtures throughout, so the owner's real `~/.claude/projects` was never read. The owner's daemon on
 43400 was not running and was not started.
+
+## 2026-09-22 · btv.11 (D1 new-job dialog + schedule builder) — three mockup numbers that were wrong
+
+`claude-scheduler-btv.11` is done: `job-form-logic.js` (pure) plus a rewritten `job-dialog.js`
+replacing B1's deliberately minimal stub, with `tests/frontend-v2-job-dialog.test.js`. 675/675
+green, 25 mutations verified red, browser leg 39/39 on an isolated 43410 instance in both themes —
+including a real gated `POST /api/jobs` and a real refusal.
+
+**No new endpoint, and that was the finding rather than the shortcut.** The bead carried btv.3's
+investigation: `POST /api/schedule/preview` already accepts `{schedules:[…], jobId}` and answers
+`{next, unknown}` with exactly the three states this dialog needs. A `/api/v2` twin would have been
+a second schedule parser, which is precisely how a "preview said 11:50, fired 11:47" bug is made.
+Reused unchanged.
+
+**Three mockup numbers were wrong, and all three are now pinned to the source rather than retyped.**
+
+*Cron field count.* `dialog-validation-errors.html` renders `0 1 * * * 6` as "has 6 fields —
+LaunchBox uses 5-field cron". Croner — which BOTH `previewSchedule` and `validateJob` construct —
+takes 5 **or** 6, the sixth being seconds. The live server says so in its own words:
+`exactly five or six space separated parts are required`. So the dialog forms no opinion about cron
+at all: `validateForm` checks only that the expression is non-empty, and an invalid one is whatever
+croner said, rendered verbatim. A gate now fails on `expected 5` / `5-field cron` appearing in any
+/v2 module.
+
+*Timeout maximum.* The same mockup calls 600 minutes "above the maximum of 240". `lib/validate.js`
+bounds `timeoutMin` at **1–1440**; 240 is `OFFSET_MAX_MIN`, a different field's limit. The test
+parses the real bounds out of `lib/validate.js` rather than re-typing them — and immediately earned
+its keep, because the first version of my own "these messages are anchored" test used the mockup's
+600 as its invalid value and passed for the wrong reason until the bound assertion contradicted it.
+
+*Permission-mode options.* The mockup offers "plan — read-only" and "auto — full autonomy"; the
+claude extension declares `auto | acceptEdits | default`. The dialog builds every advanced field
+from `GET /api/extensions`, so a third-party job type gets its own fields and nothing offers an
+option the server would reject. A gate fails on those invented strings.
+
+**REVIEW #6's anchors needed client-side validation, and the reason is a coupling this repo has
+already been bitten by.** The server answers a bad job with a flat `errors: [sentence]` array
+carrying no field attribution. Re-deriving the field by matching its English is the prose-parsing
+coupling `claude-scheduler-ddu` exists to stop. So the client validates to know *which* field —
+every message carries one, and a test fails if any does not — while the server stays the authority:
+sentences it rejects that the client did not predict (a cwd that does not exist, a cron croner
+refuses, an extension's own `validate()`) are shown **verbatim and unanchored**, never turned into
+a link to a field they were never attributed to.
+
+**The approval-waiting state freezes the form rather than hiding it,** and removes the exits. The
+request is already with the server; closing would not cancel it and would lose everything typed if
+it came back denied. Verified in a real browser mid-flight: the fields are visible, disabled, and
+there is no Cancel — the reader can still see exactly what they are being asked to approve. A
+refusal then restores the form with every value intact, which the browser leg checks by reading the
+prompt text back out of the DOM afterwards.
+
+**Round-tripping a schedule may not rewrite it.** `cronToPreset` refuses to *nearly* match: a step
+expression, a multi-day list and a six-field expression all open on the Cron tab with their text
+intact rather than being folded onto "daily" and silently rewritten on save. The round-trip test
+runs each shape through `entryToRow → rowToEntry` and asserts deep equality, and separately feeds
+a builder-produced expression to the server's own `previewSchedule` so "valid" means the scheduler
+agrees, not that two strings match.
+
+25 mutations run and reverted: the wrong timeout bound, hour/minute swapped, a weekday ignored, a
+nearly-matching preset, a dropped cron expression, the spent/unknown preview states collapsed, the
+server's cron error swallowed, a client-side opinion about cron validity, dropped field anchors,
+unchecked required fields, unbounded numbers, a single schedule promoted to an array, an empty
+budget block sent, budget left inside params, a clone that does not rename, submitting past a
+failed validation, summary links that do not focus, the waiting freeze removed, a Cancel that
+cannot cancel, a refusal that closes and loses the form, dropped server sentences, an unanchored
+sentence made into a dead link, a removable sole schedule, an editable type on edit, and an unnamed
+close button.
+
+Housekeeping. The isolated instance on 43410 was torn down. The owner's daemon on 43400 was not
+running and was not started.
