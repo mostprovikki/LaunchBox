@@ -12,7 +12,8 @@
   "scripts": {
     "start": "node server.js",
     "test": "node --test tests/*.test.js",
-    "screenshots": "node tools/screenshots/capture.mjs"
+    "screenshots": "node tools/screenshots/capture.mjs",
+    "qa:v2": "node tools/qa/v2-route-walk.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^12.2.0",

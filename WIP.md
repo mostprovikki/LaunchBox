@@ -1094,3 +1094,48 @@ shell before its first load" searched the entry function for a literal `pageHead
 `mountShell()` moved it one call away, so the gate failed a page that had just been made *more*
 correct. It now resolves one level of indirection — and was re-mutated (swap `mountShell()` and
 `loadAndRender()`) to confirm the relaxed version still catches a page that genuinely paints late.
+
+## 2026-09-22 · btv.13 (E1 route-walk gate) + 0ez — a gate with no exceptions
+
+`claude-scheduler-btv.13` is done: `npm run qa:v2` walks all **8 routes × 2 themes**, checking
+WCAG AA contrast, light surfaces stranded in dark mode, horizontal overflow, unnamed icon buttons,
+and that no route presents an empty `#v2-page` — plus console errors and failed requests across
+the whole walk. Clean on the current tree. 720/720 tests green, 18 gate mutations verified red.
+
+**Two deliberate departures from the bead's wording, both written into the driver's header rather
+than taken quietly.** The bead says walk `http://127.0.0.1:43400/v2` — the owner's daemon. It boots
+its own instance on 43410 with a throwaway `CS_DATA` instead: 43400 is a foreground process holding
+real jobs, and a gate that needs it running is a gate that cannot run on a clean checkout. `--url`
+still allows pointing at a live instance on purpose, and a test asserts 43400 appears nowhere
+outside comments. Second: `redesign/qa/audit.mjs`, which this ports, requires `playwright-core`
+through a hard-coded path into *another project's* `node_modules` — so it only ever ran on one
+machine. The port uses this repo's own dependency-free CDP client.
+
+**The rules were extracted so they could be mutation-checked at all.** `tools/qa/audit-rules.mjs`
+holds the colour maths, the thresholds and the verdict, pure and DOM-free; the driver injects those
+same thresholds into the in-page probe rather than the probe carrying its own copies, and a test
+greps the probe for hard-coded `4.5` / `0.75` / `18.66` to keep it that way. The contrast maths is
+pinned to WCAG's own published answers — black-on-white is exactly 21:1, `#767676` on white is
+just over 4.5 — rather than to itself.
+
+**The allow-list is empty, and that took fixing a bug instead of writing an exception.** The first
+run reported one console error: the `/favicon.ico` 404 both UIs produced (`claude-scheduler-0ez`).
+Carrying it as a permanent exception would have weakened the gate for every future route — and the
+broad version of that exception ("ignore anything with /api/ in it") would have hidden every
+failure the walk exists to find. So 0ez is fixed: `public/favicon.svg` plus `<link rel="icon">` in
+both `index.html` files, so the browser never asks for `/favicon.ico` at all. A test pins both
+declarations. `ALLOWED_CONSOLE` and `ALLOWED_REQUEST_FAILURES` are now `[]`.
+
+**Chrome's own 404 message does not say what failed.** `Log.entryAdded` carries the URL separately
+from the text, and without appending it the allow-list could not tell a favicon 404 from a missing
+stylesheet — leaving only two bad options, broaden until real failures hide, or fail every run. The
+driver now correlates them.
+
+**A skipped route is reported, loudly.** A `?id=` route with no id to deep-link is skipped rather
+than walked, and the skip is printed in the summary — a route the walk never visited is a route with
+no gate, and silence about it is the "can mean didn't run" failure `2wf` is about. On the current
+fixtures nothing is skipped.
+
+**Watched it fail, assembled.** Beyond the 18 unit mutations, the whole gate was run against a
+deliberately blanked Settings route: exit code 1, two `stranded_page` findings (dark and light),
+naming the bead. Reverted; clean again.
