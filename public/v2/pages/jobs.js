@@ -16,6 +16,7 @@ import {
 } from '../ui.js';
 import { onRender } from '../router.js';
 import { openJobDialog } from './job-dialog.js';
+import { openBurnDownDialog } from './plan-dialogs.js';
 import {
   typeBadge, jobDetailLine, scheduleDescribe, hasAfterReset, relIn, fmtWhen,
   attentionByJobId, runningByJobId, computeRowState, filterJobs,
@@ -350,8 +351,9 @@ function render() {
       : 'No jobs yet',
     actions: jobs.length ? [
       el('button', {
-        class: 'btn', disabled: true,
-        'data-tip': 'Burn-down planning ships in a later bead (claude-scheduler-btv.12, D2) — not yet available',
+        class: 'btn', 'data-mutating': true,
+        'data-tip': 'Spend spare capacity on purpose — shows the plan before creating anything',
+        onclick: () => openBurnDownDialog({ onApplied: loadAndRender }),
       }, [svgNode(SVG_CLOCK), 'Plan burn-down…']),
       el('button', {
         class: 'btn btn--primary', 'data-mutating': true,

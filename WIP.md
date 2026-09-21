@@ -1002,3 +1002,62 @@ close button.
 
 Housekeeping. The isolated instance on 43410 was torn down. The owner's daemon on 43400 was not
 running and was not started.
+
+## 2026-09-22 · btv.12 (D2 burn-down + burst planners) — the epic's one additive endpoint
+
+`claude-scheduler-btv.12` is done: `plan-logic.js` (pure), `plan-dialogs.js` (both planners), and
+one new endpoint. 699/699 green, 25 mutations verified red, browser leg 44/44 on an isolated 43410
+instance with real learned cost history and a real activated project, both themes — including a
+real gated `POST /api/budget/plan/apply` that materialised six `once` entries on a real job.
+
+**`GET /api/v2/plan-candidates` is the only endpoint this epic added, and the bead authorised it in
+advance.** What was genuinely missing: the burn-down planner's whole premise is choosing WHICH jobs
+may spend, which means seeing each job's learned per-run cost and whether the guard would refuse it
+*before* asking for a plan. Both facts existed only inside `POST /api/budget/plan`'s
+`assumptions[]` — English sentences, and only for jobs already chosen. A UI deriving either by
+parsing that prose is exactly the coupling `claude-scheduler-ddu` exists to stop, so the numbers are
+served as numbers. Nothing re-derives a decision: `avgDeltaForJob` is the same cost history
+`budget.plan()` uses, and the guard's reason goes through `decodeReason` — the *same* decoder
+`/api/v2/overview` already uses, with a test asserting there is exactly one pattern table, so the
+two cannot word one reason two ways. `ASSUMED_COST_PCT` and `MIN_SAMPLES` became exports rather
+than being retyped in the UI.
+
+**Five more mockup claims refused.** "Medium confidence" and "could land between 58% and 74%":
+`lib/budget.js` returns `low | high` and a point estimate — there is no third state and no interval
+anywhere, and C1's merge bar had already caught `burstSummary` inventing one of these. "Expected
+runs 2–3": `expectedRuns` is `slots.length`, a number the timetable committed to. "wb-221 first":
+`burst.plan()` carries ready COUNTS and deliberately no bead list, because its own comment says the
+counts come from the poller's cache so a preview costs zero `bd` calls — and which bead runs is
+decided at each attempt anyway. "beads db locked since 09:12": the count, as C2 established. And
+"Jobs allowed to spend — **Claude jobs only**": the server's rule is narrower and different — any
+job may be planned except a bead-backed one, and that exclusion is a safety rule (a planned `once`
+entry would fire a bead through the cron scheduler with no lease, no claim and no close). The
+browser leg confirms a shell job is offered and the bead-backed one is excluded with that reason.
+
+**A distinction the mockup's flat "excluded" column loses.** A job the guard would block *right
+now* is still includable — the guard is checked again at fire time and the situation may have
+changed by then — so it is an includable row carrying a warning, not an exclusion. Only
+"cannot be planned" excludes. Verified live: the docs job rendered
+`avg 6.80% per run over 4 runs · Fable is at 90% (critical) right now` and stayed selectable.
+
+**The compound-disable trap, hit again.** Both Confirm buttons were live with no plan, because
+`render()` called `disableMutatingControls(...)` *after* setting the business disable, and
+`setDisabledReason(el, null)` sets `disabled = false` unconditionally. Exactly what B3 hit with the
+Cleanup button. Fixed the same way — a compound condition (`!plan || liveBurst || degradedReason()`)
+applied after the sweep — and both orderings are now mutation-pinned.
+
+**Neither dialog computes a plan.** `lib/budget.js` owns the reserve cap, the never-past-the-reset
+horizon, the lead time and the spacing, and `lib/burst.js` defers to it so a burst can never lay out
+slots the guard would refuse. A gate greps both modules for that arithmetic, and two more assert
+each confirm sends the server's own slots back **verbatim** — a mutation that merely re-rounded the
+times to the minute turns red.
+
+**The harness was wrong before the code was, again.** Twelve checks failed on the first browser run
+with "usage for five_hour is unknown" — which was the UI honestly reporting the server. The cause
+was my `FAKE_CLAUDE`, paraphrased from `capture.mjs` from memory, dropping the
+`--input-format` argv handshake so the usage probe never answered. Lifted verbatim from
+`capture.mjs` instead; 44/44. Same lesson as C2's dot check: when a browser leg fails, suspect the
+harness before the product.
+
+Housekeeping. The isolated instance on 43410 was torn down. The owner's daemon on 43400 was not
+running and was not started.
