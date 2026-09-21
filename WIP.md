@@ -1239,3 +1239,20 @@ directions.
 
 **What remains, and it is yours:** decide the keep-awake question, then flip `v2Default` to `'1'` on
 the running daemon when you want `/` to be the new UI. Nothing in this repo will do either.
+
+## 2026-09-22 · 2wf — the flake was a presence assertion on a fixed sleep
+
+`claude-scheduler-2wf` is fixed, and it was not where the bead expected. `tests/scheduler.test.js`
+was already correct: every positive-fire assertion there uses `waitFor`, and its `sleep(1200)` calls
+are *absence* assertions, which is exactly what `helpers.js`'s own comment says a fixed sleep is for.
+
+The live flake was `tests/pause.test.js:249` — `sleep(1100)` followed by
+`assert.ok(starts.length >= 1, 'and unpausing lets it fire again')`. A per-second cron gets exactly
+one chance inside 1100ms, so under full-suite load that assertion could mean "the tick did not get
+scheduler time" rather than "unpausing is broken". Observed failing once in roughly fifteen
+full-suite runs this session and never in isolation, which is the signature. Now `waitFor`.
+
+**The fix had to not weaken the gate, so both directions were mutated:** `blocksSchedule` forced to
+always-true (unpausing never resumes) and always-false (pausing never blocks) each turn it red. A
+longer wait that also stops catching the bug would have been the worse outcome. Three consecutive
+full-suite runs green, 753/753.
