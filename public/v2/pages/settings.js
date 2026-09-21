@@ -64,6 +64,8 @@ let cleanupBtn = null;
 let uninstallInput = null;
 let uninstallBtn = null;
 let authUnsub = null;
+// True only while this page owns #v2-page. See render()'s guard.
+let mounted = false;
 let routeWatcherArmed = false;
 
 // ---------------- data ----------------
@@ -436,6 +438,14 @@ function renderUnreachable() {
 function render() {
   const page = $('#v2-page');
   if (!page) return;
+  // An in-flight load from BEFORE a route change must not paint over the page
+  // that now owns #v2-page. Clearing the poll timer on route change does not
+  // cover this: the request already in the air still resolves and calls
+  // render(), which clears #v2-page and rebuilds it for a route the reader has
+  // already left. Measured in a real browser during C2's verification
+  // (claude-scheduler-btv.9) — Projects → project detail → Projects rendered
+  // the DETAIL page under the Projects route, and the reverse going back.
+  if (!mounted) return;
   clear(page);
   state.coreReaders = {};
   state.extReaders = {};
@@ -488,12 +498,14 @@ function ensureRouteWatcher() {
   routeWatcherArmed = true;
   authUnsub = onAuthState(() => { updateActionbar(); updateDangerArm(); });
   onRender((route) => {
+    mounted = route === 'settings';
     if (route !== 'settings' && authUnsub) { authUnsub(); authUnsub = null; routeWatcherArmed = false; }
   });
 }
 
 export default function settings(params) {
   void params; // no deep-link query params defined for this route
+  mounted = true;
   ensureRouteWatcher();
   load();
 }

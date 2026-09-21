@@ -797,3 +797,80 @@ is UNVERIFIED: the seeded running rows were DB-only, bypassing `lib/runner.js`'s
 tracking, so the POST fired without error and without effect. The agent declined to route around
 the Touch ID gate to create a real run, which is the correct call. Port 43411 remains held by pid
 39469 from two sessions ago.
+
+## 2026-09-22 · btv.9 (C2 Projects + project detail) — and three defects four pages shared
+
+`claude-scheduler-btv.9` is done: `public/v2/pages/projects-logic.js` (pure), `projects.js` (list)
+and `project.js` (detail), with `tests/frontend-v2-projects.test.js`. 613/613 green. The browser
+leg is 43/43 against an isolated daemon on 43410 with real `bd init` fixture repos, both themes.
+
+**Six mockup claims refused, and the refusals are gates rather than comments.** `bd ready` is the
+only issue-counting call `lib/beads.js` makes, so "4 ready **of 23 open**" and the coverage line's
+"11 blocked by dependencies · 8 missing the label" have no source — a bead that failed either
+filter never reaches us to be counted. The projects table carries `createdAt`/`updatedAt` and no
+per-transition stamp, and `updatedAt` moves on every poll, so "activated by you on 26 Jul" and
+"Paused by you on 28 Jul" would be fiction; registration date is real and is what the page says.
+`busyStreak` is a consecutive-miss counter, not a start time, so "locked by another process since
+09:12" became the count. And "closed with `TASK-COMPLETE`" is still unrenderable for the reason
+`dc9` records. Each is a regex in `UNSUPPORTED_ON_PROJECT_PAGES`, not a sentence in a comment —
+the lesson from C1's merge bar, applied before the escape rather than after it.
+
+"Would contribute nothing yet" survives, but only when it is *measured*: the mockup backs it with
+an open-bead count that doesn't exist, so the banner is shown when a poll completed and found zero
+eligible beads, and suppressed entirely when the project has never been polled. A never-polled
+project claiming a zero is the same lie `readyFor()`'s `count: null` exists to prevent.
+
+**The airlock is a single call site by construction.** One `{ state: 'active' }` per page, each
+behind a `window.confirm` that spells out unattended-and-while-you-are-away, with the server's
+Touch ID approval on top. A gate counts the call sites and fails at two; another asserts register
+and discover never send a `state` at all. The gate's first run found *three* sites — because it
+was counting its own explanatory comment, the identical defect `FORBIDDEN_CLAIMS` hit. Stripping
+comments first is now in both.
+
+**Three defects the browser found that no test would have, all of them shared by four or five
+pages.**
+
+*An in-flight load repaints a route the reader has already left.* Navigating Projects → detail →
+Projects rendered the DETAIL page under the Projects route, and the reverse going back. Clearing a
+page's poll timer on route change does not cover it: the request already in the air still resolves
+and calls `render()`, which clears `#v2-page` and rebuilds it for the wrong route. Every /v2 page
+that rebuilds the shell wholesale had the shape — `jobs`, `overview`, `settings`, `projects`,
+`project`. All five now carry a `mounted` flag set on entry and cleared by their own `onRender`
+watcher, with a source gate over the set. The first fix used `currentRouteName()` and broke twelve
+existing tests, which was correct information: those tests call the page function directly, and a
+guard that only works under the router is a guard that is untestable without one.
+
+*The detail page left the previous page on screen for seconds.* Its first load includes
+`GET /api/projects/:id/ready`, which runs a real blocking `bd ready` — seconds, not milliseconds —
+and `render()` did not run until it returned. `runs.js` and `overview.js` already paint a
+"Loading…" shell first; `projects.js` and `project.js` did not. Both now do, gated by a test that
+checks the entry function reaches `pageHead()` before it reaches its load.
+
+*`bd bd version 1.1.0 (Homebrew)`.* `beads.version()` returns the whole `bd --version` line
+verbatim, so prefixing "bd " said it twice. Reformatted, with anything of an unexpected shape
+passed through untouched rather than guessed at.
+
+**The dot check was wrong before the code was.** The first browser run failed `pending`'s chip for
+having no background colour — but a *ring* is legitimately transparent-backed with a coloured
+border, and the light-theme pass had "passed" only because the list rendered zero cards and
+`.every()` on an empty array is vacuously true. Both halves fixed: the check now asserts the dot is
+visible *somehow* in each theme (filled or ringed, read from computed style), and the card count is
+asserted non-zero before the chips are judged.
+
+29 mutations run and reverted, each turning the intended test red: the ready-count null/zero
+distinction, the action set per state, banner precedence, the unmeasured "contributes nothing"
+claim, an invented "since HH:MM", `pill--0`, claim order, measured-vs-budget spend, an unclamped
+meter, a past slot counted as an attempt left, burst membership dropped, `bd unknown`, the airlock
+confirm removed, a second activation call site, a blanking first load, the burst planner made
+sweepable, register sending a state, the delete iconbtn losing its name, "of 23 open",
+"closed with TASK-COMPLETE", the stale-render guard removed from each of five pages, a watcher that
+never un-mounts, the pre-load shell removed, and the raw bd version printed verbatim.
+
+**Not in scope, recorded.** `tests/pause.test.js:249` flakes under full-suite load (passes 3/3 in
+isolation) — a `* * * * * *` cron with `sleep(1100)` gives the tick exactly one chance, so
+`starts.length >= 1` can mean "the tick did not get scheduler time". Noted on `claude-scheduler-2wf`,
+which is the same family. `runs.js` still blanks on a failed first load (`claude-scheduler-7j2`);
+`projects.js` and `project.js` ship the non-blanking pattern it needs.
+
+Housekeeping. The isolated instance on 43410 was torn down; a second probe used 43411 and is also
+gone. The owner's daemon on 43400 was not running at the start of this session and was not started.

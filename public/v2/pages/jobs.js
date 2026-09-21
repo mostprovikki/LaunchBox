@@ -34,6 +34,8 @@ const SVG_SEARCH_SM = '<svg width="14" height="14" viewBox="0 0 24 24" fill="non
 const SVG_SEARCH_LG = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>';
 
 const state = { jobs: [], running: 0, overview: null, extNames: {}, query: '', type: 'all', listHost: null };
+// True only while this page owns #v2-page. See render()'s guard.
+let mounted = false;
 let pollTimer = null;
 let routeWatcherArmed = false;
 
@@ -318,6 +320,14 @@ function toolbar() {
 function render() {
   const page = $('#v2-page');
   if (!page) return;
+  // An in-flight load from BEFORE a route change must not paint over the page
+  // that now owns #v2-page. Clearing the poll timer on route change does not
+  // cover this: the request already in the air still resolves and calls
+  // render(), which clears #v2-page and rebuilds it for a route the reader has
+  // already left. Measured in a real browser during C2's verification
+  // (claude-scheduler-btv.9) — Projects → project detail → Projects rendered
+  // the DETAIL page under the Projects route, and the reverse going back.
+  if (!mounted) return;
 
   const prevSearch = $('#jobs-search');
   const hadFocus = !!prevSearch && document.activeElement === prevSearch;
@@ -379,6 +389,7 @@ function ensureRouteWatcher() {
   if (routeWatcherArmed) return;
   routeWatcherArmed = true;
   onRender((route) => {
+    mounted = route === 'jobs';
     if (route !== 'jobs' && pollTimer) {
       clearInterval(pollTimer);
       pollTimer = null;
@@ -388,6 +399,7 @@ function ensureRouteWatcher() {
 
 export default function jobs(params) {
   void params; // no deep-link query params defined for this route yet
+  mounted = true;
   ensureRouteWatcher();
   if (!pollTimer) {
     loadExtensionNames();
