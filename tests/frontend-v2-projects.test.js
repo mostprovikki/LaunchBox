@@ -451,20 +451,38 @@ test('jsdom: the burst strip shows measured spend and offers Cancel', async () =
   assert.ok(calls.some((c) => c.path === '/api/bursts/b1/cancel' && c.method === 'POST'));
 });
 
-test('jsdom: the burst planner button is disabled for its own reason and is not data-mutating', async () => {
+test('jsdom: the burst planner opens when idle and is dead — un-revivably — while a burst runs', async () => {
+  // This test previously asserted the button was dead because D2 had not
+  // landed. D2 (claude-scheduler-btv.12) landed, so the contract changed and
+  // the test went red, which is the system working. The rule it now pins is
+  // the one that outlives the bead: the button is live when idle, and while a
+  // burst is running it is disabled for a BUSINESS reason and therefore must
+  // NOT carry data-mutating — the central degraded-state sweep re-enables
+  // every data-mutating control when the daemon comes back, and that must not
+  // revive a control the running burst is what disables.
   mountDom();
   mockFetch({ '/api/projects': projectsPayload(), '/api/bursts': { active: null } });
   const { default: projects } = await import(`../public/v2/pages/projects.js?case=planner${Date.now()}`);
   projects(new URLSearchParams());
   await settle(); await settle();
 
-  const btn = [...document.querySelectorAll('button')].find((b) => /Start a burst/.test(b.textContent));
-  assert.ok(btn.disabled, 'the planner is honestly dead until D2 lands');
-  // Critical: the central degraded-state sweep re-enables every data-mutating
-  // control when the daemon comes back. A control disabled for a BUSINESS
-  // reason must not carry the attribute, or recovery would revive it.
-  assert.equal(btn.getAttribute('data-mutating'), null);
-  assert.match(btn.getAttribute('data-tip'), /btv\.12|not yet available/);
+  let btn = [...document.querySelectorAll('button')].find((b) => /Start a burst/.test(b.textContent));
+  assert.equal(btn.disabled, false, 'with no burst running the planner opens');
+  assert.equal(btn.getAttribute('data-mutating'), '', 'and it IS swept by the degraded-state sweep');
+
+  mountDom();
+  mockFetch({
+    '/api/projects': projectsPayload(),
+    '/api/bursts': { active: { id: 'b1', window: 'five_hour', budgetPct: 10, startPct: 1, currentPct: 2, runs: 0, slots: [], projectIds: [] } },
+  });
+  const { default: projects2 } = await import(`../public/v2/pages/projects.js?case=planner2${Date.now()}`);
+  projects2(new URLSearchParams());
+  await settle(); await settle();
+
+  btn = [...document.querySelectorAll('button')].find((b) => /Start a burst/.test(b.textContent));
+  assert.equal(btn.disabled, true, 'a live burst disables it');
+  assert.equal(btn.getAttribute('data-mutating'), null, 'and the sweep must not be able to revive it');
+  assert.match(btn.getAttribute('data-tip'), /already running/);
 });
 
 test('jsdom: every icon-only control on the list is named for assistive tech', async () => {

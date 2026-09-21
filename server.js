@@ -12,7 +12,7 @@ import {
   insertRun, getRun, listRuns, lastRun, failOrphanRuns,
   getSetting, setSetting, cleanupAll, listUsageSnapshots,
   listProjects, getProject, getProjectByPath, createProject, updateProject, deleteProject,
-  listLeases, listJobsByProject,
+  listLeases, listJobsByProject, avgDeltaForJob,
 } from './lib/db.js';
 import { validateJob, previewSchedule, scheduleEntries, hasAfterReset } from './lib/validate.js';
 import { loadExtensions, manifest, validateFields } from './lib/extensions.js';
@@ -24,7 +24,7 @@ import {
   createUsageMonitor, POLL_FLOOR_SEC, DEFAULT_POLL_SEC, USAGE_SHOW_MODES,
   DEFAULT_WARN_PCT, DEFAULT_CRIT_PCT,
 } from './lib/usage.js';
-import { createBudgetPolicy } from './lib/budget.js';
+import { createBudgetPolicy, ASSUMED_COST_PCT, MIN_SAMPLES } from './lib/budget.js';
 import { createBurst, BURST_DEFAULTS } from './lib/burst.js';
 import { createBeads } from './lib/beads.js';
 import { createWorktrees } from './lib/worktree.js';
@@ -1506,6 +1506,79 @@ export function createApp({
       running,
       today,
       automation,
+    });
+  });
+
+  // ------------------------------------------------- v2: plan candidates
+  // GET /api/v2/plan-candidates (claude-scheduler-btv.12, D2) — the ONE
+  // additive endpoint the /v2 epic still needed, and the bead authorised it in
+  // advance ("additive endpoints if the existing burst API lacks preview").
+  //
+  // What was actually missing: the burn-down planner's whole premise is that
+  // you choose WHICH jobs may spend, which means seeing each job's learned
+  // per-run cost and whether the guard would refuse it *before* asking for a
+  // plan. Both facts existed only inside `POST /api/budget/plan`'s
+  // `assumptions[]` — English sentences, and only for jobs already chosen. A
+  // UI deriving either by parsing that prose is the coupling
+  // claude-scheduler-ddu exists to stop, so the numbers are served as numbers.
+  //
+  // Nothing here re-derives a decision: `avgDeltaForJob` is the same cost
+  // history `budget.plan()` uses, `policy.explain(job).blocked` is the guard's
+  // own sentence, and `decodeReason` (above) only decomposes it — the same
+  // decoder /api/v2/overview already uses, so the two cannot word one reason
+  // two ways. Additive: nothing existing reads this and nothing existing
+  // changed to serve it.
+  const PLANNABLE_WINDOWS = ['five_hour', 'seven_day'];
+
+  app.get('/api/v2/plan-candidates', (req, res) => {
+    const window = PLANNABLE_WINDOWS.includes(req.query.window) ? req.query.window : PLANNABLE_WINDOWS[0];
+    const snap = usage?.snapshot() ?? null;
+    const w = snap?.windows?.[window] ?? null;
+
+    const jobs = listJobs(db).map((job) => {
+      const { samples, median } = avgDeltaForJob(db, job.id);
+      const measured = median?.[window];
+      // Same test budget.plan() applies: a zero or missing median is not a
+      // measurement, it is the absence of one.
+      const learned = typeof measured === 'number' && measured > 0;
+      // A bead-backed row is not plannable, and this is a safety rule rather
+      // than a tidiness one — see POST /api/budget/plan's comment. Reported so
+      // the dialog can show it excluded WITH the reason instead of silently
+      // omitting it, which would look like a bug.
+      const beadId = job.params?._beadId ?? null;
+      return {
+        id: job.id,
+        name: job.name,
+        type: job.type,
+        enabled: job.enabled,
+        plannable: !beadId,
+        notPlannable: beadId ? { code: 'bead_backed', beadId, message: NOT_PLANNABLE } : null,
+        costPct: Number((learned ? measured : ASSUMED_COST_PCT).toFixed(3)),
+        samples,
+        source: learned ? 'learned' : 'assumed',
+        // The same condition budget.plan() uses to set `confidence: 'low'`,
+        // reported per job so the dialog can say WHICH job is the soft number
+        // rather than flagging the whole plan and leaving the reader guessing.
+        lowConfidence: !learned || samples < MIN_SAMPLES,
+        blocked: decodeReason(policy.explain(job).blocked),
+      };
+    });
+
+    res.json({
+      window,
+      asOf: new Date().toISOString(),
+      // The usage half the dialog needs to say "currently at X%, so ~Y% to
+      // spend" without a second call. `null` when the probe has no reading —
+      // distinct from 0, and the dialog must not render one as the other.
+      usage: w ? {
+        percent: typeof w.percent === 'number' ? w.percent : null,
+        resetsAt: w.resetsAt ?? null,
+        checkedAt: snap?.checkedAt ?? null,
+      } : null,
+      assumedCostPct: ASSUMED_COST_PCT,
+      minSamples: MIN_SAMPLES,
+      slotMax: PLAN_SLOT_MAX,
+      jobs,
     });
   });
 

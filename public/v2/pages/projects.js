@@ -22,6 +22,7 @@ import {
   fmtTime, fmtDate, projectActions, summaryBits, cardBanner,
   burstSummary, burstProjectIds, chipFor, filterProjects, listSubline,
 } from './projects-logic.js';
+import { openBurstDialog } from './plan-dialogs.js';
 
 const POLL_MS = 5000;
 
@@ -444,13 +445,19 @@ function render() {
   // D2 (claude-scheduler-btv.12) owns the burst planner dialog. Until it
   // lands the button is present and honestly dead rather than absent —
   // the same treatment jobs.js gives "Plan burn-down…".
+  // Disabled ONLY while a burst is live — that is a business fact, not a
+  // connectivity one, so it deliberately carries no data-mutating attribute:
+  // the central degraded-state sweep must not revive it when the daemon comes
+  // back while a burst is still running.
   const burstBtn = el('button', {
     class: 'btn',
-    disabled: true,
+    disabled: !!state.burst,
+    'data-mutating': state.burst ? null : true,
     'data-tip': state.burst
       ? 'A burst is already running — cancel it first'
-      : 'The burst planner ships in a later bead (claude-scheduler-btv.12, D2) — not yet available',
+      : 'Spend a fixed slice of your limit on ready beads, then stop',
   }, [svgNode(SVG_BOLT), 'Start a burst…']);
+  if (!state.burst) burstBtn.addEventListener('click', () => openBurstDialog({ onStarted: loadAndRender }));
   const discoverBtn = el('button', { class: 'btn', 'data-mutating': true }, [svgNode(SVG_DISCOVER), 'Discover in project roots']);
   discoverBtn.addEventListener('click', discoverProjects);
 
