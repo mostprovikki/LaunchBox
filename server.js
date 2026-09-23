@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, dirname, isAbsolute, resolve as resolvePath } from 'node:path';
 import { homedir } from 'node:os';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { ensureDirs, dbPath, dataDir, PORT_BASE } from './lib/paths.js';
 import { ensureToken, tokenMatches } from './lib/token.js';
@@ -266,6 +266,70 @@ export const APPROVAL_RESEND_WINDOW_MS = 1000;
 // reach nothing — no network, no parent document, no credential.
 export const GRAPH_CSP = "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'";
 
+// ------------------------------------------------ the graph frame's ticket
+// claude-scheduler-vo4.8. MEASURED, not reasoned — both halves below were
+// driven in Chrome on 2026-09-24 before a line of this was written.
+//
+// WHY A TICKET EXISTS AT ALL. The graph is delivered as a DOCUMENT, through
+// `<iframe src>`, and a document navigation sends no Authorization header. So
+// the frame was answered by the /api gate with 401 JSON and rendered
+// `{"error":"this session key is not valid …"}` where the graph should be.
+// Observed in a browser, not inferred: the frame never got an execution
+// context and never requested D3.
+//
+// WHY NOT `srcdoc`. Fetching the page with the Bearer token already in hand
+// and assigning `iframe.srcdoc` adds no auth path — but it throws the RESPONSE
+// away, and the response is where the containment lives. Measured on the same
+// page in the same browser: delivered as `srcdoc`, an off-origin <script> RAN
+// inside the frame and a `fetch()` from inside it read a secret back out;
+// delivered as a real URL under GRAPH_CSP both were refused (`script-src-elem`
+// and `connect-src` violations). A <meta> policy can restore the CSP but
+// cannot express `X-Content-Type-Options` at all, and covers nothing the
+// parser saw before it. So the document stays a real URL.
+//
+// WHAT A TICKET IS. 32 random bytes bound to ONE project id, valid ONCE and
+// only for GRAPH_TICKET_TTL_MS. It is not the API token and it is not a
+// weaker copy of it: the only request it can authorise is a GET of that one
+// project's graph document. The API token itself never enters a URL.
+export const GRAPH_TICKET_TTL_MS = 30_000;
+// A frame that is minted for and never loaded leaves its ticket behind. The
+// cap makes that bounded rather than a slow leak; the oldest goes first.
+export const GRAPH_TICKET_MAX = 32;
+
+export function createGraphTickets({ ttlMs = GRAPH_TICKET_TTL_MS, now = () => Date.now() } = {}) {
+  const live = new Map(); // ticket -> { projectId, expiresAt }
+  const sweep = () => { const t = now(); for (const [k, v] of live) if (v.expiresAt <= t) live.delete(k); };
+  return {
+    mint(projectId) {
+      sweep();
+      while (live.size >= GRAPH_TICKET_MAX) live.delete(live.keys().next().value);
+      const ticket = randomBytes(32).toString('hex');
+      live.set(ticket, { projectId: String(projectId), expiresAt: now() + ttlMs });
+      return { ticket, ttlMs };
+    },
+    /**
+     * Single use in the strong sense: the ticket is deleted the moment it is
+     * looked at, whether or not it turns out to be valid here. A replay, a
+     * ticket pointed at a second project, and an expired one all fail the same
+     * way — and all of them fall through to the ordinary 401.
+     */
+    redeem(ticket, projectId) {
+      if (typeof ticket !== 'string' || !ticket) return false;
+      const row = live.get(ticket);
+      if (!row) return false;
+      live.delete(ticket);
+      if (row.expiresAt <= now()) return false;
+      return row.projectId === String(projectId);
+    },
+    get size() { return live.size; },
+  };
+}
+
+// The ONE path a ticket can open. Anchored end to end so it can never widen to
+// a sibling route: the literal `/v2/projects/<one segment>/graph.html`, as the
+// path reads INSIDE the `/api` mount.
+const GRAPH_DOC_PATH = /^\/v2\/projects\/([^/]+)\/graph\.html$/;
+
 export function createApp({
   db, runner, scheduler, extensions, awake, usage = null, budget = null, pause = null,
   projects = null, beads = null, burst = null, sessions = null,
@@ -288,6 +352,9 @@ export function createApp({
   // `armedTimeoutReplay` below). Injectable so a test can shrink it rather than
   // sleep through the real one.
   approvalResendWindowMs = APPROVAL_RESEND_WINDOW_MS,
+  // How long a graph frame's one-time ticket stays redeemable. Injectable so a
+  // test can expire one without sleeping through the real window.
+  graphTicketTtlMs = GRAPH_TICKET_TTL_MS,
 }) {
   const app = express();
 
@@ -339,7 +406,30 @@ export function createApp({
   // extension with localhost permission, or a port that becomes reachable by
   // accident through a container forward, an `ssh -R`, or a VPN misconfig.
   const expectedToken = token ?? ensureToken();
+  const graphTickets = createGraphTickets({ ttlMs: graphTicketTtlMs });
   app.use('/api', (req, res, next) => {
+    // The graph frame (claude-scheduler-vo4.8). A one-time ticket may stand in
+    // for the Bearer header, and for nothing except a GET of one project's
+    // graph DOCUMENT — the one request a browser makes without headers we
+    // control. Every part of it is anchored: the method, the exact path, and
+    // the project id the ticket was minted against. It is checked before the
+    // token comparison so the frame never needs the token; it *falls through*
+    // rather than answering when there is no usable ticket, so an ordinary
+    // authenticated GET of the same URL is unaffected.
+    if (req.method === 'GET') {
+      const m = GRAPH_DOC_PATH.exec(req.path);
+      if (m) {
+        let wanted = null;
+        try { wanted = decodeURIComponent(m[1]); } catch { wanted = null; }
+        const ticket = typeof req.query?.ticket === 'string' ? req.query.ticket : null;
+        if (ticket && wanted !== null && graphTickets.redeem(ticket, wanted)) {
+          // A ticket is not the token. Leaving csToken empty keeps it out of
+          // the approval grace window, which is keyed to the caller's token.
+          req.csToken = '';
+          return next();
+        }
+      }
+    }
     const header = String(req.headers.authorization || '');
     // RFC 7235 makes the auth scheme case-insensitive. Matching only `Bearer `
     // failed closed, so it was never a hole — but a third-party caller sending
@@ -1668,6 +1758,9 @@ export function createApp({
   //      why 'unsafe-inline' is survivable only next to `connect-src 'none'`.
   // The path bd is invoked in comes from the stored project row, never from the
   // request: the id selects a row, it does not name a directory.
+  //   3. The frame reaches this endpoint with a one-time ticket rather than a
+  //      header, because a document navigation has no headers to carry — see
+  //      createGraphTickets() and POST .../graph-ticket below.
   app.get('/api/v2/projects/:id/graph.html', async (req, res) => {
     if (!needProjects(res)) return;
     const project = getProject(db, req.params.id);
@@ -1676,6 +1769,9 @@ export function createApp({
       const raw = await beads.graphHtml(project);
       const { html } = localiseGraphHtml(raw);
       res.set('Content-Security-Policy', GRAPH_CSP);
+      // The URL carries a (spent) ticket, so it must not travel: the vendored
+      // D3 request the frame makes next would otherwise send it as a Referer.
+      res.set('Referrer-Policy', 'no-referrer');
       // The page is served from the daemon's own origin; a sniffed content type
       // is one more way inline script could be reinterpreted.
       res.set('X-Content-Type-Options', 'nosniff');
@@ -1687,6 +1783,21 @@ export function createApp({
       // 502: bd or its output is what failed, not this request.
       res.status(502).json({ error: err?.message ?? String(err) });
     }
+  });
+
+  // POST /api/v2/projects/:id/graph-ticket (claude-scheduler-vo4.8). Behind the
+  // Bearer header like every other /api route — this is the authenticated XHR
+  // that buys the unauthenticated document navigation above its one entry.
+  // POST, not GET, because it creates state; the CSRF guard therefore applies
+  // to it too, and a cross-origin page cannot mint one.
+  app.post('/api/v2/projects/:id/graph-ticket', (req, res) => {
+    if (!needProjects(res)) return;
+    const project = getProject(db, req.params.id);
+    if (!project) return res.status(404).json({ error: 'not found' });
+    // Bound to the row's id, not to the string in the request: the ticket can
+    // only ever open the project it was minted for.
+    const { ticket, ttlMs } = graphTickets.mint(project.id);
+    res.json({ ticket, ttlMs });
   });
 
   // ------------------------------------------------- v2: plan candidates
