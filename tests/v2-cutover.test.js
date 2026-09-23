@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
-import { apiCalls, covers, compare, loadCalls, ACCEPTED } from '../tools/qa/v2-parity.mjs';
+import { apiCalls, covers, compare, loadCalls, ACCEPTED, RESOLVED } from '../tools/qa/v2-parity.mjs';
 import { tmpData, extensions } from './helpers.js';
 import { ensureDirs } from '../lib/paths.js';
 import { ensureToken } from '../lib/token.js';
@@ -150,11 +150,11 @@ test('an undeclared difference fails the gate, in either direction', () => {
   // stays a unit test.
   const oldCalls = new Set(['/api/jobs', '/api/secret-old-thing']);
   const v2Calls = new Set(['/api/jobs']);
-  assert.equal(compare({ oldCalls, v2Calls, accepted: [] }).ok, false);
-  assert.equal(compare({ oldCalls: new Set(['/api/jobs']), v2Calls: new Set(['/api/jobs', '/api/new-v2-thing']), accepted: [] }).ok, false);
+  assert.equal(compare({ oldCalls, v2Calls, accepted: [], resolved: [] }).ok, false);
+  assert.equal(compare({ oldCalls: new Set(['/api/jobs']), v2Calls: new Set(['/api/jobs', '/api/new-v2-thing']), accepted: [], resolved: [] }).ok, false);
   // …and declaring it makes it pass.
   assert.equal(compare({
-    oldCalls, v2Calls,
+    oldCalls, v2Calls, resolved: [],
     accepted: [{ endpoint: '/api/secret-old-thing', side: 'old-only', status: 'x', why: 'y' }],
   }).ok, true);
 });
@@ -163,24 +163,75 @@ test('a declared difference that is no longer a difference fails as stale', () =
   // A stale exemption is how a real gap later slips through unnoticed.
   const both = new Set(['/api/jobs']);
   const r = compare({
-    oldCalls: both, v2Calls: both,
+    oldCalls: both, v2Calls: both, resolved: [],
     accepted: [{ endpoint: '/api/gone', side: 'old-only', status: 'x', why: 'y' }],
   });
   assert.equal(r.ok, false);
   assert.match(r.findings[0].detail, /no longer one/);
 });
 
-test('the keep-awake gap is recorded as needing the owner\'s decision, not as resolved', () => {
-  // The one real capability difference the review found: the existing UI can
-  // hold the Mac awake on demand (PUT /api/awake); /v2 implements only the
-  // `awakeResetLeadMin` setting, because no redesign mockup draws the control.
-  // Pinned so it cannot be quietly downgraded to "covered" without a human.
-  const awake = ACCEPTED.find((a) => a.endpoint === '/api/awake');
-  assert.ok(awake, '/api/awake must stay declared until it is decided');
-  assert.match(awake.status, /^GAP/);
-  assert.match(awake.why, /keep-awake/i);
-  // And the claim behind it: /v2 really does not reference the live control.
+test('the keep-awake gap is recorded as CLOSED by the owner\'s 2026-09-23 decision, with /v2 really calling it', () => {
+  // btv.15 declared this the one real capability difference the review found:
+  // the existing UI could hold the Mac awake on demand (PUT /api/awake) and
+  // /v2 could not, because no redesign mockup draws the control. It was pinned
+  // as a GAP so it could not be quietly downgraded to "covered" without a
+  // human.
+  //
+  // btv.16: the human decided — 2026-09-23, keep the capability — and /v2 grew
+  // the appbar control. So the pin moves rather than disappearing: the record
+  // must name the decision, and the CLAIM behind it ("/v2 really calls it") is
+  // re-asserted here rather than taken on trust.
+  assert.equal(ACCEPTED.find((a) => a.endpoint === '/api/awake'), undefined,
+    '/api/awake is no longer a difference, so it must not sit in the exemption list — a dead exemption is how a real gap slips through later');
+
+  const rec = RESOLVED.find((r) => r.endpoint === '/api/awake');
+  assert.ok(rec, 'the closed gap must stay on the record, not be deleted');
+  assert.equal(rec.status, 'covered');
+  assert.equal(rec.decided, '2026-09-23', 'the owner\'s decision date is the whole justification');
+  assert.match(rec.why, /keep-awake/i);
+  assert.ok(rec.why.length > 40, '/api/awake is recorded without a real reason');
+
+  // The claim, checked against the source: /v2 reads the state AND writes it.
+  // A control that only GETs would satisfy a naive "does /v2 mention
+  // /api/awake" check while still being unable to hold the Mac awake.
   const v2Src = ['pages/settings.js', 'chrome.js', 'main.js']
     .map((f) => read(join('public/v2', f))).join('\n');
-  assert.ok(!/\/api\/awake/.test(v2Src), '/v2 now calls /api/awake — update the declaration');
+  assert.match(v2Src, /api\('GET', '\/api\/awake'\)/, '/v2 must read the served keep-awake state');
+  assert.match(v2Src, /api\('PUT', '\/api\/awake'/, '/v2 must be able to SET the mode, not just read it');
+
+  // …and every mode the old menu offers is still reachable. Dropping one is a
+  // capability loss that the endpoint-level parity gate cannot see.
+  // Sliced to the menu's OWN closing tag — which is the one on a line of its
+  // own; `<div class="menu-head">…</div>` closes inline, and a lazy match to
+  // the first `</div>` stopped there and found zero modes (caught by the
+  // "measuring nothing" floor below, which is what that floor is for).
+  const menu = /id="awake-menu"[\s\S]*?\n\s*<\/div>/.exec(read('public/index.html'))?.[0];
+  assert.ok(menu, 'the existing keep-awake menu could not be located — this check is measuring nothing');
+  const oldModes = new Set([...menu.matchAll(/data-mode="(\w+)"(?:\s+data-minutes="(\d+)")?/g)]
+    .map((m) => (m[2] ? `timed:${m[2]}` : m[1])));
+  assert.ok(oldModes.size >= 7, `only found ${oldModes.size} modes in the old menu — this check is measuring nothing`);
+  const chrome = read('public/v2/chrome.js');
+  const block = /export const AWAKE_CHOICES = Object\.freeze\(\[[\s\S]*?\]\);/.exec(chrome)?.[0];
+  assert.ok(block, 'chrome.js must declare its modes as one readable list');
+  const v2Modes = new Set([...block.matchAll(/mode: '(\w+)'(?:, minutes: (\d+))?/g)]
+    .map((m) => (m[2] ? `timed:${m[2]}` : m[1])));
+  assert.deepEqual([...v2Modes].sort(), [...oldModes].sort(),
+    '/v2 must offer exactly the modes the existing menu does — no silent drop, no silent addition');
+});
+
+test('a closed gap that reopens fails the gate (the mirror of the stale-exemption rule)', () => {
+  // The failure this guards: /v2 stops calling /api/awake (a refactor, a
+  // deleted control) and the record still reads "covered". A note claiming a
+  // capability is covered over a capability that is gone is worse than no note.
+  const resolved = [{ endpoint: '/api/awake', was: 'old-only', status: 'covered', decided: '2026-09-23', why: 'y' }];
+  const both = new Set(['/api/jobs', '/api/awake']);
+  assert.equal(compare({ oldCalls: both, v2Calls: both, accepted: [], resolved }).ok, true);
+
+  const v2Dropped = compare({ oldCalls: both, v2Calls: new Set(['/api/jobs']), accepted: [], resolved });
+  assert.equal(v2Dropped.ok, false);
+  assert.match(v2Dropped.findings.find((f) => f.endpoint === '/api/awake').detail, /\/v2 no longer calls it/);
+
+  const oldDropped = compare({ oldCalls: new Set(['/api/jobs']), v2Calls: both, accepted: [], resolved });
+  assert.equal(oldDropped.ok, false);
+  assert.match(oldDropped.findings.find((f) => f.endpoint === '/api/awake').detail, /existing UI no longer calls it/);
 });
