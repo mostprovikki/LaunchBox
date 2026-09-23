@@ -1256,3 +1256,347 @@ full-suite runs this session and never in isolation, which is the signature. Now
 always-true (unpausing never resumes) and always-false (pausing never blocks) each turn it red. A
 longer wait that also stops catching the bug would have been the worse outcome. Three consecutive
 full-suite runs green, 753/753.
+
+## 2026-09-23 · tki — the phantom second approval sheet is Chrome obeying RFC 7231, not our socket handling
+
+`claude-scheduler-tki` filed the symptom exactly right — one Submit, two Touch ID sheets, one
+`window.fetch` call, two `approval: asked` in the daemon log a timeout apart — and named a
+hypothesis that turned out to be wrong. It guessed Node's `keepAliveTimeout` / `Connection`
+handling on the 408. It is neither.
+
+**The mechanism, confirmed at the byte level.** A raw TCP proxy sat between a real headless Chrome
+and a sandboxed daemon (`CS_APPROVAL_TIMEOUT_MS=6000`, a helper that just `sleep 60`s), logging
+every request per TCP connection. One page `fetch()`, four runs that differ in exactly one thing
+each:
+
+| what was changed | POSTs on the wire | dialogs |
+| --- | --- | --- |
+| baseline: `408`, connection taken from Chrome's idle pool | **2** | **2** |
+| `409` instead, same pooled connection (`connId=84 reused=true` both times) | 1 | 1 |
+| `408`, socket opened 1ms before the request, pool empty | 1 | 1 |
+| `408` **plus `Connection: close`** | 2 | 2 |
+
+So the status code is the lever and connection pooling is the precondition; `Connection: close`
+changes nothing, which is what kills the keep-alive hypothesis. This is Chromium's net stack doing
+what RFC 7231 §6.5.7 says: a `408` on a persistent connection means "I am closing this idle
+connection", so the request is presumed unprocessed and is resent verbatim on a fresh socket. The
+resend arrived **1–3ms** after the 408 in every run. Being fresh, that second socket is itself never
+retried — which is why the doubling stops at exactly two rather than looping.
+
+Note the third row: a socket Chrome had *preconnected but never used* still counts as pooled and
+still triggers the resend, and CDP reports `connectionReused=false` for it. CDP's field is narrower
+than the condition Chromium actually tests, so **the DevTools network panel cannot be used to rule
+this out** — only the wire can.
+
+**The fix, and what it deliberately is not.** `408` is simply the wrong status here: it means the
+*client* took too long to send its request. Changing it is the real repair and it is a one-line
+change — but the status table is documented in `docs/specs/2026-07-26-local-api-auth-design.md` and
+asserted in `tests/api.test.js`, both outside this wave's file boundary, so it is filed rather than
+smuggled in. What shipped instead, entirely inside `server.js`: a timeout refusal arms **one**
+replay of itself, keyed to `token + method + URL + action + sha256(body)`, for one second. The
+resend consumes the arm and gets the same 408 with no dialog; a human pressing Submit again arrives
+far later, finds nothing armed, and is prompted normally. The guard can only ever *refuse*, so both
+outcomes still fail closed — there is a test for exactly that (`an armed replay never turns into a
+grant`: the stub says yes on the second call and the resend is still refused, no job written).
+
+**Eight mutations, each red in the intended test** (`tests/approval-resend.test.js`, run capped and
+`server.js` restored in a `finally`): no guard at all; never arm; arm not single-shot; arm never
+expires; fingerprint ignores the body; every refusal arms rather than only the timeout; window
+widened to 60s; armed replay returns `true` instead of refusing. That last one is the security
+mutation and it is why the "never turns into a grant" test exists.
+
+`tools/verify-approval-timeout.sh` now also sends the resend by hand — curl will not retry a 408 on
+its own — and asserts the log still shows exactly one `approval: asked`. **It could not be run to
+completion here:** the real Swift helper exits with `errorCode -4` (`LAError.systemCancel`) from
+this session, so no sheet can be raised. `git show HEAD:` of the same script fails identically, so
+that is the environment, not the change. It needs the owner's unlocked, foreground GUI session.
+
+---
+
+## claude-scheduler-ddu — the budget guard says *why* in data, not only in English
+
+`blockReason()` (lib/budget.js) composed three English sentences, and they were the only
+machine-readable record of a refusal. `/api/v2/overview` therefore regex-parsed them back apart
+(`SKIP_REASON_PATTERNS`, server.js) to recover the numbers budget.js had just formatted away.
+Rewording a sentence degraded every /v2 reason to `{code:'other'}` in silence.
+
+**Additive, not a rewrite.** A new `blockDetail(job, snap)` returns `{code, ...values, message}`;
+`blockReason()` is now `blockDetail(...)?.message ?? null`. The sentence is composed from the very
+values reported beside it, so prose and structure cannot drift. The literal text is unchanged —
+only the interpolated expressions were given names (`bucketLabel(hot)` → `bucket`, the `leftPct`
+rounding done once instead of inline). `explain()` gains `blockedReason` beside the untouched
+`blocked`; the policy additionally exports `blockDetail`. `/api/budget`, the scheduler's
+`meta.skipReason` and the current UI read the same bytes they always did.
+
+In server.js, only the next-24h fire reason moved: `liveBudgetReason(budgetExplain)` reads the
+guard's structured answer. It takes the whole `explain()` result rather than a field, so a caller
+cannot hand it the sentence by accident — a missing structured twin surfaces as
+`{code:'unstructured'}`, visibly wrong, instead of quietly regex-guessing.
+
+**The historical decoder stays, on purpose.** `meta.skipReason` on a stored row is prose frozen at
+skip time with no structured twin, and `pause.gate` still emits prose only. `SKIP_REASON_PATTERNS`
+and `decodeReason` remain the reader for those. This bead removed the parse from the live path, not
+from the codebase.
+
+`tests/overview-live-reason.test.js` proves the split from one endpoint: a hot bucket labelled
+`"Fable\nPreview"` makes the sentence **unparseable** (the pattern's `(.+?)` cannot cross a
+newline), and the same sentence reaches `/api/v2/overview` twice — live as exact
+`{code:'bucket_severity', bucket:'Fable\nPreview', …}`, and stored as `{code:'other'}`, all the
+regex can manage. Live is exact where parsing gives up; if the live path ever parses again, both
+halves say `other`.
+
+**Seven mutations** (harness in the scratchpad: apply, run capped at 120s, restore in a `finally`).
+Red as intended: rename `code: 'bucket_severity'`; a typo in the composed `message`; `blockedReason:
+null`; the live path reverted to `decodeReason(budgetExplain.blocked)`; the historical
+`decodeReason(last.meta.skipReason)` replaced with a hardcoded `other`. The pair that *is* the
+bead: rewording the reserve sentence alone leaves the live-path tests **green**, and the same reword
+on the pre-fix regex live path turns them **red** — the silent degradation, reproduced and then
+shown gone.
+
+**Left undone, deliberately:** `/api/v2/plan-candidates` (server.js) still calls
+`decodeReason(policy.explain(job).blocked)`. It is a live path and should read `blockedReason` too,
+but `tests/frontend-v2-plan-dialogs.test.js:60` asserts that exact call text, and that file was
+outside this wave's file boundary. One-line change plus one assertion, once the boundary allows it.
+
+---
+
+## btv.16 — /v2 grows the keep-awake control (the owner decided to keep it)
+
+**The decision, first.** btv.15's parity gate declared `GET`/`PUT /api/awake` a *GAP — needs the
+owner's decision before cutover*: the existing UI can hold the Mac awake on demand and /v2 could
+not, because no redesign mockup draws that control. On **2026-09-23 the owner decided the
+capability is NOT being dropped**, so /v2 had to grow the control before the cutover flag can be
+flipped. Server side untouched — `server.js`'s two routes and `lib/awake.js` already worked; this
+was a UI-only gap.
+
+**What was built** (`public/v2/chrome.js`, appbar chrome, so it is on every route):
+
+- `AWAKE_CHOICES` — the old menu's seven modes *exactly*: off / while jobs are scheduled / timed
+  30m, 1h, 4h, 8h / indefinitely. Declared as one list so a silently dropped preset is a diff, not
+  a discovery.
+- A `.runchip` button in the appbar showing the **served** label (`awakeLabel()`, ported from
+  `public/app.js` rather than re-derived — it is the only place "auto is *selected*" and "auto is
+  *currently holding*" are told apart, which is what `lib/awake.js`'s `active` flag is for). A
+  `.state__dot` appears only while the Mac is actually being held awake.
+- The picker reuses the **existing** `.modalwrap` / `.modal[role=dialog]` overlay, not a new
+  appbar-only popover: that pattern already carries the Escape / backdrop / close-button contract
+  E2's dialog gate measures, and a second overlay vocabulary for one control is the drift the
+  redesign is meant to end. Focus lands on the **close** button — every choice in the body writes
+  state, and landing a keyboard user on a live mutating control is how a stray Enter changes how
+  the machine sleeps.
+- `GET /api/awake` rides the appbar poll that already fetches usage/pause/runs. A **501** (a daemon
+  built without the controller) drops the chip entirely rather than shipping a button that can only
+  fail.
+- The chip carries `data-mutating` and **nothing else**. No `setDisabledReason` call of its own:
+  main.js's central sweep + MutationObserver is the guarantee, and re-implementing it per control
+  is exactly what btv.14 fixed centrally. The browser gate confirms it goes dead and explains
+  itself with the daemon blocked, then comes back.
+
+**The parity gate could not simply be reworded.** The obvious move — leave `/api/awake` in
+`ACCEPTED` with `status: 'covered'` — *fails the gate*, and correctly: `compare()` reports an
+ACCEPTED entry that is no longer a difference as **stale**, because a dead exemption is how a real
+gap later slips through. So the record moved to a new `RESOLVED` list (`status: 'covered'`,
+`decided: '2026-09-23'`, the reasoning kept verbatim) and got the **mirror-image** check: a
+RESOLVED endpoint that stops being called by *both* UIs fails the gate — "the gap has reopened".
+A note claiming a capability is covered, sitting over a capability that is gone, is worse than no
+note. `tests/v2-cutover.test.js`'s pin moved with it: it now asserts the endpoint is *out* of
+ACCEPTED, that the record names the decision date, that /v2 really issues both the GET and the PUT,
+and — the part an endpoint-level gate cannot see — that the seven modes in `chrome.js` match the
+seven `data-mode` entries parsed out of `public/index.html`'s own menu.
+
+**Fourteen mutations, all red** (harness in the scratchpad: apply, run capped at 90s, restore in a
+`finally`; HUNG reported separately from RED). The ones worth naming: dropping `data-mutating`
+(the sweep test); a PUT body without `minutes` (every timed preset becomes a 400 nobody notices
+until they need it); deleting the 8-hour preset (caught by the index.html-parsed golden, not by a
+retyped list); `auto` always claiming it is holding; no `closeBtn.focus()`; the chip rendered as an
+`<input>` (`::after` cannot paint on a replaced element — E2 found that one for real on the enable
+switch); the label echoing the click instead of the response; deleting the reopened-gap check; and
+**downgrading `/api/awake` inside ACCEPTED instead of moving it**, which is the shortcut this bead
+was explicitly told not to take.
+
+**Two test-harness truths, paid for.** `public/v2`'s modules hold process-wide state — api.js's
+listener set, ui.js's toast host — and every cache-busted `import()` in one file *adds* to it, so a
+later test was asserting against a previous test's document. `node --test` gives each **file** its
+own process; that is the only isolation available, hence the split into
+`tests/v2-awake-degraded.test.js`. And an auth-state change makes chrome.js re-render the appbar,
+so the chip on screen afterwards is a **brand new node**: holding a reference would have tested a
+detached element and passed while the visible chip stayed live — the very defect btv.14's observer
+exists to close. The test re-queries by id every time.
+
+**Driven for real**, isolated daemon on 43412 (`43400 + 12`, the QA/e2e-extras offset; the owner's
+43400 never touched), CDP mouse events rather than `el.click()`: menu opens, "For 30 minutes" sets
+the daemon to `{mode:'timed', active:true}` and the chip reads *awake until 22:33*, reopening
+highlights all four timed presets (the served state is a deadline, not the preset that produced
+it — the same compromise the old UI made), and "Off" releases `caffeinate` (`active:false`).
+Checked in both themes.
+
+---
+
+## The bead outcome is persisted (claude-scheduler-dc9) — 2026-09-23
+
+"Handed back" existed only as a verb. `lib/projects.js` emitted `handed-back` and a `finished`
+with `closed:false`, `server.js:1908` `console.log`ged it, and that was the end of it: `rowToRun`
+exposed only the raw `status` column, so nothing on `/api/runs` could tell a bead that **closed**
+from one that came **straight back for retry**. Both exit `ok`. That is the whole point — the live
+finding behind the `TASK-COMPLETE` contract was a run whose every write was denied, which still
+ended `subtype: success`. A chip keyed on `status` would have been a guess on every ok run, which
+is why `state-vocab.js` refused to encode the mockup's chip at all.
+
+**Schema.** One nullable column, `runs.beadOutcome TEXT`, plus the `ALTER` in `migrate()` — said
+twice on purpose, because `CREATE TABLE IF NOT EXISTS` does nothing to a `runs` table that already
+exists, so SCHEMA alone would have reached a fresh install only (the same trap `readyCount`
+documented). `rowToRun` spreads the row, so `/api/runs`, `lastRun` and every existing consumer
+carry it with **no server.js change**. A column rather than a `meta` key: `meta` is the runner's
+namespace, and this is the field a Projects view will filter on.
+
+**Three values, not a boolean** (`BEAD_OUTCOMES` in lib/db.js). `closed` · `handed-back` ·
+`stranded`. A boolean `closed` would have folded the refused-`bd close` case into "not closed",
+which reads as handed back and is a **lie**: that bead is stuck `in_progress`, `bd ready` excludes
+it, and no retry is ever coming. The same applies to a refused **un-claim**, which the old code
+computed and threw away — `unclaim()` already returned a boolean nobody read. So the hand-back is
+only recorded when the bead really went back. NULL stays legitimate and untouched: not a bead run,
+or a row written before the column existed.
+
+**The chip.** `STATE_VOCAB.handed_back` (muted · square · "handed back") is transcribed from
+`redesign/project-detail.html` by the same mockup-parsing gate as every other entry — dc9's job was
+to make that entry *derivable*, and `ALSO_AUDITED` in `tests/frontend-v2-state-vocab.test.js` now
+lists it, so the exemption is gone rather than re-explained. Derived through `beadRunStateKey()`,
+deliberately **separate** from `runStateKey()`: widening the shared one would have silently changed
+what Jobs, Runs and Overview draw for rows where `beadOutcome` is null and the question does not
+arise. Only the ok/handed-back pair is re-chipped — `fail` says more about *why* than "handed back"
+does, and `stranded` gets no chip, because no mockup draws one and inventing a colour for it is
+exactly what B1/B2 refused on "hard stop was active".
+
+**Twelve mutations, all red** (harness in the scratchpad: apply, run capped, restore in a
+`finally`). The ones worth naming: making the no-marker branch always say `handed-back` (caught by
+the refused-un-claim test — the honesty case, not the happy one); a refused **close** recorded as
+`handed-back`; dropping `beadOutcome` from `RUN_COLS`, which makes every write a **silent no-op**
+and took 16 tests with it; deleting the `ALTER`, caught only by the pre-migration fixture db;
+relabelling the chip `handed-back` (hyphen) and recolouring it `bad`, both caught by the mockup
+parse rather than by a retyped golden; and dropping the `status === 'ok'` guard in
+`beadRunStateKey()`, which relabels every failed bead run.
+
+**803-test suite, one failure, not mine**: `tests/frontend-v2-plan-dialogs.test.js` pins
+`liveBudgetReason(policy.explain(job))` while `server.js` currently reads `.blocked` — a
+concurrent wave's in-flight edit to files this bead never touched. `npm run qa:v2` reports
+`stranded_page` on `#project` in both themes; **reproduced identically with my three `/v2` files
+reverted to HEAD**, so it is pre-existing here and not this change.
+
+**Left for whoever owns those files.** Two refusals recorded elsewhere are now stale and still
+enforced as gates: `tests/frontend-v2-projects.test.js`'s `closed with TASK-COMPLETE` and
+`tests/frontend-v2-sessions.test.js`'s `closed by the scheduler` both say "no run field
+distinguishes closed from handed back (dc9)". The field exists now. The *sublines* still should not
+render as the mockup words them — the agent's note is written with `bd note` and never read back —
+but the stated reason is no longer the true one. `public/v2/README.md:178` says the same.
+
+---
+
+## nc5 — the sessions index root reaches the browser
+
+`GET /api/sessions` answered `{sessions, hidden}` and never said **where** it looked, so the /v2
+empty state could only call it "the Claude Code transcript directory" (btv.10 refused to type
+`~/.claude/projects`, because the machines where that sentence matters are precisely the ones where
+it is false — a different `HOME` for Claude Code, or `CS_SESSIONS_ROOT` pointed elsewhere).
+
+**Shape chosen: a `root` field on the existing `GET /api/sessions`**, not a `/api/v2/sessions`
+twin. The bead's criteria allow either. Additive wins because the field answers a question the old
+UI never asks (it ignores unknown keys, unchanged), and a parallel endpoint would have meant two
+handlers to keep honest about the same directory — the drift `state-vocab` already paid for once.
+It is resolved with `resolvePath()` at the route, the same resolution `resolvedSessionFile()` uses
+for the traversal guard, so what the reader sees is the path the guards actually compare against
+rather than a relative spelling of it.
+
+`public/v2/pages/sessions.js` keeps the served value in `state.root` **or null** — never a default.
+Empty state with a root: the path in `.mono` (as redesign/sessions-empty.html has it) leading
+"…was read and contains no transcripts". With no root — an older daemon, `root: null`, a non-string
+— the pre-nc5 generic sentence stands and no path of any shape appears. btv.10's source gate
+(`/~\/\.claude\/projects/` over the C3 pages) still holds and was mutation-checked against a
+hard-coded fallback: it goes red, as does its jsdom sibling.
+
+**Mutations, all red** (`tests/sessions-root.test.js`): drop `root` from the response; hard-code it
+to `/Users/me/.claude/projects`; make the UI ignore `data.root`; give the UI a `?? '~/.claude/
+projects'` fallback (red in *three* tests plus both btv.10 gates); force the generic branch; drop
+the `.mono` wrapper.
+
+**Real browser** (CDP, isolated daemon on 43413-43418, `CS_SESSIONS_ROOT` = an empty temp dir):
+the empty state printed that temp path and nothing resembling `~/.claude/projects`. A 215-char root
+at 1400px stays inside its card; at 420px the raw span overhung the card by 71px, so it carries
+`overflow-wrap:anywhere` and now ends 26px inside. The 841px document overflow at 420px is the
+shell's, measured identically with the path branch forced off.
+
+**Two failures in the shared tree, neither mine.** `tests/frontend-v2-plan-dialogs.test.js` (the
+`liveBudgetReason` regex above — 803 tests, 802 pass). And `npm run qa:v2:interactions` now reports
+`[tooltip/#jobs] button.runchip: the tooltip pseudo-element was never measured`; it was clean at
+22:26 and failed at 22:38 with only `sessions.js` and `WIP.md` touched in between, so it was
+re-run **with `sessions.js` reverted to HEAD** — identical failure. `qa:v2` fails only on
+`#project`, also pre-existing. The `#sessions` and `#session` routes are green in both themes.
+
+**Port note:** `qa:v2` and `qa:v2:interactions` both hard-code 43410. With another agent running
+them concurrently the loser boots its daemon, races the winner's `/` probe, and dies on a missing
+`token` in its own `CS_DATA` — an ENOENT that looks nothing like "port busy". Wait for the port.
+
+## 2026-09-23 · the five-bead wave, and three things the parallel agents could not see
+
+Five beads implemented by four concurrent Opus agents plus one hand-off, against the owner's
+decision that morning on the keep-awake question: **keep the capability.** That turned btv.15's
+declared `GAP` into work rather than a loss, filed as `btv.16`.
+
+**Closed:** `dc9` (beadOutcome on the runs row), `ddu` (structured block reasons), `nc5`
+(sessions index root), `9xv` (the route-walk false red, found during verification).
+**Still open, with reasons:** `btv.16` (its own gate is red — see below), `tki` (fix verified,
+one assertion needs the owner's GUI session).
+
+### A concurrent mutation harness left its MUTATION behind, not the original line
+
+The sharpest find of the day, and it was invisible to every agent involved. Mid-wave I moved
+`/api/v2/plan-candidates` onto `liveBudgetReason()` and mutation-checked it — two mutations, both
+red, restore verified, `restored: True` printed. Hours later `server.js` held
+`liveBudgetReason(policy.explain(job).blocked)` — **mutation M2**, the semantically wrong one that
+hands the sentence to a function that takes the result. A concurrent agent's harness had backed up
+the whole file *during my mutation window* and restored that backup afterwards.
+
+A plain revert would have been survivable. Restoring someone's *mutation* is worse: it reads as
+deliberate code, and `{code:'unstructured'}` on every candidate row is exactly the kind of wrong
+that looks fine. The gate I had just written is what caught it — but all three agents saw that
+test failing, correctly said "not mine", and each assumed it would resolve when the tree settled.
+It would not have. **A failing test nobody owns does not heal; someone has to own the tree.**
+
+### "Pre-existing" is a claim that needs a pristine baseline, and a shared tree cannot give one
+
+`qa:v2` failed on `#project` in both themes. `dc9` called it pre-existing (reverted its own files —
+but other agents' files were not at HEAD either). `btv.16` theorised a slow fixture read and
+honestly marked it **UNVERIFIED**, saying it could not get a baseline while files moved under it.
+Both were right to refuse to claim more.
+
+A detached worktree at HEAD settles in one run what no in-tree revert can. It was red at HEAD, and
+red at `1c6f764` — the gate's *own* commit, where E1 was declared clean. Raising only the project
+wait 4500ms → 30000ms turned the whole walk green. So: `v2-route-walk.mjs:324` was
+`await sleep(route.name === 'project' ? 4500 : 1800)` — a **presence assertion behind a fixed
+sleep**, the exact class `2wf` had fixed in `pause.test.js` the day before, in a file `2wf` never
+looked at. Fixed with a bounded settle (`9xv`); mutation-checked by blanking `project.js`, which
+still reports `stranded_page` in both themes, exit 1, no hang.
+
+### A gate reported clean by the bead that broke it
+
+`btv.16` reported `qa:v2:interactions` clean. On the settled tree it fails deterministically, twice
+running: `button.runchip: the tooltip pseudo-element was never measured` — the keep-awake chip that
+bead added. Suppressing chrome.js's 15s appbar poll makes it pass, but that run measured **3**
+tooltip controls where the failing run measures **4**, so the obvious mechanism (the probe holds
+live element references; `chrome.js:297` does `host.innerHTML = ''` every poll, detaching them) is
+**probable, not proven** — and `btv.17` says so rather than banking it.
+
+If it is the mechanism, the product defect under it is the real story: a focusable, tooltip-bearing
+control inside a container wiped every 15 seconds loses keyboard focus every 15 seconds. The appbar
+was always wiped that often; `btv.16` is what first put an interactive control in it. Fixing the
+wipe fixes the gate honestly — special-casing the chip in the probe would only hide it.
+
+### Also corrected
+
+Three gates and one README forbade claims *because* "no run field distinguishes closed from handed
+back (dc9)". That reason is now false. The projects rule was **lifted** (the claim is backed now);
+the sessions rules **stay** with corrected reasons (`beadOutcome` is on a run row, and those pages
+read the sessions index, which has no link to one). A gate whose stated why is false is one the
+next reader deletes for the wrong reason. Both re-mutated: still red on an unsupported phrase.
+
+**803/803 tests** (from 753). `qa:v2` clean, `qa:v2:parity` clean, `qa:v2:interactions` red on
+`btv.17`. Nothing committed.
