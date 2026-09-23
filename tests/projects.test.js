@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { tmpData, fakeBd, bdReadyRow } from './helpers.js';
-import { openDb, createProject, getProject, updateProject, listProjects, getLease, listJobs, acquireLease, getRunUsage, recordRunUsage, avgDeltaForJob, setSetting } from '../lib/db.js';
+import { openDb, createProject, getProject, updateProject, listProjects, getLease, listJobs, acquireLease, getRunUsage, recordRunUsage, avgDeltaForJob, setSetting, getRun, BEAD_OUTCOMES } from '../lib/db.js';
 import { createBeads } from '../lib/beads.js';
 import { createProjects, parseProjectConfig, rejectedConfig, completionMarker, beadPrompt, pinPermMode } from '../lib/projects.js';
 
@@ -843,6 +843,104 @@ test('a run that does signal completion closes the bead', async () => {
   assert.ok(bd.calls.some((c) => c.sub === 'close'));
   assert.equal(getLease(db, project.id, 'sp-1').state, 'done');
   assert.equal(unclaimCalls(bd).length, 0, 'a closed bead is not handed back');
+});
+
+// --- the outcome is persisted, not just logged (claude-scheduler-dc9) -----
+//
+// Every one of these drives the real onDone path — poll, launch, finish the
+// run — and then reads the RUN ROW back, because a synthetic row would only
+// prove the column exists, not that anything writes it. Before dc9 the
+// distinction reached an event and a console.log in server.js and died there,
+// so no API field could tell a closed bead from one coming back for retry.
+
+test('a run that closes its bead records that on the run row', async () => {
+  const { db, projects, project, runner } = markerSetup();
+  await projects.pollProject(project.id);
+  const finished = new Promise((r) => projects.events.once('finished', r));
+  runner.finish('run-1', 'ok', { said: `wrote the file.\n${completionMarker('sp-1')}` });
+  await finished;
+
+  assert.equal(getRun(db, 'run-1').beadOutcome, 'closed');
+});
+
+test('a run that exits ok WITHOUT the marker is distinguishable on the run row from one that closed', async () => {
+  const { db, projects, project, runner } = markerSetup();
+  await projects.pollProject(project.id);
+  const finished = new Promise((r) => projects.events.once('finished', r));
+  runner.finish('run-1', 'ok', { said: 'I need write permission to create the file.' });
+  await finished;
+
+  // The whole point: the process exited `ok` on BOTH outcomes — this one and
+  // the closing run above — so the status column cannot carry the distinction
+  // and a chip keyed on it would be a guess. (The fake runner does not write
+  // the status column; the real one does, which is why the assertion is on the
+  // outcome and the argument is about `ok` being shared.)
+  assert.equal(getRun(db, 'run-1').beadOutcome, 'handed-back');
+});
+
+test('a failed run also records the hand-back — the bead is open again either way', async () => {
+  const { db, projects, project, runner } = markerSetup();
+  await projects.pollProject(project.id);
+  const finished = new Promise((r) => projects.events.once('finished', r));
+  runner.finish('run-1', 'fail');
+  await finished;
+
+  assert.equal(getRun(db, 'run-1').beadOutcome, 'handed-back');
+});
+
+test('a bead the scheduler could not close is recorded as stranded, not as handed back', async () => {
+  // The work HAPPENED and the bead is stuck `in_progress`, which `bd ready`
+  // excludes. Calling that "handed back" would promise a retry that can never
+  // come — it is the one outcome only a human can resolve.
+  const { db, projects, project, runner } = markerSetup({
+    bdHandlers: {
+      ready: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', labels: ['unattended'] })]) },
+      show: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', labels: ['unattended'] })]) },
+      update: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', assignee: 'claude-scheduler' })]) },
+      close: { timeout: true },
+    },
+  });
+  await projects.pollProject(project.id);
+  const failed = new Promise((r) => projects.events.once('close-failed', r));
+  runner.finish('run-1', 'ok', { said: completionMarker('sp-1') });
+  await failed;
+
+  assert.equal(getRun(db, 'run-1').beadOutcome, 'stranded');
+});
+
+test('an un-claim that will not go through is stranded too — the bead never reached the backlog', async () => {
+  const { db, bd, projects, project, runner } = markerSetup({
+    bdHandlers: {
+      ready: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', labels: ['unattended'] })]) },
+      show: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', labels: ['unattended'] })]) },
+      update: ({ args }) => (args.includes('--claim')
+        ? { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', assignee: 'claude-scheduler' })]) }
+        : { code: 1, stderr: 'bd: database is locked' }),
+    },
+  });
+  await projects.pollProject(project.id);
+  const finished = new Promise((r) => projects.events.once('finished', r));
+  runner.finish('run-1', 'ok', { said: 'could not finish' });
+  await finished;
+
+  assert.equal(unclaimCalls(bd).length, 1, 'the un-claim was attempted');
+  assert.equal(getRun(db, 'run-1').beadOutcome, 'stranded',
+    'a refused un-claim leaves the bead in_progress — recording "handed-back" would be a lie');
+});
+
+test('only the declared outcomes are ever written, and an ordinary run keeps NULL', async () => {
+  const { db, projects, project, runner } = markerSetup();
+  await projects.pollProject(project.id);
+  // A second, non-bead run row alongside it: nothing in onDone may touch it.
+  db.prepare('INSERT INTO runs (id, jobId, status, trigger, createdAt) VALUES (?, ?, ?, ?, ?)')
+    .run('plain-run', 'some-job', 'ok', 'manual', new Date().toISOString());
+  const finished = new Promise((r) => projects.events.once('finished', r));
+  runner.finish('run-1', 'ok', { said: `done\n${completionMarker('sp-1')}` });
+  await finished;
+
+  assert.ok(BEAD_OUTCOMES.includes(getRun(db, 'run-1').beadOutcome));
+  assert.equal(getRun(db, 'plain-run').beadOutcome, null,
+    'a job run that was never a bead run must stay NULL, not default to an outcome');
 });
 
 test('the prompt tells the agent the marker and what a missing one costs', () => {

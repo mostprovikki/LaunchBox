@@ -12,12 +12,13 @@
 // Two claims from the mockup are NOT rendered here and the reasons are in
 // projects-logic.js's header: "of 23 open" (no open-bead count exists) and the
 // "Not ready: 11 blocked · 8 missing the label" coverage breakdown (the
-// adapter never sees a bead that failed either filter). A third — the
-// "handed back" run state — was already refused in state-vocab.js.
+// adapter never sees a bead that failed either filter). The third refusal, the
+// "handed back" run state, is lifted: claude-scheduler-dc9 persisted the
+// outcome as runs.beadOutcome, so the activity list draws that chip now.
 import { api, failureToast, guardedSubmit } from '../api.js';
 import { $, el, clear, pageHead, toast } from '../ui.js';
 import { onRender } from '../router.js';
-import { statusMeta, runStateKey } from '../state-vocab.js';
+import { statusMeta, beadRunStateKey } from '../state-vocab.js';
 import {
   fmtTime, fmtDate, relAgo, readyText, projectActions, isResume, cardBanner,
   burstProjectIds, chipFor, claimOrder, priorityPill, beadAge, beadMeta,
@@ -255,16 +256,21 @@ function projectRuns(p) {
 }
 
 function activityRow({ run, job }) {
-  const m = statusMeta(runStateKey(run));
+  const m = statusMeta(beadRunStateKey(run));
   const when = run.finishedAt ?? run.startedAt;
   const dur = run.startedAt && run.finishedAt
     ? `${Math.max(0, Math.round((new Date(run.finishedAt) - new Date(run.startedAt)) / 1000))}s`
     : null;
   const bead = job.params?._beadId;
-  // NOT rendered: whether the bead was closed or handed back. lib/projects.js
-  // emits 'handed-back' but server.js only console.logs it and no field on a
-  // run row distinguishes the two (claude-scheduler-dc9). Saying "closed with
-  // TASK-COMPLETE", as the mockup does, would be a guess on every ok run.
+  // The chip — not the subline — is where the bead's fate shows. A run that
+  // exited ok but never signalled TASK-COMPLETE now reads "handed back"
+  // (beadRunStateKey, off runs.beadOutcome; claude-scheduler-dc9), so an ok
+  // chip on this list means the bead actually closed.
+  //
+  // Still NOT rendered: the mockup's "closed with TASK-COMPLETE" / "returned to
+  // open with the agent's note attached" sublines. The field would now back the
+  // first half, but the note is written by `bd note` and never read back here,
+  // so the second would still be a guess.
   return el('div', { class: 'row', style: 'grid-template-columns: 90px minmax(0,1fr) auto;' }, [
     chipEl(m),
     el('div', { class: 'cell' }, [

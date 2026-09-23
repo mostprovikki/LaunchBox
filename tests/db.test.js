@@ -9,6 +9,7 @@ import {
   getSetting, setSetting, cleanupAll,
   insertUsageSnapshot, listUsageSnapshots, latestUsageSnapshot, pruneUsageSnapshots,
   recordRunUsage, getRunUsage, avgDeltaForJob,
+  BEAD_OUTCOMES,
   createProject, listProjects, getProject, getProjectByPath, updateProject, deleteProject,
   acquireLease, getLease, listLeases, releaseLease, completeLease, attachLeaseRun,
   releaseOrphanLeases,
@@ -235,6 +236,61 @@ test('migration: v1 flat-column db folds into params + meta', () => {
   db.close();
   const again = openDb(path);
   assert.deepEqual(getJob(again, 'j1').params.model, 'sonnet');
+});
+
+test('migration: a db written before beadOutcome existed keeps working, with NULL meaning "not recorded"', () => {
+  // The live-path risk this bead carries (claude-scheduler-dc9): `CREATE TABLE
+  // IF NOT EXISTS` does nothing to a runs table that already exists, so every
+  // installed database reaches the new column only through the ALTER. A row
+  // written before it must still read, and must not acquire a fabricated
+  // outcome — NULL is the honest value for "nobody recorded what became of the
+  // bead", and for every run that was never a bead run.
+  const dir = tmpData();
+  const path = join(dir, 'pre-outcome.db');
+  const raw = new Database(path);
+  raw.exec(`
+    CREATE TABLE runs (
+      id TEXT PRIMARY KEY, jobId TEXT NOT NULL, status TEXT NOT NULL, trigger TEXT NOT NULL,
+      startedAt TEXT, finishedAt TEXT, exitCode INTEGER, durationMs INTEGER,
+      logPath TEXT, meta TEXT, progress TEXT, createdAt TEXT NOT NULL
+    );
+    INSERT INTO runs (id, jobId, status, trigger, exitCode, logPath, meta, createdAt)
+      VALUES ('old-1', 'j1', 'ok', 'schedule', 0, '/tmp/old.log', '{"sessionId":"sess-old"}', '2026-01-01T00:00:00.000Z');
+  `);
+  raw.close();
+
+  const db = openDb(path);
+  assert.ok(db.pragma('table_info(runs)').some((c) => c.name === 'beadOutcome'), 'the ALTER never ran');
+
+  const old = getRun(db, 'old-1');
+  assert.equal(old.beadOutcome, null, 'an old row must not be given an outcome it never had');
+  // …and the rest of the row is untouched by the migration.
+  assert.equal(old.status, 'ok');
+  assert.equal(old.exitCode, 0);
+  assert.equal(old.logPath, '/tmp/old.log');
+  assert.deepEqual(old.meta, { sessionId: 'sess-old' });
+  assert.equal(listRuns(db, { jobId: 'j1' }).length, 1, 'listRuns still reads the table');
+
+  // The column is writable on that same old row, and reopening does not
+  // re-run the ALTER (which would throw "duplicate column name").
+  updateRun(db, 'old-1', { beadOutcome: 'handed-back' });
+  db.close();
+  const again = openDb(path);
+  assert.equal(getRun(again, 'old-1').beadOutcome, 'handed-back');
+});
+
+test('BEAD_OUTCOMES round-trips through the run row, and only through the outcome column', () => {
+  const db = freshDb();
+  const job = createJob(db, validJob());
+  for (const outcome of BEAD_OUTCOMES) {
+    const r = insertRun(db, { jobId: job.id, status: 'ok', trigger: 'beads' });
+    assert.equal(r.beadOutcome, null, 'a fresh run row starts with no outcome');
+    updateRun(db, r.id, { beadOutcome: outcome });
+    const got = getRun(db, r.id);
+    assert.equal(got.beadOutcome, outcome);
+    assert.equal(got.status, 'ok', 'the outcome must not be smuggled into status');
+    assert.equal(got.meta, null, 'nor into meta, which is the runner\'s namespace');
+  }
 });
 
 // --- projects + task_leases (M4a) ---------------------------------------

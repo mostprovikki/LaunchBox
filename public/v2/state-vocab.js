@@ -60,6 +60,17 @@ export const STATE_VOCAB = Object.freeze({
   // appended "· stopping…", the runs list said "· winding down", and the
   // mockup drew a chip reading "stopping…". The mockup wins.
   stopping: { cls: 'muted', form: 'square', label: 'stopping…' },
+
+  // Also not a stored status: a BEAD run that exited ok and whose bead went
+  // straight back to the backlog because the agent never signalled
+  // TASK-COMPLETE. `ok` is true of that run and of one that closed its bead,
+  // which is why the outcome had to be persisted separately before this entry
+  // could exist at all — runs.beadOutcome, written by lib/projects.js's onDone
+  // (claude-scheduler-dc9). Derive it with beadRunStateKey(), never by testing
+  // the field at a call site.
+  //
+  // Audited in redesign/project-detail.html's activity rows.
+  handed_back: { cls: 'muted', form: 'square', label: 'handed back' },
 });
 
 // The order the "Today so far" strip lists statuses in, on Runs and on
@@ -77,6 +88,22 @@ export function runStateKey(run) {
   if (!run) return 'never';
   if (run.status === 'running' && run.meta?.stopRung) return 'stopping';
   return run.status;
+}
+
+// The run state for a row that is known to be a BEAD run (the Projects detail
+// activity list). Separate from runStateKey() on purpose: Jobs, Runs and
+// Overview list ordinary job runs too, where `beadOutcome` is null and the
+// question does not arise — and widening runStateKey() would silently change
+// what four other pages draw.
+//
+// Only the ok/handed-back pair is re-chipped. A run that FAILED also hands its
+// bead back, but 'fail' says more than 'handed back' does about why, and the
+// mockup only ever draws this chip on a run that exited fine. 'stranded' gets
+// no chip at all — no mockup renders one, and inventing a colour and a word
+// for it here is exactly what B1/B2 refused to do for "hard stop was active".
+export function beadRunStateKey(run) {
+  if (run?.status === 'ok' && run.beadOutcome === 'handed-back') return 'handed_back';
+  return runStateKey(run);
 }
 
 // ---------------------------------------------------------------------------
@@ -127,15 +154,16 @@ export function projectStateMeta({ state, busyStreak = 0, inBurst = false } = {}
 }
 
 // Mockup strings that are NOT rendered anywhere, because no field carries them.
-// Recorded here so the next agent re-derives the finding instead of the string:
+// Recorded here so the next agent re-derives the finding instead of the string.
 //
-// • "handed back" (redesign/project-detail.html) — a bead whose run exited ok
-//   WITHOUT signalling TASK-COMPLETE. lib/projects.js does emit 'handed-back'
-//   and a `finished` event with `closed:false`, but server.js only console.logs
-//   it: no run row column, and nothing on /api/runs, /api/projects/:id or
-//   /api/v2/overview distinguishes closed from handed back. A bead row cannot
-//   show this until the flag is persisted — see the follow-up bead. Same call
-//   B1/B2 made when they dropped "hard stop was active" and "retry 2 of 2".
+// RESOLVED — "handed back" (redesign/project-detail.html) used to head this
+// list. It was unrenderable because the distinction existed only as an event:
+// lib/projects.js emitted 'handed-back' and a `finished` with `closed:false`,
+// and server.js console.logged it. claude-scheduler-dc9 persisted the outcome
+// on the run row (runs.beadOutcome, lib/db.js's BEAD_OUTCOMES), so /api/runs
+// now carries it and STATE_VOCAB.handed_back above is audited like any other
+// chip. The list is empty; keep it, and add to it rather than inventing a
+// string — the same call B1/B2 made on "hard stop was active" and "retry 2 of 2".
 
 // A status outside the table is muted, not default-ink: "we do not know what
 // this is" should read as inert rather than as an ordinary healthy row. Runs

@@ -213,7 +213,13 @@ const UNSUPPORTED_ON_PROJECT_PAGES = [
   { re: /activated by you on/, why: 'the projects table has no activation stamp; updatedAt moves on every poll' },
   { re: /[Pp]aused by you on/, why: 'same — no pause stamp exists' },
   { re: /locked by another process since/, why: 'busyStreak is a consecutive-miss count, not a start time' },
-  { re: /closed with .{0,4}TASK-COMPLETE/, why: 'no run field distinguishes closed from handed back (claude-scheduler-dc9)' },
+  // "closed with TASK-COMPLETE" is NOT listed any more. claude-scheduler-dc9
+  // persisted the outcome as runs.beadOutcome ('closed' | 'handed-back' |
+  // 'stranded'), so the distinction this rule existed to forbid is now a real
+  // field the project page reads — see the handed_back chip in state-vocab.js.
+  // The rule was lifted with the limitation, not kept with a stale reason: a
+  // gate whose stated why is false is one the next reader deletes for the
+  // wrong reason.
 ];
 
 test('no C2 page states a project fact the API cannot back', () => {

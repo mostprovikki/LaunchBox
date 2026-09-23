@@ -40,10 +40,13 @@
 //   consecutive-miss COUNT, not a start time (lib/projects.js's busyStreak
 //   Map). The count is rendered; the clock time is not.
 //
-// • "handed back" as a run state. Already refused in state-vocab.js and the
-//   /v2 README: lib/projects.js emits it, server.js only console.logs it, and
-//   no API field distinguishes a closed bead from one handed back. See
-//   claude-scheduler-dc9.
+// • "handed back" as a run state — REFUSAL LIFTED (claude-scheduler-dc9).
+//   lib/projects.js's onDone now writes the bead's fate to runs.beadOutcome
+//   (lib/db.js's BEAD_OUTCOMES), so /api/runs carries it and project.js draws
+//   the chip via state-vocab.js's beadRunStateKey(). The mockup's SUBLINES
+//   ("closed with TASK-COMPLETE", "returned to open with the agent's note
+//   attached") are still not rendered: the note is written with `bd note` and
+//   never read back.
 //
 // • "top priority P0 wb-221" on the LIST card. Not a data refusal — a cost
 //   one. server.js's decorateProject is explicitly built to render a list
