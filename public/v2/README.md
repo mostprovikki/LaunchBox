@@ -175,11 +175,23 @@ decision, not a transcription — no mockup shows a project that is both.
 `error` is the only entry in the module with no mockup behind it; it is flagged
 as such in the source and in the test's exemption list.
 
-**Not rendered, deliberately:** "handed back" (`redesign/project-detail.html`).
-The event exists in `lib/projects.js` but only reaches a `console.log` — no API
-field distinguishes a closed bead from one handed back, so C2 cannot show it
-truthfully yet. Same call B1/B2 made on "hard stop was active" and
-"retry 2 of 2". See the follow-up bead; do not invent it.
+**"handed back" — the refusal is LIFTED (claude-scheduler-dc9).** It used to be
+listed here as not-rendered: the event existed in `lib/projects.js` but only
+reached a `console.log`, so no API field distinguished a closed bead from one
+handed back and C2 could not show the chip truthfully. dc9 persisted the
+outcome as `runs.beadOutcome` — `'closed' | 'handed-back' | 'stranded'`, null
+for a non-bead or pre-migration row — carried by `rowToRun`, so every existing
+runs consumer gets it. The project page's activity list draws the chip through
+`beadRunStateKey()`, kept separate from `runStateKey()` so Jobs/Runs/Overview
+are untouched.
+
+`stranded` is the third value on purpose: a refused `bd close` (or a refused
+un-claim) leaves the bead stuck `in_progress` with no retry coming, and calling
+that "handed back" would be a lie.
+
+Still not rendered, and still deliberate: "of 23 open", the "Not ready: …"
+coverage breakdown, "hard stop was active" and "retry 2 of 2" — same call B1/B2
+made. Do not invent them.
 
 ## Page shell helpers (`ui.js`)
 

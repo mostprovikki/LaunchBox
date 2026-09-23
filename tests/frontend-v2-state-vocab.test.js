@@ -15,6 +15,11 @@
 // not a run status. That is a second vocabulary, C2/C3 territory, and it
 // should get the same treatment before Projects and Sessions fan out — see
 // the follow-up bead rather than quietly folding it into this table.
+//
+// Since 1ys that family is here too (PROJECT_VOCAB), and since
+// claude-scheduler-dc9 "handed back" is no longer exempt from the mockup pin:
+// the outcome it names is persisted on the run row (runs.beadOutcome), so the
+// chip is derivable and is held to the same transcription rule as the rest.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -23,11 +28,11 @@ import { join, dirname, relative } from 'node:path';
 import { JSDOM } from 'jsdom';
 
 import {
-  STATE_VOCAB, statusMeta, dotClass, ordinal, runStateKey, TODAY_ORDER,
+  STATE_VOCAB, statusMeta, dotClass, ordinal, runStateKey, beadRunStateKey, TODAY_ORDER,
   PROJECT_VOCAB, projectStateMeta,
 } from '../public/v2/state-vocab.js';
 import { computeRowState } from '../public/v2/pages/jobs-logic.js';
-import { PROJECT_STATES } from '../lib/db.js';
+import { PROJECT_STATES, BEAD_OUTCOMES } from '../lib/db.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const V2 = join(ROOT, 'public', 'v2');
@@ -41,9 +46,11 @@ const VOCAB_MODULE = 'state-vocab.js';
 const RUN_STATUSES = ['running', 'queued', 'ok', 'fail', 'timeout', 'killed', 'stopped', 'skipped'];
 
 // Entries that must match a mockup chip but are not stored statuses:
-// `stopping` is derived (a live run with a requested stop) and the project
-// entries key off a project row, not a run row.
-const ALSO_AUDITED = ['stopping'];
+// `stopping` is derived (a live run with a requested stop), `handed_back` is
+// derived from the run's persisted bead outcome (dc9 — before that column
+// existed this entry could not be here at all), and the project entries key
+// off a project row, not a run row.
+const ALSO_AUDITED = ['stopping', 'handed_back'];
 const AUDITED_PROJECT_KEYS = ['active', 'pending', 'paused', 'bd_busy', 'burst'];
 
 // The single entry in state-vocab.js with no mockup behind it. Listed
@@ -206,6 +213,44 @@ test('runStateKey derives the stopping state instead of each page testing meta.s
   // A finished run is never "stopping", even if it carries the rung that got it there.
   assert.equal(runStateKey({ status: 'stopped', meta: { stopRung: 'SIGTERM' } }), 'stopped');
   assert.equal(runStateKey(null), 'never');
+});
+
+test('beadRunStateKey re-chips an ok run whose bead went back, and invents nothing else', () => {
+  // The distinction dc9 exists for: `ok` is the status of BOTH a run that
+  // closed its bead and one that handed it straight back, so the chip has to
+  // read the persisted outcome, not the status.
+  assert.equal(beadRunStateKey({ status: 'ok', beadOutcome: 'handed-back' }), 'handed_back');
+  assert.equal(statusMeta('handed_back').label, 'handed back');
+  assert.equal(beadRunStateKey({ status: 'ok', beadOutcome: 'closed' }), 'ok');
+
+  // A row from before the column existed, and an ordinary (non-bead) job run:
+  // both are null, and neither may be guessed at in either direction.
+  assert.equal(beadRunStateKey({ status: 'ok', beadOutcome: null }), 'ok');
+  assert.equal(beadRunStateKey({ status: 'ok' }), 'ok');
+
+  // 'fail' also hands the bead back, but says more about why; 'stranded' has
+  // no mockup chip at all. Neither may be relabelled "handed back".
+  assert.equal(beadRunStateKey({ status: 'fail', beadOutcome: 'handed-back' }), 'fail');
+  assert.equal(beadRunStateKey({ status: 'ok', beadOutcome: 'stranded' }), 'ok');
+  assert.equal(statusMeta('stranded').label, 'stranded', 'an unrendered outcome falls to the unknown branch, keeping its own name');
+
+  // …and the derived states compose rather than shadow each other.
+  assert.equal(beadRunStateKey({ status: 'running', meta: { stopRung: 'SIGINT' } }), 'stopping');
+  assert.equal(beadRunStateKey(null), 'never');
+});
+
+test('every bead outcome lib/db.js can store is either rendered or deliberately not', () => {
+  // Imported from lib/db.js, not retyped: if BEAD_OUTCOMES grows a member,
+  // this fails rather than letting a new outcome fall silently to the run's
+  // bare status. 'closed' and 'stranded' are deliberately NOT chips — an ok
+  // chip already means "closed", and no mockup draws a stranded bead.
+  const RENDERED = { 'handed-back': 'handed_back', closed: null, stranded: null };
+  for (const outcome of BEAD_OUTCOMES) {
+    assert.ok(outcome in RENDERED, `BEAD_OUTCOMES has '${outcome}' but nothing here says how it renders`);
+    const key = beadRunStateKey({ status: 'ok', beadOutcome: outcome });
+    assert.equal(key, RENDERED[outcome] ?? 'ok');
+    if (RENDERED[outcome]) assert.ok(STATE_VOCAB[key], `'${outcome}' renders as '${key}', which STATE_VOCAB does not define`);
+  }
 });
 
 test('the wind-down is worded once — the runs list and the log drawer no longer disagree', () => {
