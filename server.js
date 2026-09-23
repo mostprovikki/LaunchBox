@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, dirname, isAbsolute, resolve as resolvePath } from 'node:path';
 import { homedir } from 'node:os';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { ensureDirs, dbPath, dataDir, PORT_BASE } from './lib/paths.js';
 import { ensureToken, tokenMatches } from './lib/token.js';
@@ -241,6 +242,11 @@ function assertNoSymlinks(dir, depth = 0) {
   }
 }
 
+// 1 second: three orders of magnitude above the 1–3ms Chrome took to resend a
+// timed-out POST in every measured run, and below any human round trip from
+// reading the refusal toast to pressing Submit again. See `armedTimeoutReplay`.
+export const APPROVAL_RESEND_WINDOW_MS = 1000;
+
 export function createApp({
   db, runner, scheduler, extensions, awake, usage = null, budget = null, pause = null,
   projects = null, beads = null, burst = null, sessions = null,
@@ -258,6 +264,11 @@ export function createApp({
   // or an embedding), which is distinct from the helper being missing on an
   // install that expects one — that case fails closed inside lib/approval.js.
   approval = null,
+  // How long a timeout refusal stays armed to answer Chrome's automatic resend
+  // without a second dialog (claude-scheduler-tki; the reasoning sits on
+  // `armedTimeoutReplay` below). Injectable so a test can shrink it rather than
+  // sleep through the real one.
+  approvalResendWindowMs = APPROVAL_RESEND_WINDOW_MS,
 }) {
   const app = express();
 
@@ -390,6 +401,43 @@ export function createApp({
     approval_busy: 409,
   };
 
+  // ---- The phantom second sheet (claude-scheduler-tki)
+  //
+  // Chrome resends a request VERBATIM on a fresh connection when the response is
+  // 408 and the connection it went out on came from its idle socket pool. That is
+  // correct client behaviour, not a Chrome bug: RFC 7231 §6.5.7 reads a 408 on a
+  // persistent connection as "the server is closing this idle connection", so the
+  // request is presumed never to have been processed.
+  //
+  // Measured, one page fetch() through a byte-logging TCP proxy in front of a
+  // sandboxed daemon (CS_APPROVAL_TIMEOUT_MS=6000, hanging helper):
+  //   408, connection out of the pool      → 2 POSTs on the wire, 2 dialogs
+  //   409, same pooled connection          → 1 POST, 1 dialog   (status is the lever)
+  //   408, socket opened for that request  → 1 POST, 1 dialog   (pooling is the lever)
+  //   408 + `Connection: close`            → still 2 POSTs      (NOT a keep-alive problem)
+  // The resend arrived 1–3ms after the 408 in every run, on a brand-new socket —
+  // which is itself never retried, so the doubling stops at exactly two.
+  //
+  // The user's cost is one action and two Touch ID sheets, i.e. being trained to
+  // approve reflexively — the exact thing this layer exists to prevent. So a
+  // timeout refusal arms ONE replay of itself, keyed to the identical request,
+  // for a window far longer than that resend and far shorter than a human. The
+  // resend consumes the arm and is refused with the same 408 and no dialog; a
+  // human pressing Submit again arrives later, finds nothing armed, and is
+  // prompted normally. The guard can only ever REFUSE, never approve, so both
+  // outcomes still fail closed.
+  //
+  // The deeper repair is to stop answering with 408 at all — it means "the client
+  // took too long to SEND its request", which is not what happened here — but the
+  // status table is documented in docs/specs and asserted across the suite, so
+  // that is filed separately rather than smuggled in here.
+  const armedTimeoutReplay = new Map(); // request fingerprint → expiry (ms)
+  const resendFingerprint = (req, action) => [
+    req.csToken ?? '', req.method, req.originalUrl, action ?? '',
+    // The resend is byte-identical, so the parsed body re-serialises identically.
+    createHash('sha256').update(JSON.stringify(req.body ?? null)).digest('hex'),
+  ].join('\n');
+
   /**
    * Ask for approval. Returns true to proceed.
    *
@@ -407,6 +455,25 @@ export function createApp({
     // exactly like the other optional deps. The *installed* fail-closed case is
     // the helper being missing, which lib/approval.js reports as unavailable.
     if (!approval) return true;
+
+    const refuse = (code) => {
+      res.status(APPROVAL_STATUS[code]).json({ error: APPROVAL_ERROR[code], code });
+      return false;
+    };
+
+    // Ahead of approval.request(), so the resend never reaches the dialog queue at
+    // all — reaching it and being deduplicated there would still burn a queue slot
+    // and could return approval_busy for a request nobody made.
+    const fp = resendFingerprint(req, action);
+    const armedUntil = armedTimeoutReplay.get(fp);
+    if (armedUntil !== undefined) {
+      // Single shot either way: one timeout arms at most one silent replay, so a
+      // client that retried twice is prompted the second time rather than being
+      // refused invisibly for as long as it keeps trying.
+      armedTimeoutReplay.delete(fp);
+      if (armedUntil > Date.now()) return refuse('approval_timeout');
+    }
+
     let out;
     try {
       out = await approval.request({ action, detail, grace, token: req.csToken });
@@ -415,8 +482,14 @@ export function createApp({
     }
     if (out?.ok) return true;
     const code = APPROVAL_CODES.includes(out?.code) ? out.code : 'approval_unavailable';
-    res.status(APPROVAL_STATUS[code]).json({ error: APPROVAL_ERROR[code], code });
-    return false;
+    if (code === 'approval_timeout') {
+      // Swept here rather than on a timer: the map only ever grows on a refusal,
+      // and an unreferenced daemon should not hold an interval open for this.
+      const now = Date.now();
+      for (const [k, exp] of armedTimeoutReplay) if (exp <= now) armedTimeoutReplay.delete(k);
+      armedTimeoutReplay.set(fp, now + approvalResendWindowMs);
+    }
+    return refuse(code);
   }
 
   // main() passes the same policy the runner admits against; a standalone app
@@ -1070,7 +1143,17 @@ export function createApp({
 
   app.get('/api/sessions', (req, res) => {
     if (!needSessions(res)) return;
-    res.json(sessions.list({ all: req.query.all === '1' || req.query.all === 'true' }));
+    // `root` is additive (claude-scheduler-nc5). The index root is the single
+    // most useful fact when the list comes back empty — Claude Code running
+    // under a different HOME, or CS_SESSIONS_ROOT pointing elsewhere, is the
+    // likeliest cause — and until now it was never sent, so the /v2 empty state
+    // could only say "the Claude Code transcript directory". Resolved here the
+    // same way resolvedSessionFile() resolves it, so what the UI prints is the
+    // path the guards actually compare against, not a relative spelling of it.
+    res.json({
+      ...sessions.list({ all: req.query.all === '1' || req.query.all === 'true' }),
+      root: resolvePath(sessions.root()),
+    });
   });
 
   app.get('/api/sessions/:id', (req, res) => {
@@ -1263,13 +1346,21 @@ export function createApp({
   // the db at request time, so `now` is an honest as-of for those — never one
   // global timestamp standing in for all of them.
   //
-  // `blockReason`'s three sentence shapes (lib/budget.js) and pause.gate's
-  // `paused (<mode>)` (lib/pause.js) are the only place either guard explains
-  // itself, so rather than re-deriving the *decision* here, `decodeReason`
-  // only decomposes the sentence that lib/ already produced into {code,
-  // ...values} — the reason a fire is blocked stays owned by budget.js/pause.js,
-  // this just stops the UI from having to parse English to render it, and
-  // stops a second page inventing different wording for the same reason.
+  // Why a fire was refused stays owned by lib/budget.js and lib/pause.js —
+  // nothing here re-derives the *decision*. Two ways in, and which one applies
+  // depends entirely on whether the reason is live or remembered:
+  //
+  //   LIVE — `policy.explain(job).blockedReason` (claude-scheduler-ddu) already
+  //   IS `{code, ...values}`. `liveBudgetReason()` below just reads it. No
+  //   regex, so rewording budget.js's prose cannot degrade a /v2 reason to
+  //   `{code:'other'}` — which is exactly what used to happen.
+  //
+  //   HISTORICAL — `meta.skipReason` on a stored run row is prose, frozen at
+  //   the moment of the skip, with no structured twin anywhere. Rows written
+  //   before ddu (and pause.gate's `paused (<mode>)`, still prose-only) can
+  //   only be read by parsing that sentence, so `SKIP_REASON_PATTERNS` and
+  //   `decodeReason` STAY. They are the decoder for old rows, not the live
+  //   path — do not "simplify" them away.
   const SKIP_REASON_PATTERNS = [
     // "paused: fable at 90% (critical)" — blockReason's severity-bucket branch.
     { code: 'bucket_severity', re: /^paused: (.+?) at (-?[\d.]+)% \((\w+)\)$/,
@@ -1290,6 +1381,17 @@ export function createApp({
       if (m) return { code, ...map(m), message: raw };
     }
     return { code: 'other', message: raw }; // a future lib/ sentence shape — still surfaced, just undecoded
+  }
+
+  // The live budget reason for a fire, from the guard's own structured answer.
+  // Takes the whole `explain()` result rather than a field so a caller cannot
+  // accidentally hand it the sentence: if `blockedReason` were ever missing
+  // while `blocked` is set, this returns `{code:'unstructured'}` — visibly
+  // wrong — instead of quietly regex-guessing and looking fine.
+  function liveBudgetReason(explained) {
+    if (!explained?.blocked) return null;
+    const r = explained.blockedReason;
+    return r ? { ...r } : { code: 'unstructured', message: explained.blocked };
   }
 
   // A run finished more than this long ago is not "needs attention" anymore —
@@ -1444,7 +1546,10 @@ export function createApp({
         admitted: !pauseBlocking && !budgetBlocked,
         blockedBy: {
           pause: pauseBlocking ? { mode: pauseMode } : null,
-          budget: budgetBlocked ? decodeReason(budgetExplain.blocked) : null,
+          // Live path: the guard's own structured reason, read as data. Never
+          // decodeReason() here — that parses prose, and this reason has never
+          // been prose by the time it reaches us.
+          budget: liveBudgetReason(budgetExplain),
         },
       };
       if (at && new Date(at).getTime() - nowMs <= NEXT24H_HORIZON_MS) fires.push(entry);
@@ -1584,7 +1689,7 @@ export function createApp({
         // reported per job so the dialog can say WHICH job is the soft number
         // rather than flagging the whole plan and leaving the reader guessing.
         lowConfidence: !learned || samples < MIN_SAMPLES,
-        blocked: decodeReason(policy.explain(job).blocked),
+        blocked: liveBudgetReason(policy.explain(job)),
       };
     });
 

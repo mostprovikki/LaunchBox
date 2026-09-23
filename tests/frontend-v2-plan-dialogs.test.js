@@ -52,13 +52,24 @@ test('GET /api/v2/plan-candidates is additive and touches nothing existing', () 
   }
 });
 
-test('the endpoint reuses decodeReason rather than a second decoder', () => {
+test('the endpoint reads the STRUCTURED live reason, and there is only one of each decoder', () => {
   // Two decoders would word one guard reason two ways, which is the defect the
-  // shared vocabulary modules exist to prevent.
+  // shared vocabulary modules exist to prevent. Since claude-scheduler-ddu the
+  // shared thing is liveBudgetReason(), which reads the {code,...values} that
+  // budget.js now reports BESIDE its sentence. This route must not slide back
+  // to regex-parsing that sentence: a reword in budget.js would silently
+  // degrade every candidate row to {code:'other'} with nothing going red.
   const src = readFileSync(join(ROOT, 'server.js'), 'utf8');
   const route = /app\.get\('\/api\/v2\/plan-candidates'[\s\S]*?\n  \}\);/.exec(src)[0];
-  assert.match(route, /decodeReason\(policy\.explain\(job\)\.blocked\)/);
+  assert.match(route, /liveBudgetReason\(policy\.explain\(job\)\)/);
+  assert.ok(!/decodeReason\(/.test(route),
+    'the live path must not call the historical-row decoder');
+  // It is handed the whole explain() result, never a field, so no caller can
+  // pass it the sentence by mistake.
+  assert.ok(!/liveBudgetReason\([^)]*\.blocked\)/.test(route),
+    'liveBudgetReason takes the explain() result, not its .blocked sentence');
   assert.equal((src.match(/const SKIP_REASON_PATTERNS =/g) ?? []).length, 1, 'there must be exactly one pattern table');
+  assert.equal((src.match(/function liveBudgetReason\(/g) ?? []).length, 1, 'there must be exactly one live decoder');
 });
 
 // ---------------------------------------------------------------- pure
