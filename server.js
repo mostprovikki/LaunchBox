@@ -28,6 +28,7 @@ import {
 import { createBudgetPolicy, ASSUMED_COST_PCT, MIN_SAMPLES } from './lib/budget.js';
 import { createBurst, BURST_DEFAULTS } from './lib/burst.js';
 import { createBeads } from './lib/beads.js';
+import { localiseGraphHtml } from './lib/beads-graph.js';
 import { createWorktrees } from './lib/worktree.js';
 import {
   createProjects, parseProjectConfig, rejectedConfig, CONFIG_FILE,
@@ -246,6 +247,24 @@ function assertNoSymlinks(dir, depth = 0) {
 // timed-out POST in every measured run, and below any human round trip from
 // reading the refusal toast to pressing Submit again. See `armedTimeoutReplay`.
 export const APPROVAL_RESEND_WINDOW_MS = 1000;
+
+// The CSP served with a project's bd graph page (claude-scheduler-vo4.4).
+// Exported so its test asserts the SERVED value rather than a retyped copy of
+// it — a retyped expectation only proves the test agrees with itself.
+//
+// `'unsafe-inline'` in script-src is a real weakening and is accepted ONLY
+// because of what it is paired with. bd composes the graph page with its script
+// INLINE, so the inline allowance cannot be dropped — only contained:
+//   - `connect-src 'none'` means injected script has nowhere to send anything:
+//     no fetch, no XHR, no WebSocket, no beacon. This is the load-bearing half.
+//   - `default-src 'none'` + `img-src 'none'` leave no other fetch channel.
+//   - `script-src 'self'` admits the vendored D3 at /v2/assets/ and nothing
+//     off-box; lib/beads-graph.js has already refused any surviving origin.
+//   - At the embed site (Task 5) the page sits in a sandboxed iframe with an
+//     OPAQUE origin, so it cannot reach the parent DOM or read the API token.
+// Net: a hostile bead title in someone else's repo can inject script here and
+// reach nothing — no network, no parent document, no credential.
+export const GRAPH_CSP = "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'";
 
 export function createApp({
   db, runner, scheduler, extensions, awake, usage = null, budget = null, pause = null,
@@ -1636,6 +1655,38 @@ export function createApp({
       today,
       automation,
     });
+  });
+
+  // ------------------------------------------------------ v2: project graph
+  // GET /api/v2/projects/:id/graph.html (claude-scheduler-vo4.4, Phase A of the
+  // beads visualizer). Additive and read-only: bd renders the graph, and this
+  // endpoint's only job is to make bd's page safe to serve from a daemon that
+  // also holds an API token. Two things do that:
+  //   1. localiseGraphHtml() rewrites bd's https://d3js.org script reference to
+  //      the vendored copy, and REFUSES (not passes through) any other origin.
+  //   2. GRAPH_CSP contains the page's own inline script — see its comment for
+  //      why 'unsafe-inline' is survivable only next to `connect-src 'none'`.
+  // The path bd is invoked in comes from the stored project row, never from the
+  // request: the id selects a row, it does not name a directory.
+  app.get('/api/v2/projects/:id/graph.html', async (req, res) => {
+    if (!needProjects(res)) return;
+    const project = getProject(db, req.params.id);
+    if (!project) return res.status(404).json({ error: 'not found' });
+    try {
+      const raw = await beads.graphHtml(project);
+      const { html } = localiseGraphHtml(raw);
+      res.set('Content-Security-Policy', GRAPH_CSP);
+      // The page is served from the daemon's own origin; a sniffed content type
+      // is one more way inline script could be reinterpreted.
+      res.set('X-Content-Type-Options', 'nosniff');
+      res.type('html').send(html);
+    } catch (err) {
+      // Busy is not broken — same rule as GET /api/projects/:id/ready: a human
+      // running bd in the same repo must not look like a failure.
+      if (err?.busy) return res.status(503).json({ error: err.message, busy: true });
+      // 502: bd or its output is what failed, not this request.
+      res.status(502).json({ error: err?.message ?? String(err) });
+    }
   });
 
   // ------------------------------------------------- v2: plan candidates
