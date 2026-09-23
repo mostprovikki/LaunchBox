@@ -226,8 +226,12 @@ test('truncate keeps the cap inclusive of the ellipsis', () => {
 // ------------------------------------------------------- source-level gates
 
 const UNSUPPORTED_ON_SESSION_PAGES = [
-  { re: /closed by the scheduler/, why: 'nothing persists whether the bead was closed or handed back (dc9)' },
-  { re: /bead \$\{[^}]+\} closed/, why: 'same — the marker is observable, the scheduler\'s action is not' },
+  // Both rules STAY, but not for their original reason: claude-scheduler-dc9
+  // persisted the outcome, so "closed vs handed back" is no longer unknowable
+  // in general. It is still unknowable HERE — beadOutcome lives on a run row,
+  // and these pages read the sessions index, which has no link to one.
+  { re: /closed by the scheduler/, why: 'beadOutcome is on runs (dc9); the sessions index carries no run, so this page still cannot back the claim' },
+  { re: /bead \$\{[^}]+\} closed/, why: 'same — a transcript shows the marker was written, not what the scheduler then did with the bead' },
   { re: /~\/\.claude\/projects/, why: 'the index root is never sent to the browser and CS_SESSIONS_ROOT can move it' },
   { re: /['"`]burst · /, why: 'runs[] carries the job name, not the trigger that fired it' },
   { re: /worktree['"`]/, why: 'gitBranch is recorded; whether it is a worktree branch is not' },

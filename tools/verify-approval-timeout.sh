@@ -52,20 +52,40 @@ T=$(node bin/claude-scheduler.mjs token)
 A=(-H "Authorization: Bearer $T" -H 'Content-Type: application/json')
 count(){ curl -s "${A[@]}" "http://127.0.0.1:$CS_PORT/api/jobs" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["jobs"]))'; }
 
+PROBE='{"name":"timeout probe","type":"command","command":"echo x","cwd":"/tmp","schedules":[{"type":"cron","expr":"0 3 * * *"}]}'
+
 echo "   … a real dialog is about to appear. Do not touch it."
 BEFORE=$(count)
-( curl -s -X POST "http://127.0.0.1:$CS_PORT/api/jobs" "${A[@]}" \
-  -d '{"name":"timeout probe","type":"command","command":"echo x","cwd":"/tmp","schedules":[{"type":"cron","expr":"0 3 * * *"}]}' > "$D/resp" ) &
+( curl -s -X POST "http://127.0.0.1:$CS_PORT/api/jobs" "${A[@]}" -d "$PROBE" > "$D/resp" ) &
 CURL=$!
 sleep 2
 pgrep -f "$D/bin/LaunchBox" >/dev/null \
   && ok "the real helper is running — a genuine system dialog was raised" \
   || bad "no helper process: the server never reached the real binary"
 wait $CURL
+
+# claude-scheduler-tki, and it must be the FIRST thing after the refusal: Chrome
+# re-sends a 408'd POST verbatim on a fresh connection within milliseconds, and
+# the server arms a one-shot replay of the refusal for a second so that resend
+# raises no phantom SECOND system sheet. curl never retries a 408 on its own, so
+# the resend is sent by hand here — same bytes, new connection, immediately.
+curl -s -X POST "http://127.0.0.1:$CS_PORT/api/jobs" "${A[@]}" -d "$PROBE" > "$D/resp2"
+
 python3 -c "
 import json,sys
 d=json.load(open('$D/resp'))
 sys.exit(0 if d.get('code')=='approval_timeout' else 1)" \
   && ok "refused with approval_timeout" || bad "unexpected response: $(cat "$D/resp")"
+[ "$(grep -c 'approval: asked' "$D/log")" = "1" ] \
+  && ok "one client request raised exactly one dialog" \
+  || bad "$(grep -c 'approval: asked' "$D/log") dialogs were raised for one request"
+python3 -c "
+import json,sys
+d=json.load(open('$D/resp2'))
+sys.exit(0 if d.get('code')=='approval_timeout' else 1)" \
+  && ok "the re-sent POST got the same approval_timeout" || bad "unexpected resend response: $(cat "$D/resp2")"
+[ "$(grep -c 'approval: asked' "$D/log")" = "1" ] \
+  && ok "and it raised NO second sheet — the phantom approval is gone (tki)" \
+  || bad "the re-sent POST raised a second dialog: $(grep -c 'approval: asked' "$D/log") in total"
 [ "$(count)" = "$BEFORE" ] && ok "nothing was written — an unanswered dialog is not consent" \
   || bad "a job was created without approval"

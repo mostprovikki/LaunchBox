@@ -123,6 +123,81 @@ test('explain reports what a fire would hit right now', () => {
   );
 });
 
+// --- structured block reasons (claude-scheduler-ddu) -----------------------
+//
+// `blockDetail()` is the machine-readable twin of the English sentence
+// `blockReason()`/`explain().blocked` return. Two properties are load-bearing
+// and neither is obvious from reading either function alone:
+//
+//   1. The sentence is UNCHANGED — every existing consumer (/api/budget, the
+//      scheduler's `meta.skipReason`, the current UI) reads it byte for byte.
+//   2. The structured `message` is that same sentence, because the sentence is
+//      composed from the very values reported beside it. If those two could
+//      drift, a caller rendering `code`+values and a caller rendering the
+//      sentence would describe one refusal two different ways.
+
+// Each branch: the exact sentence it has always emitted, and the structured
+// twin that must now accompany it.
+const BRANCHES = [
+  {
+    what: 'severity-bucket',
+    snap: () => snapshot({ fiveHour: 10, sevenDay: 10, buckets: [{ scopeModel: 'Fable', percent: 90, severity: 'critical', isActive: true }] }),
+    job: () => job(),
+    prose: 'paused: Fable at 90% (critical)',
+    detail: { code: 'bucket_severity', bucket: 'Fable', percent: 90, severity: 'critical' },
+  },
+  {
+    what: 'reserve-window',
+    snap: () => snapshot({ fiveHour: 85, sevenDay: 10 }),
+    job: () => job(),
+    prose: 'reserving 5h headroom (85% used)',
+    detail: { code: 'reserve', windowLabel: '5h', usedPct: 85 },
+  },
+  {
+    what: 'per-job floor',
+    snap: () => snapshot({ fiveHour: 10, sevenDay: 10 }),
+    job: () => job({ budget: { minHeadroomPct: 95 } }),
+    prose: 'job needs 95% headroom (90% left)',
+    detail: { code: 'job_min_headroom', minHeadroomPct: 95, leftPct: 90 },
+  },
+];
+
+for (const b of BRANCHES) {
+  test(`blockDetail: the ${b.what} branch reports {code, ...values} beside the unchanged sentence`, () => {
+    const { policy } = setup(b.snap());
+    const j = b.job();
+
+    // (1) the prose, byte for byte, still on its existing return path.
+    assert.equal(policy.admit(j, 'schedule'), b.prose, 'admit() must still return the sentence unchanged');
+    assert.equal(policy.explain(j).blocked, b.prose);
+
+    // (2) the structured twin, additively.
+    const d = policy.blockDetail(j, b.snap());
+    assert.deepEqual({ ...d, message: undefined }, { ...b.detail, message: undefined });
+    // (3) …and the sentence is that twin's own `message`, not a second
+    // composition that could drift from the values reported beside it.
+    assert.equal(d.message, b.prose);
+    assert.deepEqual(policy.explain(j).blockedReason, d);
+  });
+}
+
+test('blockDetail: nothing blocking is null on both shapes', () => {
+  const { policy } = setup(snapshot({ fiveHour: 10, sevenDay: 10 }));
+  const e = policy.explain(job());
+  assert.equal(e.blocked, null);
+  assert.equal(e.blockedReason, null, 'no reason must be null, not a {code} standing for "fine"');
+  assert.equal(policy.blockDetail(job(), snapshot({ fiveHour: 10, sevenDay: 10 })), null);
+});
+
+test('blockDetail: a guard that is off or failing open reports neither shape', () => {
+  const { db, policy } = setup(snapshot({ fiveHour: 99 }));
+  assert.ok(policy.explain().blockedReason, 'precondition: the guard is blocking');
+  setSetting(db, 'budgetGuard', 0);
+  const e = policy.explain();
+  assert.equal(e.blocked, null);
+  assert.equal(e.blockedReason, null, 'a disabled guard must not report a reason it is not enforcing');
+});
+
 // --- planner --------------------------------------------------------------
 
 // n measured runs of `jobId`, each costing `pct` of the 5-hour window.

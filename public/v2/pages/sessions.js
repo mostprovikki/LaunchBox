@@ -36,6 +36,11 @@ let routeWatcherArmed = false;
 
 const state = {
   sessions: null, hidden: 0, failed: false,
+  // The sessions index root, exactly as GET /api/sessions reported it
+  // (claude-scheduler-nc5), or null when the server sent none. Never
+  // defaulted to a path: an older daemon that does not send it must make
+  // the empty state fall back to the generic wording, not to a guess.
+  root: null,
   query: '', scope: 'all', sort: 'newest', density: 'detailed',
   // The id of the row currently armed for deletion, or null. Deliberately ONE
   // id, not a Set: arming a second row disarms the first, so there is never
@@ -71,6 +76,7 @@ async function loadAndRender() {
     const data = await api('GET', '/api/sessions');
     state.sessions = data.sessions ?? [];
     state.hidden = data.hidden ?? 0;
+    state.root = typeof data.root === 'string' && data.root ? data.root : null;
     state.failed = false;
   } catch (err) {
     // 501 is "this instance has no sessions index" — a different fact from
@@ -292,12 +298,22 @@ function emptyCard() {
     el('span', { class: 'blank__icon', html: SVG_TRANSCRIPT }),
     el('div', {}, [
       el('h4', {}, 'No Claude Code sessions on this machine'),
-      // The mockup names ~/.claude/projects here. The index root is real but is
-      // never sent to the browser (GET /api/sessions returns {sessions,hidden}),
-      // and CS_SESSIONS_ROOT can move it — so naming a path would be wrong on
-      // exactly the machines where this sentence matters.
-      el('p', {}, 'The Claude Code transcript directory was read and contains nothing. Sessions appear '
-        + 'here after any Claude Code conversation — interactive, or started by a LaunchBox job.'),
+      // The mockup names a path here, and it is the sentence that matters most:
+      // the likeliest reason this list is empty is that LaunchBox read a
+      // different directory from the one you are picturing. So it names the root
+      // the SERVER reported (claude-scheduler-nc5) — never a built-in default.
+      // A daemon that sends no root gets the generic wording back, because
+      // asserting a path we were not told is wrong on exactly those machines.
+      state.root
+        ? el('p', {}, [
+          // A real root can be long and has no spaces to break on, so it is
+          // allowed to break anywhere rather than spill out of the card.
+          el('span', { class: 'mono', style: 'overflow-wrap:anywhere;' }, state.root),
+          ' was read and contains no transcripts. Sessions appear here after any Claude Code '
+            + 'conversation — interactive, or started by a LaunchBox job.',
+        ])
+        : el('p', {}, 'The Claude Code transcript directory was read and contains nothing. Sessions appear '
+          + 'here after any Claude Code conversation — interactive, or started by a LaunchBox job.'),
       el('p', {}, 'If Claude Code runs under a different HOME, or LaunchBox was started with '
         + 'CS_SESSIONS_ROOT pointing elsewhere, it is reading a different directory from the one you '
         + 'are thinking of.'),
