@@ -1,0 +1,8 @@
+{
+  "public/v2/assets/d3.v7.min.js": {
+    "sha256": "f2094bbf6141b359722c4fe454eb6c4b0f0e42cc10cc7af921fc158fceb86539",
+    "bytes": 279706,
+    "source": "https://d3js.org/d3.v7.min.js",
+    "why": "bd graph --html loads D3 from a CDN. This daemon is local-only, so the reference is rewritten to this vendored copy (claude-scheduler beads-visualizer Phase A)."
+  }
+}
