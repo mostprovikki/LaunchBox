@@ -43,6 +43,15 @@ export const ACCEPTED = Object.freeze([
     why: 'btv.2 (C1a). One aggregation endpoint for the Overview tab; nothing existing reads it.',
   },
   {
+    endpoint: '/api/v2/projects/:id/graph.html',
+    side: 'v2-only',
+    status: 'additive by design',
+    why: 'claude-scheduler-vo4 (beads visualizer Phase A). Serves bd\'s own `bd graph --all --html` '
+      + 'page for one project, with its CDN reference rewritten to the vendored D3 and a CSP that '
+      + 'forbids it calling out. Read-only and additive: the existing UI has no dependency-graph '
+      + 'view at all, so there is nothing for it to lose at cutover.',
+  },
+  {
     endpoint: '/api/v2/plan-candidates',
     side: 'v2-only',
     status: 'additive by design',

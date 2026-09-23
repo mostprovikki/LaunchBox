@@ -14,6 +14,7 @@ import project from './pages/project.js';
 import sessions from './pages/sessions.js';
 import session from './pages/session.js';
 import settings from './pages/settings.js';
+import graph from './pages/graph.js';
 
 registerRoute('overview', overview);
 registerRoute('jobs', jobs);
@@ -23,6 +24,9 @@ registerRoute('project', project);
 registerRoute('sessions', sessions);
 registerRoute('session', session);
 registerRoute('settings', settings);
+// The 9th route (claude-scheduler-vo4.5): the per-project bead dependency
+// graph, reached from the project detail page rather than the appbar nav.
+registerRoute('graph', graph);
 
 // REVIEW #2's central sweep — the ENTIRE contract a wave-2 page needs is the
 // `data-mutating` attribute (README.md). Two triggers, both required:
