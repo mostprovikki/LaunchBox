@@ -377,6 +377,16 @@ function render() {
     return btn;
   });
 
+  // The dependency graph for this project (claude-scheduler-vo4.5). Read-only,
+  // so it is deliberately NOT data-mutating: the graph stays openable while the
+  // daemon is refusing writes, which is when "what is blocking what" is most
+  // worth reading.
+  actions.unshift(el('a', {
+    class: 'btn btn--ghost',
+    href: `#graph?id=${encodeURIComponent(p.id)}`,
+    'data-tip': 'Every bead in this project and what blocks what',
+  }, 'Dependency graph'));
+
   const head = pageHead({
     title: p.name,
     sub: el('span', {}, [
