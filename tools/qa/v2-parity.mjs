@@ -52,6 +52,16 @@ export const ACCEPTED = Object.freeze([
       + 'view at all, so there is nothing for it to lose at cutover.',
   },
   {
+    endpoint: '/api/v2/projects/:id/graph-ticket',
+    side: 'v2-only',
+    status: 'additive by design',
+    why: 'claude-scheduler-vo4.8. The graph frame above is a DOCUMENT navigation, which carries '
+      + 'no Authorization header — so pointing an iframe at it got 401 JSON where the graph '
+      + 'should be. This mints the single-use, 30-second, project-bound ticket the frame\'s URL '
+      + 'carries instead, so the API token never enters a URL. Additive and paired with the '
+      + 'graph page: the existing UI has no dependency-graph view, so it needs neither.',
+  },
+  {
     endpoint: '/api/v2/plan-candidates',
     side: 'v2-only',
     status: 'additive by design',
