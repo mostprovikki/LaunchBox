@@ -28,17 +28,6 @@ const log = (m) => process.stdout.write(m + '\n');
  */
 export const ACCEPTED = Object.freeze([
   {
-    endpoint: '/api/awake',
-    side: 'old-only',
-    status: 'GAP — needs the owner\'s decision before cutover',
-    why: 'The existing UI has a live keep-awake popover (off / while jobs are scheduled / '
-      + 'timed 30m, 1h, 4h) driving PUT /api/awake. No redesign mockup draws that control: the '
-      + 'only "awake" content in redesign/*.html is the `awakeResetLeadMin` SETTING, which /v2 '
-      + 'does implement on the Settings page. So /v2 can configure how long to stay awake before '
-      + 'a reset, but cannot hold the Mac awake on demand. That is a real capability the cutover '
-      + 'would remove, and it is the owner\'s call whether the redesign dropped it on purpose.',
-  },
-  {
     endpoint: '/api/budget',
     side: 'old-only',
     status: 'covered differently',
@@ -59,6 +48,34 @@ export const ACCEPTED = Object.freeze([
     status: 'additive by design',
     why: 'btv.12 (D2). Per-job learned cost and the guard\'s decoded reason, so the burn-down '
       + 'planner does not have to parse lib/budget.js\'s English.',
+  },
+]);
+
+/**
+ * Differences that WERE declared and have since been CLOSED — the endpoint is
+ * now called by both UIs. Kept as a record rather than deleted, so the review
+ * that decided it is still readable at cutover.
+ *
+ * Why these are not simply left in ACCEPTED with the status reworded: an
+ * ACCEPTED entry that is no longer a difference is reported as STALE (below),
+ * on purpose — a dead exemption is how a real gap later slips through. So a
+ * closed gap has to move out of the exemption list, and it gets the mirror-image
+ * check instead: a RESOLVED endpoint that stops being called by BOTH UIs fails
+ * the gate, because that means the gap quietly reopened.
+ */
+export const RESOLVED = Object.freeze([
+  {
+    endpoint: '/api/awake',
+    was: 'old-only',
+    status: 'covered',
+    decided: '2026-09-23',
+    why: 'Declared a GAP by btv.15: the existing UI could hold the Mac awake on demand '
+      + '(PUT /api/awake) and /v2 could not, because no redesign mockup draws that control. '
+      + 'The OWNER DECIDED on 2026-09-23 that the keep-awake capability is NOT being dropped in '
+      + 'the redesign, so btv.16 built the appbar control in public/v2/chrome.js — the same '
+      + 'modes as the old menu (off / while jobs are scheduled / timed 30m, 1h, 4h, 8h / '
+      + 'indefinitely), reading GET /api/awake on the appbar poll and writing PUT /api/awake. '
+      + 'No capability is lost at cutover; the Settings page keeps `awakeResetLeadMin` as before.',
   },
 ]);
 
@@ -122,22 +139,26 @@ export function covers(candidate, target) {
   return a.every((seg, i) => seg === b[i] || seg === ':id' || b[i] === ':id');
 }
 
-export function compare({ oldCalls, v2Calls, accepted = ACCEPTED }) {
+export function compare({ oldCalls, v2Calls, accepted = ACCEPTED, resolved = RESOLVED }) {
   const acceptedFor = (endpoint, side) => accepted.find((a) => a.endpoint === endpoint && a.side === side);
   const oldOnly = [...oldCalls].filter((e) => ![...v2Calls].some((c) => covers(c, e))).sort();
   const v2Only = [...v2Calls].filter((e) => ![...oldCalls].some((c) => covers(c, e))).sort();
 
   const findings = [];
   const known = [];
+  // An endpoint on the CLOSED-gap record gets its own, more precise finding
+  // below ("the gap has reopened") rather than the generic undeclared one —
+  // two findings for one cause reads like two problems.
+  const resolvedEndpoints = new Set(resolved.map((r) => r.endpoint));
   for (const e of oldOnly) {
     const a = acceptedFor(e, 'old-only');
     if (a) known.push(a);
-    else findings.push({ endpoint: e, side: 'old-only', detail: 'the existing UI calls this and /v2 does not — undeclared' });
+    else if (!resolvedEndpoints.has(e)) findings.push({ endpoint: e, side: 'old-only', detail: 'the existing UI calls this and /v2 does not — undeclared' });
   }
   for (const e of v2Only) {
     const a = acceptedFor(e, 'v2-only');
     if (a) known.push(a);
-    else findings.push({ endpoint: e, side: 'v2-only', detail: '/v2 calls this and the existing UI does not — undeclared' });
+    else if (!resolvedEndpoints.has(e)) findings.push({ endpoint: e, side: 'v2-only', detail: '/v2 calls this and the existing UI does not — undeclared' });
   }
   // An accepted entry whose endpoint is no longer a difference is stale, and a
   // stale exemption is how a real gap later slips through unnoticed.
@@ -145,7 +166,21 @@ export function compare({ oldCalls, v2Calls, accepted = ACCEPTED }) {
     const stillDiffers = a.side === 'old-only' ? oldOnly.includes(a.endpoint) : v2Only.includes(a.endpoint);
     if (!stillDiffers) findings.push({ endpoint: a.endpoint, side: a.side, detail: 'declared as a difference but is no longer one — remove it from ACCEPTED' });
   }
-  return { ok: findings.length === 0, findings, known, oldOnly, v2Only, shared: [...oldCalls].filter((e) => v2Calls.has(e)).length };
+  // The mirror image: a gap recorded as CLOSED must stay closed. If either UI
+  // stops calling the endpoint, the capability difference is back — and a
+  // record saying "covered" over a reopened gap is worse than no record.
+  for (const r of resolved) {
+    const inOld = [...oldCalls].some((c) => covers(c, r.endpoint));
+    const inV2 = [...v2Calls].some((c) => covers(c, r.endpoint));
+    if (inOld && inV2) continue;
+    const who = !inV2 ? '/v2 no longer calls it' : 'the existing UI no longer calls it';
+    findings.push({
+      endpoint: r.endpoint,
+      side: r.was,
+      detail: `recorded as resolved (${r.decided}) but ${who} — the gap has reopened`,
+    });
+  }
+  return { ok: findings.length === 0, findings, known, resolved: [...resolved], oldOnly, v2Only, shared: [...oldCalls].filter((e) => v2Calls.has(e)).length };
 }
 
 export function loadCalls() {
@@ -164,6 +199,13 @@ function main() {
   for (const k of r.known) {
     log(`  [${k.status}] ${k.endpoint} (${k.side})`);
     log(`      ${k.why.replace(/\s+/g, ' ')}`);
+  }
+  if (r.resolved?.length) {
+    log('\n· closed gaps (recorded, and re-checked every run)');
+    for (const k of r.resolved) {
+      log(`  [${k.status}] ${k.endpoint} (was ${k.was}) — decided ${k.decided}`);
+      log(`      ${k.why.replace(/\s+/g, ' ')}`);
+    }
   }
   log('');
   if (r.ok) {
