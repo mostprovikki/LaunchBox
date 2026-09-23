@@ -40,6 +40,7 @@ import {
   V2_ROUTES, resolveHash, isWalkable, evaluateRoute, summarise,
   AA_NORMAL, AA_LARGE, LARGE_PX, LARGE_BOLD_PX, LARGE_BOLD_WEIGHT,
   STRANDED_MIN_ALPHA, STRANDED_MIN_LUM, STRANDED_MIN_W, STRANDED_MIN_H,
+  MIN_PAGE_TEXT_LEN,
 } from './audit-rules.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -65,6 +66,42 @@ function parseArgs(argv) {
 // The in-page probe. Ported from redesign/qa/audit.mjs's AUDIT_SRC, with the
 // thresholds injected from audit-rules.mjs rather than retyped — so the tested
 // rule and the measured rule cannot drift.
+// How long a route may take to fill before we measure it anyway. The project
+// detail page makes a BLOCKING `bd ready` call, whose cost is the fixture
+// repo's, not ours — so no fixed number is right on every machine.
+const SETTLE_CAP_MS = 30_000;
+const SETTLE_STEP_MS = 300;
+
+// Measure the route once it has stopped filling, not once a stopwatch says so.
+//
+// This replaced `await sleep(route.name === 'project' ? 4500 : 1800)`
+// (claude-scheduler-9xv). 4500ms was long enough for `bd ready` on the
+// author's machine and not on the next one, so the walk measured a page
+// mid-fill and reported `stranded_page` on a page that renders correctly.
+// A presence assertion behind a fixed sleep measures load, not the product —
+// the same defect claude-scheduler-2wf fixed in tests/pause.test.js.
+//
+// It must NOT become a gate that can only pass. A genuinely stranded page
+// never reaches the threshold, so it burns the whole cap and is then measured
+// and reported exactly as before — slower when broken, correct either way.
+// The cap is what stops that being a hang.
+async function settleAndMeasure(page, probe) {
+  const deadline = Date.now() + SETTLE_CAP_MS;
+  let last = -1;
+  let measured = await page.eval(new Function(`return ${probe}`));
+  while (Date.now() < deadline) {
+    const len = measured?.pageTextLen ?? 0;
+    // Two consecutive equal readings at or above the threshold: the route has
+    // filled and stopped changing. Equality alone is not enough — a page that
+    // has not started filling is also "unchanged".
+    if (len >= MIN_PAGE_TEXT_LEN && len === last) return measured;
+    last = len;
+    await sleep(SETTLE_STEP_MS);
+    measured = await page.eval(new Function(`return ${probe}`));
+  }
+  return measured; // never settled: report what is actually on screen
+}
+
 function probeSource(thresholds) {
   return `(() => {
   const T = ${JSON.stringify(thresholds)};
@@ -320,9 +357,7 @@ async function main() {
           continue;
         }
         await page.goto(`${baseUrl}/v2/${resolveHash(route.hash, ids)}`);
-        // Long enough for a blocking `bd ready` on the project detail page.
-        await sleep(route.name === 'project' ? 4500 : 1800);
-        const measured = await page.eval(new Function(`return ${probe}`));
+        const measured = await settleAndMeasure(page, probe);
         const found = evaluateRoute({ route: route.name, theme, page: measured });
         routeFindings.push(...found);
         log(`  ${found.length ? '✗' : '✓'} ${route.name}${found.length ? ` — ${found.length} finding${found.length === 1 ? '' : 's'}` : ''}`);
