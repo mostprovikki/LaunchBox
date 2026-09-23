@@ -26,7 +26,18 @@ function walk(dir) {
   return out;
 }
 
-const jsFiles = () => walk(V2).filter((p) => p.endsWith('.js')).map((p) => relative(V2, p));
+// Vendored third-party assets (e.g. D3) are hash-pinned in tools/qa/vendored.json,
+// never edited, and were not written against these conventions — minified D3 contains
+// bare fetch( calls it never reaches under the graph page's CSP. They are excluded by
+// EXACT pinned path, not by directory, so a hand-written file dropped into assets/ is
+// still scanned; tests/vendored-assets.test.js is what gates their content.
+const VENDORED = new Set(
+  Object.keys(JSON.parse(readFileSync(join(ROOT, 'tools/qa/vendored.json'), 'utf8')))
+    .map((rel) => relative(V2, join(ROOT, rel))),
+);
+
+const jsFiles = () =>
+  walk(V2).filter((p) => p.endsWith('.js')).map((p) => relative(V2, p)).filter((f) => !VENDORED.has(f));
 const read = (rel) => readFileSync(join(V2, rel), 'utf8');
 
 test('no /v2 module calls fetch() directly except api.js', () => {
