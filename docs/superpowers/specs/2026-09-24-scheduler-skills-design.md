@@ -57,6 +57,16 @@ Behaviour:
   later, once. Later: `bd defer <id> --until=<date>`.
 - **Config.** If the repo has `.beads/` but no `.scheduler.json`, copy the shape below, say
   so, and never activate. Registration with LaunchBox is offered, not done, unless asked.
+- **Backfill.** On "label the existing beads", "analyse this project's beads", or the first
+  run in a repo whose open beads carry no label reason: walk every open, non-deferred bead
+  (`bd list --status=open --json`), apply the label rule to each, and derive missing fields
+  where the description supports it. Output is a proposal table first: bead, current depth,
+  proposed label (yes / no + failed check), fields that would be added. Nothing is written
+  until the owner approves the batch; on an activated project a label is what makes a bead
+  run on the next poll, so this is a "make it run" decision, not a tidy-up. On approval,
+  apply with `bd update <id> --add-label unattended` and the design-field reason, in one
+  pass, then print what changed. Beads whose description is too thin to judge are listed as
+  "needs a rewrite" and left alone; rewriting them is the owner's call or a follow-up pass.
 
 ### 2. `registered-repo-session` (global skill)
 
@@ -158,7 +168,9 @@ attention, merges on request.
 ## Testing
 
 - Skills are verified by use on real repos, once each: `bead-authoring` on one real spec in
-  `system_migration` (every child has the four fields and a label reason);
+  `system_migration` (every child has the four fields and a label reason), and its backfill
+  on `system_migration`'s 41 ready beads (proposal table first, nothing written before
+  approval, every labelled bead carries a reason afterwards);
   `registered-repo-session` by opening a session here after a scheduled run and checking the
   briefing names it; `scheduled-bead-run` by labelling one small bead in this repo, letting
   the scheduler run it, and finding the branch in the queue.
