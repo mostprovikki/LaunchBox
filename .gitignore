@@ -15,3 +15,6 @@ claude-sessions-dashboard/
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# Claude Code native worktrees (superpowers sdd)
+.claude/worktrees/
