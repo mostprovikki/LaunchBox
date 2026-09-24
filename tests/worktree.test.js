@@ -169,6 +169,19 @@ test('snapshot never touches .beads/ — the scheduler owns bead writes, and a s
   assert.deepEqual(add.args, ['add', '-A', '--', '.', ':(exclude).beads']);
 });
 
+test('snapshot surfaces an unreadable HEAD after a successful commit, rather than a silent null sha', async () => {
+  const git = fakeGit({
+    status: { stdout: ' M src/x.js\n' },
+    add: { stdout: '' }, commit: { stdout: '' },
+    'rev-parse': { code: 1, stderr: 'boom' },
+  });
+  const wt = createWorktrees({ execFileFn: git });
+  await assert.rejects(
+    wt.snapshot(PROJECT, { root: '/outside', beadId: 'sp-1' }),
+    (e) => e instanceof WorktreeError && /HEAD is unreadable/.test(e.message),
+  );
+});
+
 test('remove tolerates an already-absent worktree', async () => {
   const git = fakeGit({ worktree: { code: 128, stderr: "fatal: '/outside/x' is not a working tree\n" } });
   const wt = createWorktrees({ execFileFn: git });
