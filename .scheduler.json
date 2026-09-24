@@ -3,6 +3,7 @@
   "autoLabel": "unattended",
   "cwd": ".",
   "maxConcurrent": 1,
+  "gates": "npm test",
   "defaults": {
     "timeoutMin": 180,
     "model": "default",
