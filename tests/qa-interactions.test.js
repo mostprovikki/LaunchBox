@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 import {
   DIALOG_CONTRACT, V2_DIALOGS, evaluateDialog, evaluateFilter, hasVisibleFocusIndicator,
-  evaluateKeyboardWalk, evaluateFocusTooltip, evaluateDegraded, evaluateRecovery, summarise,
+  evaluateKeyboardWalk, evaluateFocusTooltip, evaluateDegraded, evaluateRecovery, evaluateAppbarPollFocus, summarise,
 } from '../tools/qa/interaction-rules.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -289,4 +289,19 @@ test('the driver uses named fixtures, never list[0]', () => {
   const src = read('tools/qa/v2-interactions.mjs');
   assert.match(src, /const FIXTURE_JOBS = \[/);
   assert.match(src, /QA alpha rotate logs/);
+});
+
+test('appbar-poll focus: the chip must be the same node, still focused, after two real polls', () => {
+  // btv.17. The measurement has to have happened: no polls seen, or focus
+  // never reached the chip, is "could not measure", not a pass.
+  const ok = { startedOnChip: true, pollsSeen: 2, sameNode: true, focusStillOnChip: true };
+  assert.deepEqual(evaluateAppbarPollFocus(ok), []);
+  assert.match(evaluateAppbarPollFocus({ ...ok, startedOnChip: false })[0].detail, /never reached/);
+  assert.match(evaluateAppbarPollFocus({ ...ok, pollsSeen: 1 })[0].detail, /only 1 poll/);
+  assert.match(evaluateAppbarPollFocus({ ...ok, pollsSeen: 0 })[0].detail, /only 0 poll/);
+  assert.match(evaluateAppbarPollFocus({ ...ok, sameNode: false })[0].detail, /rebuilt/);
+  assert.match(evaluateAppbarPollFocus({ ...ok, focusStillOnChip: false })[0].detail, /lost keyboard focus/);
+  // Every miss is its own finding — a rebuilt chip that ALSO dropped focus reports both.
+  assert.equal(evaluateAppbarPollFocus({ ...ok, sameNode: false, focusStillOnChip: false }).length, 2);
+  for (const f of evaluateAppbarPollFocus({ ...ok, sameNode: false })) assert.equal(f.kind, 'appbar-poll');
 });

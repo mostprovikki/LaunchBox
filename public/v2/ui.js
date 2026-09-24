@@ -95,7 +95,14 @@ export function setDisabledReason(elm, reason) {
   } else {
     elm.disabled = false;
     elm.removeAttribute('aria-disabled');
+    // Only a control THIS function disabled has a saved tip to restore. A
+    // never-disabled control must be left alone: the whole-body sweep runs
+    // with reason=null after every healthy render, and treating "nothing
+    // saved" as "remove the tip" stripped every mutating control's own
+    // tooltip until its next rebuild (btv.17 — the awake chip lost its
+    // data-tip on each route change and got it back on the 15s poll).
     const saved = elm.dataset.lbTipSaved;
+    if (saved === undefined) return;
     if (saved) elm.setAttribute('data-tip', saved);
     else elm.removeAttribute('data-tip');
     delete elm.dataset.lbTipSaved;

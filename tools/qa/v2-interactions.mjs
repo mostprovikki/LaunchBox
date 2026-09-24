@@ -27,7 +27,7 @@ import { launchBrowser, sleep } from '../screenshots/cdp.mjs';
 import { Api, buildFixtureRepos, buildFixtureSessions, waitFor } from '../screenshots/seed.mjs';
 import {
   V2_DIALOGS, DIALOG_CONTRACT, evaluateDialog, evaluateFilter, evaluateKeyboardWalk,
-  evaluateFocusTooltip, evaluateDegraded, evaluateRecovery, summarise,
+  evaluateFocusTooltip, evaluateDegraded, evaluateRecovery, evaluateAppbarPollFocus, summarise,
 } from './interaction-rules.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -385,6 +385,41 @@ async function main() {
       for (const f of found) log(`      ${f.detail}`);
     }
     log(`  ${tips.length} tooltip control(s) measured`);
+
+    // ------------------------------------------- appbar poll vs focus
+    log('\n· appbar poll vs keyboard focus (btv.17)');
+    // chrome.js polls every 15s and used to wipe the whole appbar each time,
+    // so a keyboard user resting on the keep-awake chip lost focus every 15s.
+    // Tab to the chip for real, mark the node, then wait out two REAL polls —
+    // counted from the page's own /api/awake fetches, not from a stopwatch —
+    // and ask whether it is still the same node and still focused.
+    await page.eval(() => { document.body.focus(); window.__qaAwake = null; });
+    let startedOnChip = false;
+    for (let i = 0; i < 60 && !startedOnChip; i++) {
+      await pressTab(conn);
+      startedOnChip = await page.eval(() => {
+        const a = document.activeElement;
+        if (a?.id !== 'v2-awake') return false;
+        window.__qaAwake = a;
+        window.__qaAwakePolls0 = performance.getEntriesByType('resource').filter((e) => /\/api\/awake(\?|$)/.test(e.name)).length;
+        return true;
+      });
+    }
+    let pollMeasure = { startedOnChip, pollsSeen: 0, sameNode: false, focusStillOnChip: false };
+    if (startedOnChip) {
+      // Two cycles of the 15s poll, plus slack for the fetch to land.
+      await sleep(32_000);
+      pollMeasure = await page.eval(() => ({
+        startedOnChip: true,
+        pollsSeen: performance.getEntriesByType('resource').filter((e) => /\/api\/awake(\?|$)/.test(e.name)).length - window.__qaAwakePolls0,
+        sameNode: document.getElementById('v2-awake') === window.__qaAwake,
+        focusStillOnChip: document.activeElement === window.__qaAwake,
+      }));
+    }
+    const pollFound = evaluateAppbarPollFocus(pollMeasure);
+    findings.push(...pollFound);
+    log(`  ${pollFound.length ? '✗' : '✓'} ${pollMeasure.pollsSeen} poll(s) seen; same node ${pollMeasure.sameNode}; focus kept ${pollMeasure.focusStillOnChip}`);
+    for (const f of pollFound) log(`      ${f.detail}`);
 
     // ------------------------------------------ daemon-down disabling
     log('\n· daemon-down disabling (REVIEW #2)');

@@ -26,7 +26,11 @@ const read = (rel) => readFileSync(join(ROOT, rel), 'utf8');
 // in `node --test` it keeps the process alive with nothing left to run, which
 // is a HANG, not a failure — and a hanging suite reports nothing at all.
 const realSetInterval = globalThis.setInterval;
+// The most recent interval callback, so a test can fire the appbar poll on
+// demand instead of waiting 15s for it.
+let lastIntervalFn = null;
 globalThis.setInterval = (fn, ms, ...rest) => {
+  lastIntervalFn = fn;
   const t = realSetInterval(fn, ms, ...rest);
   t?.unref?.();
   return t;
@@ -267,4 +271,46 @@ test('the chip carries its tooltip on a plain <button>, never a replaced element
   assert.match(block, /'data-mutating'/);
   // And no hand-rolled disable: the central sweep owns that (btv.14's lesson).
   assert.ok(!/setDisabledReason/.test(block), 'the chip must not re-implement the sweep it is already covered by');
+});
+
+test('keyboard focus on the chip survives the appbar poll — the chip is updated in place, not rebuilt', async () => {
+  // btv.17: renderChips() used to do host.innerHTML = '' on every 15s poll.
+  // A focusable control inside a container wiped every 15 seconds loses
+  // keyboard focus every 15 seconds, and an open tooltip vanishes mid-read.
+  // jsdom drops focus on removal the way a browser does (measured), so this
+  // is a real assertion, not a DOM-dump one. The label still has to follow
+  // the served state across the same poll — "in place" must not mean "stale".
+  freshDom();
+  const m = mockFetch({ awake: { mode: 'off', until: null, active: false } });
+  globalThis.fetch = m.fn;
+  const chrome = await loadChrome();
+  chrome.mountChrome();
+  await tick(60);
+  const poll = lastIntervalFn;
+  assert.equal(typeof poll, 'function', 'sanity: mountChrome armed the poll');
+
+  const chip = document.getElementById('v2-awake');
+  assert.match(chip.textContent, /sleep ok/);
+  chip.focus();
+  assert.equal(document.activeElement, chip, 'sanity: the chip can take focus');
+
+  // Flip the served state between polls so the in-place update is proven to
+  // actually re-render the label and the dot, not just leave the node alone.
+  await m.fn('/api/awake', { method: 'PUT', body: JSON.stringify({ mode: 'on' }) });
+  await poll(); await tick(20);
+  await poll(); await tick(20);
+
+  const after = document.getElementById('v2-awake');
+  assert.equal(after, chip, 'two polls later it must be the SAME node');
+  assert.equal(document.activeElement, chip, 'focus must survive two poll cycles');
+  assert.match(chip.textContent, /^awake$/, 'and the label must follow the served state');
+  assert.ok(chip.querySelector('.state__dot'), 'an active hold must show its dot after the in-place update');
+  assert.equal(chip.getAttribute('aria-label'), 'Keep Mac awake — awake');
+  assert.equal(chip.getAttribute('data-tip'), 'Keep this Mac awake so schedules fire', 'its own tooltip is untouched by the poll');
+
+  // The rest of the appbar still refreshes: the running count is a rebuilt
+  // sibling, and the chip keeps its place between it and the pause segs.
+  const kids = [...document.getElementById('v2-chips').children].map((c) => c.className.split(' ')[0]);
+  assert.deepEqual(kids, ['uchips', 'runchip', 'runchip', 'segs']);
+  assert.equal(document.getElementById('v2-chips').children[2], chip);
 });

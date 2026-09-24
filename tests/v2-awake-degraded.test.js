@@ -82,6 +82,20 @@ test('the chip is swept by main.js\'s CENTRAL degraded sweep, with no per-contro
   assert.ok(chip(), 'sanity: the chip is on the appbar');
   assert.ok(chip().hasAttribute('data-mutating'), 'the chip writes state — it must be in the sweep');
   assert.equal(chip().disabled, false, 'sanity: it starts live');
+  // btv.17's actual root cause. mountChrome() builds the chip BEFORE
+  // startRouter()'s first render, and that render fires the whole-body sweep
+  // with reason=null. setDisabledReason(elm, null) on a control it had never
+  // disabled used to fall into "no saved tip -> removeAttribute('data-tip')",
+  // so every healthy render stripped the chip's own tooltip until the next
+  // 15s poll rebuilt it. That is what qa:v2:interactions saw: present at scan
+  // time with no [data-tip], carrying it again by the Tab walk. The first
+  // poll() has already rebuilt the chip by now, so navigate: a route change
+  // is exactly the healthy render whose sweep strips it.
+  window.location.hash = '#runs';
+  window.dispatchEvent(new window.Event('hashchange'));
+  await tick(60);
+  assert.equal(chip().getAttribute('data-tip'), 'Keep this Mac awake so schedules fire',
+    'a HEALTHY sweep must leave a never-disabled control\'s own tooltip alone');
 
   const api = await import('../public/v2/api.js');
   mode = 'reject';
@@ -95,4 +109,29 @@ test('the chip is swept by main.js\'s CENTRAL degraded sweep, with no per-contro
   await tick(40);
   assert.equal(chip().disabled, false, 'and it must come back — a stuck sweep is its own defect');
   assert.match(chip().getAttribute('data-tip'), /Keep this Mac awake/, 're-enabling must restore the chip\'s own tooltip');
+});
+
+test('setDisabledReason(el, null) on a control it never disabled leaves data-tip untouched', async () => {
+  // The contract (ui.js) is "restore whatever data-tip the control had before
+  // it was DISABLED". A control that was never disabled has nothing to
+  // restore, so a re-enable pass must not touch its tooltip at all — neither
+  // strip it (the btv.17 defect) nor rewrite it.
+  freshDom();
+  const { el, setDisabledReason } = await import('../public/v2/ui.js');
+  const live = el('button', { 'data-tip': 'Open log', 'data-mutating': true }, 'x');
+  document.body.append(live);
+  setDisabledReason(live, null);
+  assert.equal(live.getAttribute('data-tip'), 'Open log', 'never-disabled: tooltip must survive a healthy sweep');
+  assert.equal(live.disabled, false);
+
+  // And the round trip still works: disabled-with-reason, then re-enabled,
+  // gets its ORIGINAL tip back — including a control that had none.
+  setDisabledReason(live, 'Unavailable');
+  assert.equal(live.getAttribute('data-tip'), 'Unavailable');
+  setDisabledReason(live, null);
+  assert.equal(live.getAttribute('data-tip'), 'Open log', 'round trip restores the original');
+  const bare = el('button', { 'data-mutating': true }, 'y');
+  setDisabledReason(bare, 'Unavailable');
+  setDisabledReason(bare, null);
+  assert.equal(bare.hasAttribute('data-tip'), false, 'a control that had no tip must not keep the reason after recovery');
 });

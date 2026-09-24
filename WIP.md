@@ -1600,3 +1600,51 @@ next reader deletes for the wrong reason. Both re-mutated: still red on an unsup
 
 **803/803 tests** (from 753). `qa:v2` clean, `qa:v2:parity` clean, `qa:v2:interactions` red on
 `btv.17`. Nothing committed.
+
+## btv.17 — the chip's tooltip was stripped by the HEALTHY sweep, not by the wipe — 2026-09-24
+
+Both mechanisms the bead carried were falsified by the previous session (the resting map is keyed
+by selector, so a rebuild cannot drop `button.runchip`; `awakeAtScan: true` rules out late render).
+What was left was a contradiction: chip in the DOM at scan time with no `[data-tip]`, carrying
+`data-tip` again by the Tab walk. The bead named the one code path that writes that attribute —
+the degraded sweep — and a 10-line jsdom probe of it settled the question in one run:
+
+```
+before healthy sweep: <button data-tip="Keep awake" data-mutating="">x</button>
+after  healthy sweep: <button data-mutating="">x</button>
+```
+
+`ui.js setDisabledReason(elm, null)` read `dataset.lbTipSaved`, got `undefined` for a control it
+had never disabled, and fell into `removeAttribute('data-tip')`. `main.js` runs that sweep with
+reason=null after **every** healthy render (`onRender`), so every route change stripped the chip's
+own tooltip; the 15s poll's `renderChips()` rebuilt it with the tip. Hence "a function of the poll"
+and hence the 3-vs-4 count: the walk simply had or hadn't reached the rebuilt chip.
+
+**Fix 1 (root cause):** `saved === undefined` → early return; a never-disabled control is left
+alone. Tests first, both red on the unfixed tree for the right reason: a pure round-trip test on
+`setDisabledReason`, and an integration assertion in `v2-awake-degraded.test.js` that navigates
+(`#runs`) after the first poll and checks the chip still has its tip. The existing chip-recovery
+assertion had passed all along because recovery *does* have a saved tip — the hole was the
+never-disabled path.
+
+**Fix 2 (the acceptance criterion, and a real defect the wipe did cause):** `renderChips()` did
+`host.innerHTML = ''` every 15s, so keyboard focus on the chip was lost every 15s. jsdom drops
+focus on removal like a browser does (measured before relying on it), so the new
+`v2-awake.test.js` case is a real assertion: fire the captured interval callback twice with the
+served state flipped between polls, then require the SAME node, still `activeElement`, label
+`awake`, dot present, tip untouched, order `uchips, runchip, runchip, segs`. Red before the change
+("two polls later it must be the SAME node"). `chrome.js` now refreshes `#v2-awake` in place via
+`updateAwakeChip()` and rebuilds only its siblings around it. The pause segs are still rebuilt each
+poll — same defect class, filed as `btv.18` rather than widened into this bead.
+
+**Browser gate:** `qa:v2:interactions` grew an "appbar poll vs keyboard focus" section: Tab to the
+chip for real, mark the node, wait out two REAL polls (counted from the page's own `/api/awake`
+resource entries, not a stopwatch), then ask same-node + still-focused. Its rule
+`evaluateAppbarPollFocus` has "could not measure" findings for never-reached and <2 polls, unit
+tested red-then-green in `qa-interactions.test.js`.
+
+**Evidence (final tree):** mutation run with `chrome.js` reverted to HEAD and the `ui.js` fix kept
+→ `interaction gates FAILED — 2 finding(s): {"appbar-poll":2}` ("rebuilt by the poll", "lost
+keyboard focus"), 2 polls seen. Restored (byte-identical), then two consecutive
+`qa:v2:interactions` runs: 4 tooltip controls measured, `2 poll(s) seen; same node true; focus kept
+true`, `interaction gates clean` both times. Nothing committed.
