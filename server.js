@@ -1828,11 +1828,24 @@ export function createApp({
   // is deliberate: it is the only thing standing between "the agent says it is
   // done" and a one-click fast-forward of main. Anything else — prose, an empty
   // note, no bead at all — reads as `null`, which the page treats as unreviewed.
+  // The skill appends one `run: …` line per run via `bd update --append-notes`,
+  // so a bead accumulates one verdict line per run in chronological order. The
+  // LAST matching line — not the first non-empty line — is this bead's current
+  // verdict: a pass-then-fail bead must read as failed, not be judged forever
+  // by whatever its first run said.
   const GATES_VERDICT = { 'gates passed': 'passed', 'gates failed': 'failed', 'no gates': 'none' };
   const noteVerdict = (notes) => {
-    const first = (notes ?? '').split('\n').find((l) => l.trim())?.trim() ?? null;
-    const m = /^run:\s*(gates passed|gates failed|no gates)/i.exec(first ?? '');
-    return { first, gates: m ? GATES_VERDICT[m[1].toLowerCase()] : null };
+    const lines = (notes ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
+    let latest = null;
+    let gates = null;
+    for (const line of lines) {
+      const m = /^run:\s*(gates passed|gates failed|no gates)/i.exec(line);
+      if (m) { latest = line; gates = GATES_VERDICT[m[1].toLowerCase()]; }
+    }
+    // `first` is the field name callers (review.js, tests) use; it now holds
+    // the latest matched verdict line, falling back to the note's first
+    // non-empty line when nothing matched at all (prose, no verdict line yet).
+    return { first: latest ?? (lines[0] ?? null), gates };
   };
 
   const branchName = (req) => {
