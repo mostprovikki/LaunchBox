@@ -73,6 +73,7 @@ Details, including the measurements behind each decision:
 - **Visibility**: "N running" badge, per-run logs with live tail (SSE), run history with status filters, kill button for running/queued runs.
 - **Controls**: pause-all switch, overlap-skip per job, multiple schedules per job.
 - **Semantics**: runs missed while the Mac slept are skipped; one-shots auto-disable after firing; last 50 runs kept per job.
+- **Projects & beads**: registers a repo's `bd` (beads) graph and runs its eligible beads unattended, gated on `gates` (a repo's test command) in `.scheduler.json`, a per-bead git worktree, and per-project activation. Three Claude Code skills (`bead-authoring`, `registered-repo-session`, `scheduled-bead-run`, shipped under `skills/` and installed with `npm run install:skills`) keep bead writing, interactive sessions, and unattended runs consistent with what the scheduler expects. Finished branches never merge on their own — the review queue (`#review` in the UI) is where a human fast-forwards or discards them.
 
 ## Cleanup / Uninstall
 
