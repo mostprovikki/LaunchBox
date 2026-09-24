@@ -166,6 +166,7 @@ export const V2_ROUTES = Object.freeze([
   { name: 'projects', hash: '#projects' },
   { name: 'project', hash: '#project?id=:projectId' },
   { name: 'graph', hash: '#graph?id=:projectId' },
+  { name: 'review', hash: '#review?id=:projectId' },
   { name: 'sessions', hash: '#sessions' },
   { name: 'session', hash: '#session?id=:sessionId' },
   { name: 'settings', hash: '#settings' },
