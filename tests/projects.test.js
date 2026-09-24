@@ -81,6 +81,14 @@ test('autoLabel is mandatory — its absence is an error, never "run everything"
   assert.equal(good.config.maxConcurrent, 1, 'conservative default');
 });
 
+test('gates: optional, must be a non-empty string when present', () => {
+  const base = { autoLabel: 'unattended' };
+  assert.equal(parseProjectConfig(base).config.gates, null, 'absent → null, the skill decides the fallback');
+  assert.equal(parseProjectConfig({ ...base, gates: 'npm test' }).config.gates, 'npm test');
+  assert.equal(parseProjectConfig({ ...base, gates: '  ' }).ok, false, 'blank is a typo, not "no gates"');
+  assert.match(parseProjectConfig({ ...base, gates: 42 }).errors.join('\n'), /gates must be a non-empty string/);
+});
+
 // --- rejected declarations must not launder clean on re-parse -----------
 
 const REJECTED_DECLS = [
@@ -948,6 +956,16 @@ test('the prompt tells the agent the marker and what a missing one costs', () =>
   assert.ok(text.includes(completionMarker('sp-1')), 'asking for a signal nobody was told about is a trap');
   assert.match(text, /retry|returned to the backlog/i);
   assert.match(text, /do NOT close the bead/i);
+});
+
+test('the run prompt names the scheduled-bead-run skill and carries the gates command', () => {
+  const withGates = beadPrompt({ name: 'repo', path: '/r' }, { id: 'sp-1', title: 't' }, { autoLabel: 'unattended', gates: 'npm test' });
+  assert.match(withGates, /Follow the `scheduled-bead-run` skill/);
+  assert.match(withGates, /^Gates: npm test$/m);
+  const without = beadPrompt({ name: 'repo', path: '/r' }, { id: 'sp-1', title: 't' }, { autoLabel: 'unattended', gates: null });
+  assert.match(without, /^Gates: none$/m);
+  // The marker contract must survive the addition — a run without the skill degrades to today.
+  assert.match(without, /TASK-COMPLETE: sp-1/);
 });
 
 // --- permMode (the reason the live run could not write anything) ---------
