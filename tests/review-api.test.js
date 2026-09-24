@@ -204,6 +204,35 @@ test('GET branches reads each verdict form, and a note that states none is not a
   assert.equal(by['sp-1'].title, 'bead sp-1');
 });
 
+test('GET branches judges a bead by its LATEST run line, not its first', async (t) => {
+  const dir = repo();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  // The skill appends one `run: …` line per run via --append-notes. A bead's
+  // second run must be the verdict shown — a pass-then-fail bead is not
+  // mergeable just because its first run passed.
+  const PASS_THEN_FAIL = 'run: gates passed — branch scheduler/x\nchanged: a\n\n'
+    + 'run: gates failed — branch scheduler/x\ngates: npm test → 1 failing';
+  const FAIL_THEN_PASS = 'run: gates failed — branch scheduler/x\ngates: npm test → 1 failing\n\n'
+    + 'run: gates passed — branch scheduler/x\nchanged: a';
+  const NOTES = { 'sp-1': PASS_THEN_FAIL, 'sp-2': FAIL_THEN_PASS };
+  const { db, server, base, close } = await boot({
+    show: ({ args }) => {
+      const id = args[1];
+      return { stdout: JSON.stringify([{ id, title: `bead ${id}`, notes: NOTES[id] ?? null }]) };
+    },
+  });
+  t.after(() => close());
+  void server;
+  for (const id of ['sp-1', 'sp-2']) branchWithCommit(dir, `scheduler/r--${id}`, `${id}.txt`, `work ${id}`);
+  const p = register(db, dir);
+
+  const r = await call(base(), 'GET', branchesPath(p.id));
+  assert.equal(r.status, 200);
+  const by = Object.fromEntries(r.body.branches.map((b) => [b.beadId, b]));
+  assert.equal(by['sp-1'].note.gates, 'failed', 'pass-then-fail must read as failed, not the stale first-run pass');
+  assert.equal(by['sp-2'].note.gates, 'passed', 'fail-then-pass must read as passed, not the stale first-run fail');
+});
+
 test('GET branches: a snapshot tip is flagged, and a bead bd cannot read is still listed', async (t) => {
   const dir = repo();
   t.after(() => rmSync(dir, { recursive: true, force: true }));

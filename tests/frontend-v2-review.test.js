@@ -115,6 +115,19 @@ test('jsdom: a failed-gates branch with a real commit tip is still not mergeable
   assert.match(btn.getAttribute('data-tip'), /failed/i);
 });
 
+// F3: a row with no `note` at all (a beadless branch, or a bead field the API
+// omitted) must not throw on `r.note.gates` — it must render, disabled, with a
+// tooltip that says the note says nothing rather than misreporting a verdict.
+test('jsdom: a row with no note renders with Merge disabled', async () => {
+  const NOTELESS = { ...PASSED, branch: 'scheduler/repo--sp-3', beadId: null, title: null, note: null };
+  mountDom({ rows: [NOTELESS] });
+  const review = await load('nonote');
+  await review(new URLSearchParams('id=p1'));
+  const btn = mergeBtn('scheduler/repo--sp-3');
+  assert.equal(btn.disabled, true);
+  assert.match(btn.getAttribute('data-tip'), /evidence note says nothing about gates/i);
+});
+
 test('jsdom: a branch behind main is not offered as a fast-forward', async () => {
   mountDom({ rows: [{ ...PASSED, behind: 2 }] });
   const review = await load('behind');

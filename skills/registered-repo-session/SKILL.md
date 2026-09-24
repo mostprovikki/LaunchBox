@@ -52,8 +52,8 @@ one without finishing, hand it back: `bd update <id> --status open --assignee ""
 - **Merge on request** ("merge <bead>", "merge what finished"): for each branch,
   1. `git status --porcelain` on the primary checkout must be empty; otherwise stop and say what
      is dirty.
-  2. Read the bead's latest note: it must say gates passed. If it says "no gates" or the tip
-     commit starts with `wip(`, say so and ask before merging.
+  2. Read the bead's latest note: it must say gates passed. If it says "no gates", "gates
+     failed", or the tip commit starts with `wip(`, say so and ask before merging.
   3. `git merge --ff-only scheduler/<name>`. If refused (not a fast-forward), stop: rebasing
      scheduled work is a separate decision. Do not `--no-ff`, do not rebase silently.
   4. `bd update <id> --append-notes "merged <short sha> into main on <date>"`; close the bead

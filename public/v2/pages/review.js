@@ -87,10 +87,10 @@ export default async function review(params) {
 
   function why(r) {
     if (r.snapshotTip) return 'The tip is an unreviewed snapshot (wip) of work a run left behind — inspect it before merging';
-    if (r.note.gates !== 'passed') {
-      return r.note.gates
+    if (r.note?.gates !== 'passed') {
+      return r.note?.gates
         ? `The run’s evidence note says gates ${r.note.gates === 'none' ? 'did not run' : r.note.gates} — inspect it before merging`
-        : 'No evidence note says the gates passed — inspect it before merging';
+        : 'Evidence note says nothing about gates — inspect before merging';
     }
     if (r.behind > 0) return `${r.behind} commit(s) behind main, so this is not a fast-forward — rebase it first`;
     return 'Fast-forward main to this branch';
@@ -98,7 +98,7 @@ export default async function review(params) {
 
   function row(r) {
     const name = shortName(r.branch);
-    const mergeable = r.note.gates === 'passed' && !r.snapshotTip && r.behind === 0;
+    const mergeable = r.note?.gates === 'passed' && !r.snapshotTip && r.behind === 0;
     const reason = why(r);
 
     const merge = el('button', {
@@ -132,7 +132,7 @@ export default async function review(params) {
           `${r.shortstat || 'no diff against main'} · ${r.ahead} ahead / ${r.behind} behind · ${r.tipSha}`),
         el('div', { class: 't-meta' }, r.snapshotTip
           ? `unreviewed leftovers: ${r.tipSubject}`
-          : (r.note.first ?? r.tipSubject)),
+          : (r.note?.first ?? r.tipSubject)),
         mergeable ? null : el('div', { class: 't-meta' }, reason),
       ]),
       el('div', { class: 'reviewrow__actions' }, [merge, discard]),

@@ -41,11 +41,15 @@ chain is silent). `related`/`discovered-from` do not block.
 
 ```bash
 bd create --title="<epic title>" --description="<why the plan exists>" --type=epic --priority=1
-bd create --title="<child>" --description="**Why** ... **Done when** ... **Touches** ... **Do not touch** ..." --type=task --priority=2 --parent=<epic>
+DESC=$(cat <<'EOF'
+**Why** ... **Done when** ... **Touches** ... **Do not touch** ...
+EOF
+)
+bd create --title="<child>" --description="$DESC" --type=task --priority=2 --parent=<epic>
 bd dep add <child2> <child1>      # child2 waits for child1
 ```
 
-Pass long descriptions through a file or heredoc, never inline backticks (memory:
+Pass long descriptions through a heredoc-fed shell variable, never inline backticks (memory:
 backticks command-substitute in CLI args).
 
 ## 2. Label rule — five checks, all must pass
@@ -107,9 +111,11 @@ whose open beads carry no `unattended:` verdict.
    fields to add | needs rewrite?`. A bead too thin to judge is "needs rewrite" and is left alone.
 4. **Write nothing until the owner approves the batch.** On an activated project the label is
    what makes the bead run.
-5. On approval, in one pass per bead: `bd update <id> --design "<verdict + derived design>"`,
-   `bd update <id> --add-label unattended` for the yeses, `--append-notes` for derived fields.
-   Print what changed. Then run §3 on the leftovers.
+5. On approval, in one pass per bead: `--design` REPLACES the field, so first read it back with
+   `bd show <id> --json` — if empty, `bd update <id> --design "<verdict>\n<derived design>"`;
+   otherwise prepend, never drop what is there: `bd update <id> --design "<verdict line>\n\n
+   <existing design unchanged>"`. Then `bd update <id> --add-label unattended` for the yeses,
+   `--append-notes` for derived fields. Print what changed. Then run §3 on the leftovers.
 
 ## Never
 
