@@ -47,7 +47,7 @@ function fakeRunner({ db = null, status = 'running' } = {}) {
 
 const CONFIG = { autoLabel: 'unattended', maxConcurrent: 1, defaults: { timeoutMin: 30, model: 'default', notify: 'failure' } };
 
-function setup({ bdHandlers = {}, runnerOpts = {}, config = CONFIG, state = 'active', fsx = null } = {}) {
+function setup({ bdHandlers = {}, runnerOpts = {}, config = CONFIG, state = 'active', fsx = null, worktrees = null } = {}) {
   const db = freshDb();
   const bd = fakeBd({
     '--version': { stdout: 'bd version 1.1.0 (Homebrew)' },
@@ -57,7 +57,7 @@ function setup({ bdHandlers = {}, runnerOpts = {}, config = CONFIG, state = 'act
   const beads = createBeads({ execFileFn: bd });
   const runner = fakeRunner({ db, ...runnerOpts });
   const project = createProject(db, { name: 'repo', path: '/repo', state, config, beadsDir: '/repo/.beads' });
-  const projects = createProjects({ db, beads, runner, ...(fsx ? { fsx } : {}) });
+  const projects = createProjects({ db, beads, runner, ...(fsx ? { fsx } : {}), ...(worktrees ? { worktrees } : {}) });
   return { db, bd, beads, runner, project, projects };
 }
 
@@ -423,6 +423,38 @@ test('on ok the bead is closed and the lease completes', async () => {
   assert.equal(e.closed, true);
   assert.equal(getLease(db, project.id, 'sp-1').state, 'done');
   assert.ok(bd.calls.some((c) => c.sub === 'close'), 'the scheduler closes the bead, not the agent');
+});
+
+test('reap snapshots first and records meta.snapshotted on the run', async () => {
+  const calls = [];
+  const worktrees = {
+    ensure: async (p, { beadId }) => { calls.push('ensure'); return { path: `/tmp/wt/repo--${beadId}`, created: true }; },
+    snapshot: async () => { calls.push('snapshot'); return { path: '/tmp/wt/repo--sp-1', committed: true, sha: 'abc1234' }; },
+    remove: async () => { calls.push('remove'); return { removed: true }; },
+  };
+  const { db, projects, project, runner } = setup({
+    worktrees,
+    bdHandlers: {
+      ready: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', labels: ['unattended'] })]) },
+      show: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', labels: ['unattended'] })]) },
+      update: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1' })]) },
+      close: { stdout: '' },
+    },
+  });
+  setSetting(db, 'worktreeRoot', '/tmp/wt');
+
+  await projects.pollProject(project.id);
+  const finished = new Promise((r) => projects.events.once('finished', r));
+  runner.finish('run-1', 'ok', { said: `done.\n${completionMarker('sp-1')}` });
+  await finished;
+  // `finally { await reap(...) }` runs after the `finished` event fires, so give
+  // it a tick — same pattern as the reap tests in tests/worktree.test.js.
+  await new Promise((res) => setTimeout(res, 30));
+
+  const run = getRun(db, 'run-1');
+  assert.equal(run.meta.snapshotted, true);
+  assert.equal(run.meta.snapshotSha, 'abc1234');
+  assert.ok(calls.indexOf('snapshot') < calls.indexOf('remove'), 'snapshot BEFORE remove');
 });
 
 for (const status of ['fail', 'killed']) {
