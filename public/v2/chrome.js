@@ -256,15 +256,28 @@ export function openAwakeMenu() {
   return { wrap, close };
 }
 
+// The parts of the chip that follow the served state. Split from awakeChip()
+// so the poll can refresh an EXISTING chip in place: the chip is focusable,
+// and a focused node that gets wiped and rebuilt every 15s drops keyboard
+// focus (and any open tooltip) every 15s — btv.17. Attributes the chip does
+// not own (data-tip / disabled under main.js's degraded sweep) are left alone.
+function updateAwakeChip(chip) {
+  const { text, on } = awakeLabel(awakeState);
+  chip.setAttribute('aria-label', `Keep Mac awake — ${text}`);
+  chip.querySelector('span').textContent = text;
+  const dot = chip.querySelector('.state__dot');
+  if (on && !dot) chip.appendChild(el('span', { class: 'state__dot' }));
+  else if (!on && dot) dot.remove();
+  return chip;
+}
+
 function awakeChip() {
   if (awakeUnsupported) return null;
-  const { text, on } = awakeLabel(awakeState);
-  return el('button', {
+  return updateAwakeChip(el('button', {
     type: 'button',
     id: 'v2-awake',
     class: 'runchip',
     'aria-haspopup': 'dialog',
-    'aria-label': `Keep Mac awake — ${text}`,
     // A plain <button> on purpose: `::after` (which is what paints a data-tip)
     // does not render on a replaced element, so a select/input here would ship
     // a tooltip nobody can ever see — the defect E2 found on the enable switch.
@@ -276,9 +289,8 @@ function awakeChip() {
     onclick: () => openAwakeMenu(),
   }, [
     svgNode(SVG_COFFEE),
-    el('span', {}, text),
-    on ? el('span', { class: 'state__dot' }) : null,
-  ]);
+    el('span', {}),
+  ]));
 }
 
 function renderChips() {
@@ -294,7 +306,12 @@ function renderChips() {
   // wrapper's own box disappear so its children become real appbar flex
   // items, matching the mockup layout exactly.
   host.style.display = 'contents';
-  host.innerHTML = '';
+  // Everything is rebuilt EXCEPT the keep-awake chip, which is refreshed in
+  // place (see updateAwakeChip). It is the one focusable control here whose
+  // focus a poll must not steal; it keeps its slot between the running chip
+  // and the pause segs below.
+  const keptAwake = awakeUnsupported ? null : host.querySelector('#v2-awake');
+  for (const child of [...host.children]) if (child !== keptAwake) child.remove();
 
   const checked = fmtTime(usageState?.checkedAt);
   const uchips = el('div', {
@@ -304,18 +321,18 @@ function renderChips() {
     el('span', { class: 'uchip__k' }, b.k),
     el('span', { class: 'uchip__v' }, b.v),
   ])));
-  host.appendChild(uchips);
+  host.insertBefore(uchips, keptAwake);
 
-  host.appendChild(el('a', { class: 'runchip', href: '#runs' }, [
+  host.insertBefore(el('a', { class: 'runchip', href: '#runs' }, [
     el('span', { class: 'state__dot' }),
     el('span', { class: 'num' }, String(runningCount)),
     ' running',
-  ]));
+  ]), keptAwake);
 
   // Keep-awake sits between the running chip and the pause segs, the same
   // order the existing UI uses (public/index.html:20-33).
-  const awake = awakeChip();
-  if (awake) host.appendChild(awake);
+  if (keptAwake) updateAwakeChip(keptAwake);
+  else { const awake = awakeChip(); if (awake) host.appendChild(awake); }
 
   const reason = degradedReason();
   const segsAttrs = { class: 'segs segs--bar', role: 'radiogroup', 'aria-label': 'Pause mode' };

@@ -186,6 +186,29 @@ export function evaluateRecovery({ controls = [] }) {
   return findings;
 }
 
+/**
+ * btv.17 — the appbar poll must not steal focus. chrome.js refreshes the
+ * keep-awake chip in place on each 15s poll instead of wiping the appbar; a
+ * focusable control wiped every 15s loses keyboard focus every 15s. Measured
+ * over two REAL polls (counted from the page's own /api/awake fetches), on the
+ * node identity and document.activeElement, never inferred from a DOM dump.
+ */
+export function evaluateAppbarPollFocus({ startedOnChip, pollsSeen = 0, sameNode, focusStillOnChip }) {
+  const findings = [];
+  const at = (detail) => findings.push({ kind: 'appbar-poll', surface: 'appbar', detail });
+  if (startedOnChip !== true) {
+    at('tabbing never reached #v2-awake — focus survival across the poll was not measured at all');
+    return findings;
+  }
+  if (pollsSeen < 2) {
+    at(`only ${pollsSeen} poll(s) of /api/awake happened while waiting (expected 2) — the wait did not span two cycles, so nothing was proven`);
+    return findings;
+  }
+  if (sameNode !== true) at('#v2-awake was rebuilt by the poll — it is a different node than the one that had focus');
+  if (focusStillOnChip !== true) at('#v2-awake lost keyboard focus across the appbar poll');
+  return findings;
+}
+
 /** One verdict for the whole battery. Mirrors audit-rules.mjs's summarise(). */
 export function summarise(findings = []) {
   const byKind = {};
