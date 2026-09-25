@@ -105,3 +105,6 @@ transcripts), `token.js` + `approval.js` (local API auth and Touch ID gating).
 - **An agent may prepare, but never activate.** Writing `.scheduler.json`, running
   `bd init` and filing beads are all fine. Activating a project for unattended runs is
   the human's click — that airlock is the whole safety model, so do not route around it.
+- **UI work cites the design identity.** `docs/design/launchbox.md` records who uses `/v2`,
+  in which modes, the ranked jobs and each surface's archetype. Run `design-gate` against it
+  before adding, moving or relabelling anything a person sees.
