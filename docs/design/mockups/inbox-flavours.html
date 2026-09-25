@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inbox mockup</title>
+<script src="../../../public/v2/assets/theme.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../../public/v2/assets/system.css">
+<link rel="stylesheet" href="../../../public/v2/assets/launchbox.css">
+<style>
+  /* mockup-only: flavour gating + demobar + two layouts. Nothing here ships. */
+  body[data-flavour="1"] .flav-2 { display: none !important; }
+  body[data-flavour="2"] .flav-1 { display: none !important; }
+  .demobar { display:flex; gap:12px; align-items:center; padding:6px 16px; font-size:12px; border-bottom:1px solid var(--line, #333); }
+  .demobar .segs button[aria-pressed="true"] { font-weight:600; }
+  .ibx-group { margin: 18px 0 6px; }
+  .ibx-row { display:flex; gap:14px; align-items:flex-start; padding:10px 12px; }
+  .ibx-row > .state { min-width: 118px; }
+  .ibx-row__main { flex:1; min-width:0; }
+  .ibx-row__acts { display:flex; gap:8px; flex-shrink:0; }
+  .ibx-split { display:grid; grid-template-columns: minmax(260px, 2fr) 3fr; gap:18px; }
+  .ibx-item { display:block; width:100%; text-align:left; padding:9px 12px; background:none; border:0; border-left:3px solid transparent; color:inherit; font:inherit; cursor:pointer; }
+  .ibx-item[aria-selected="true"] { border-left-color: currentColor; background: var(--hover, rgba(127,127,127,.12)); }
+  .ibx-detail .defrow { margin: 4px 0; }
+  .ibx-keys { margin-top: 14px; }
+  @media (max-width: 760px) { .ibx-split { grid-template-columns: 1fr; } .ibx-row { flex-wrap: wrap; } }
+</style>
+</head>
+<body data-flavour="1">
+
+<div class="demobar">
+  <b>Mockup</b>
+  <span class="segs" role="group" aria-label="Flavour">
+    <button class="seg" data-f="1" aria-pressed="true">Option 1</button>
+    <button class="seg" data-f="2" aria-pressed="false">Option 2</button>
+  </span>
+  <span id="viewing" class="t-meta"></span>
+  <span style="margin-left:auto" class="t-meta">sample data · annotate keep / cut / move per element</span>
+  <button class="iconbtn themebtn" onclick="lbToggleTheme()" aria-label="Switch theme">◐</button>
+</div>
+
+<header class="appbar">
+  <h1 class="appbar__brand">LaunchBox</h1>
+  <nav class="mainnav">
+    <a href="#">Overview</a><a href="#" aria-current="page">Inbox <span class="tab__n">3</span></a><a href="#">Runs</a><a href="#">Projects</a><a href="#">Jobs</a><a href="#">Settings</a>
+  </nav>
+  <div class="appbar__spacer"></div>
+</header>
+
+<main class="shell">
+  <div class="pagehead">
+    <h2 class="t-page">Inbox</h2>
+    <div class="pagehead__sub t-meta">Everything waiting on you, across all projects · <span class="asof">as of 09:12</span></div>
+  </div>
+
+  <!-- ===== Option 1: grouped list, actions at rest (GitHub Actions) ===== -->
+  <div class="flav-1">
+    <div class="ibx-group t-eyebrow">Waiting to merge · 1</div>
+    <section class="card">
+      <div class="row ibx-row">
+        <span class="state state--ok"><span class="state__dot"></span>gates passed</span>
+        <div class="ibx-row__main">
+          <div><b>Review queue: sort by oldest waiting</b> <span class="t-meta mono">claude-scheduler-k3p.2</span></div>
+          <div class="t-meta">claude-scheduler · scheduler/…--k3p.2 · 2 commits · +84 −12 · finished 03:40</div>
+        </div>
+        <div class="ibx-row__acts"><a class="btn btn--primary" href="#">Review</a></div>
+      </div>
+    </section>
+
+    <div class="ibx-group t-eyebrow">Handed back · 2</div>
+    <section class="card">
+      <div class="row ibx-row">
+        <span class="state state--warn"><span class="state__dot"></span>no marker</span>
+        <div class="ibx-row__main">
+          <div><b>Migrate deja-view fixtures to new loader</b> <span class="t-meta mono">system_migration-gy70.4</span></div>
+          <div class="t-meta">“Queued. Two background jobs now: the browser e2e battery, then a clean-tree baseline…”</div>
+          <div class="t-meta">system_migration · branch kept: 2 commits · +1950 −313 · 01:15</div>
+        </div>
+        <div class="ibx-row__acts"><a class="btn" href="#">Log</a><button class="btn btn--ghost">Hold</button></div>
+      </div>
+      <div class="row ibx-row">
+        <span class="state state--bad"><span class="state__dot"></span>failed ×2</span>
+        <div class="ibx-row__main">
+          <div><b>Packing list: weight budget per bag</b> <span class="t-meta mono">trip-planner-8fd</span></div>
+          <div class="t-meta">“Cannot run npm test — Bash is not permitted under acceptEdits.”</div>
+          <div class="t-meta">trip-planner · no branch · 23:50</div>
+        </div>
+        <div class="ibx-row__acts"><a class="btn" href="#">Log</a><button class="btn btn--ghost">Hold</button></div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ===== Option 2: triage split, actions on selection (Linear) ===== -->
+  <div class="flav-2">
+    <div class="ibx-split">
+      <section class="card" role="listbox" aria-label="Waiting on you">
+        <button class="ibx-item" role="option" aria-selected="false" data-i="0">
+          <span class="state state--ok"><span class="state__dot"></span>merge</span>
+          <div><b>Review queue: sort by oldest</b></div>
+          <div class="t-meta">claude-scheduler · 03:40</div>
+        </button>
+        <button class="ibx-item" role="option" aria-selected="true" data-i="1">
+          <span class="state state--warn"><span class="state__dot"></span>handed back</span>
+          <div><b>Migrate deja-view fixtures</b></div>
+          <div class="t-meta">system_migration · 01:15</div>
+        </button>
+        <button class="ibx-item" role="option" aria-selected="false" data-i="2">
+          <span class="state state--bad"><span class="state__dot"></span>failed ×2</span>
+          <div><b>Packing list: weight budget</b></div>
+          <div class="t-meta">trip-planner · 23:50</div>
+        </button>
+      </section>
+
+      <section class="card ibx-detail">
+        <div class="card__head"><h2 id="f2-title">Migrate deja-view fixtures to new loader</h2></div>
+        <div class="card__body">
+          <div class="deflist" id="f2-facts"></div>
+          <p class="snippet" id="f2-reason" style="margin:12px 0;"></p>
+          <div class="actionbar" id="f2-acts"></div>
+          <div class="ibx-keys t-meta">Keys (optional): ↑↓ move · Enter primary · L log · H hold</div>
+        </div>
+      </section>
+    </div>
+  </div>
+</main>
+
+<script>
+  const ITEMS = [
+    { title: 'Review queue: sort by oldest waiting', facts: [['Project','claude-scheduler'],['Bead','claude-scheduler-k3p.2'],['Branch','2 commits · +84 −12'],['Gates','passed · npm test']], reason: 'Gates passed. Branch fast-forwards onto main.', acts: [['Review','btn btn--primary']] },
+    { title: 'Migrate deja-view fixtures to new loader', facts: [['Project','system_migration'],['Bead','system_migration-gy70.4'],['Branch','kept · 2 commits · +1950 −313'],['Why','no completion marker']], reason: '“Queued. Two background jobs now: the browser e2e battery, then a clean-tree baseline deja-view run. I’ll report when both land.”', acts: [['Log','btn btn--primary'],['Hold','btn btn--ghost']] },
+    { title: 'Packing list: weight budget per bag', facts: [['Project','trip-planner'],['Bead','trip-planner-8fd'],['Branch','none'],['Why','failed twice']], reason: '“Cannot run npm test — Bash is not permitted under acceptEdits.”', acts: [['Log','btn btn--primary'],['Hold','btn btn--ghost']] },
+  ];
+  function show(i) {
+    document.querySelectorAll('.ibx-item').forEach((b) => b.setAttribute('aria-selected', String(+b.dataset.i === i)));
+    const it = ITEMS[i];
+    document.getElementById('f2-title').textContent = it.title;
+    document.getElementById('f2-facts').innerHTML = it.facts.map(([n, v]) => `<div class="defrow"><span class="defrow__n t-meta">${n}</span> <span class="defrow__v">${v}</span></div>`).join('');
+    document.getElementById('f2-reason').textContent = it.reason;
+    document.getElementById('f2-acts').innerHTML = it.acts.map(([l, c]) => `<button class="${c}">${l}</button>`).join(' ');
+  }
+  document.querySelectorAll('.ibx-item').forEach((b) => b.addEventListener('click', () => show(+b.dataset.i)));
+  const LABEL = { 1: 'Viewing: Option 1 — grouped list, actions at rest', 2: 'Viewing: Option 2 — triage split, actions on selection' };
+  function setFlavour(f) {
+    document.body.dataset.flavour = f;
+    document.querySelectorAll('.demobar .seg').forEach((s) => s.setAttribute('aria-pressed', String(s.dataset.f === f)));
+    document.getElementById('viewing').textContent = LABEL[f];
+    const rest = location.hash.replace(/^#/, '').split('&').filter((t) => t && !t.startsWith('flavour='));
+    history.replaceState(null, '', '#' + [...rest, `flavour=${f}`].join('&'));
+  }
+  document.querySelectorAll('.demobar .seg').forEach((s) => s.addEventListener('click', () => setFlavour(s.dataset.f)));
+  setFlavour((location.hash.match(/(?:^#|&)flavour=([12])/) || [])[1] || '1');
+  show(1);
+</script>
+</body>
+</html>

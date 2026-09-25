@@ -13,6 +13,11 @@ This project uses **bd** (beads) for issue tracking. Run `bd prime` for full wor
 > source of truth; don't `bd import` during normal operation; don't
 > reach for third-party Dolt hosting before trying the default).
 
+## Design identity
+
+UI changes to `/v2` cite `docs/design/launchbox.md` (users, modes, ranked jobs, surface
+archetypes). Run `design-gate` against it before changing anything a person sees.
+
 ## Quick Reference
 
 ```bash
