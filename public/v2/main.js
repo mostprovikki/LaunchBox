@@ -15,6 +15,7 @@ import sessions from './pages/sessions.js';
 import session from './pages/session.js';
 import settings from './pages/settings.js';
 import graph from './pages/graph.js';
+import review from './pages/review.js';
 
 registerRoute('overview', overview);
 registerRoute('jobs', jobs);
@@ -27,6 +28,10 @@ registerRoute('settings', settings);
 // The 9th route (claude-scheduler-vo4.5): the per-project bead dependency
 // graph, reached from the project detail page rather than the appbar nav.
 registerRoute('graph', graph);
+// The 10th route: the review queue — the scheduler branches main has not
+// absorbed, with the merge and discard a human has to authorise. Reached from
+// the project detail page, like the graph.
+registerRoute('review', review);
 
 // REVIEW #2's central sweep — the ENTIRE contract a wave-2 page needs is the
 // `data-mutating` attribute (README.md). Two triggers, both required:

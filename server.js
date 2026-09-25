@@ -30,6 +30,7 @@ import { createBurst, BURST_DEFAULTS } from './lib/burst.js';
 import { createBeads } from './lib/beads.js';
 import { localiseGraphHtml } from './lib/beads-graph.js';
 import { createWorktrees } from './lib/worktree.js';
+import { createBranches } from './lib/branches.js';
 import {
   createProjects, parseProjectConfig, rejectedConfig, CONFIG_FILE,
   DEFAULT_POLL_SEC as BEADS_DEFAULT_POLL_SEC, POLL_FLOOR_SEC as BEADS_POLL_FLOOR_SEC,
@@ -333,6 +334,10 @@ const GRAPH_DOC_PATH = /^\/v2\/projects\/([^/]+)\/graph\.html$/;
 export function createApp({
   db, runner, scheduler, extensions, awake, usage = null, budget = null, pause = null,
   projects = null, beads = null, burst = null, sessions = null,
+  // The review queue's repository half (lib/branches.js). Injectable like the
+  // other optional engines so a test can hand in one pointed at a temp repo;
+  // null means the routes answer 501 rather than 404 — see needBranches().
+  branches = null,
   execFileFn = execFile, uninstallFn = startUninstall,
   usageRefreshFloorMs = POLL_FLOOR_SEC * 1000,
   // Injectable so a test can pin a known value; otherwise read from (or created
@@ -1800,6 +1805,122 @@ export function createApp({
     res.json({ ticket, ttlMs });
   });
 
+  // ------------------------------------------------------- v2: review queue
+  // The three routes behind #review (Task 8 of
+  // .superpowers/sdd/2026-09-24-scheduler-skills). A scheduled run leaves its
+  // work on a `scheduler/<repo>--<beadId>` branch and never touches main — so
+  // main only ever moves when a human says so, here, behind Touch ID.
+  //
+  // THE CONTAINMENT. `:name` is the branch WITHOUT its `scheduler/` prefix, and
+  // branchName() below is the ONLY place the prefix is added. A request
+  // therefore cannot name `main`, `feature/whatever`, or anything reached by
+  // traversal: a name carrying a slash or a dot-dot resolves to nothing at all
+  // and is refused before the repository is touched. Asserted from the request
+  // side in tests/review-api.test.js, and by the state of the repo afterwards.
+  const needBranches = (res) => {
+    if (branches) return true;
+    res.status(501).json({ error: 'branch review is not available in this instance' });
+    return false;
+  };
+
+  // Task 4's skill writes one evidence note per run whose FIRST line is
+  // `run: gates passed|gates failed|no gates — branch <name>`. That fixed form
+  // is deliberate: it is the only thing standing between "the agent says it is
+  // done" and a one-click fast-forward of main. Anything else — prose, an empty
+  // note, no bead at all — reads as `null`, which the page treats as unreviewed.
+  // The skill appends one `run: …` line per run via `bd update --append-notes`,
+  // so a bead accumulates one verdict line per run in chronological order. The
+  // LAST matching line — not the first non-empty line — is this bead's current
+  // verdict: a pass-then-fail bead must read as failed, not be judged forever
+  // by whatever its first run said.
+  const GATES_VERDICT = { 'gates passed': 'passed', 'gates failed': 'failed', 'no gates': 'none' };
+  const noteVerdict = (notes) => {
+    const lines = (notes ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
+    let latest = null;
+    let gates = null;
+    for (const line of lines) {
+      const m = /^run:\s*(gates passed|gates failed|no gates)/i.exec(line);
+      if (m) { latest = line; gates = GATES_VERDICT[m[1].toLowerCase()]; }
+    }
+    // `first` is the field name callers (review.js, tests) use; it now holds
+    // the latest matched verdict line, falling back to the note's first
+    // non-empty line when nothing matched at all (prose, no verdict line yet).
+    return { first: latest ?? (lines[0] ?? null), gates };
+  };
+
+  const branchName = (req) => {
+    const name = String(req.params.name ?? '');
+    // Prefix added here and only here.
+    if (!name || name.includes('/') || name.includes('..')) return null;
+    return `scheduler/${name}`;
+  };
+
+  app.get('/api/v2/projects/:id/branches', async (req, res) => {
+    if (!needProjects(res) || !needBranches(res)) return;
+    const project = getProject(db, req.params.id);
+    if (!project) return res.status(404).json({ error: 'not found' });
+    try {
+      const rows = await branches.list(project.path);
+      const out = [];
+      for (const r of rows) {
+        let title = null;
+        let note = { first: null, gates: null };
+        if (r.beadId) {
+          // A bead bd cannot read (deleted, or a busy database) loses its title
+          // and its verdict — not its row. A branch that exists is work sitting
+          // in the repository whether or not its bead can be found.
+          const bead = await beads.get(project, r.beadId).catch(() => null);
+          title = bead?.title ?? null;
+          note = noteVerdict(bead?.notes);
+        }
+        out.push({ ...r, title, note });
+      }
+      res.json({ branches: out });
+    } catch (err) {
+      res.status(502).json({ error: err?.message ?? String(err) });
+    }
+  });
+
+  app.post('/api/v2/projects/:id/branches/:name/merge', async (req, res) => {
+    if (!needProjects(res) || !needBranches(res)) return;
+    const project = getProject(db, req.params.id);
+    const branch = branchName(req);
+    // Refused BEFORE approve(): a dialog for a request the server was going to
+    // refuse anyway is a way to train a reflexive yes.
+    if (!project || !branch) return res.status(404).json({ error: 'not found' });
+    if (!await approve(req, res, {
+      action: 'branch.merge',
+      detail: `merge ${branch} into main in “${clampName(project.name)}”`,
+      grace: false,
+    })) return;
+    try {
+      res.json(await branches.mergeFastForward(project.path, branch));
+    } catch (err) {
+      const status = err?.code === 'unknown-branch' ? 404
+        : (err?.code === 'dirty' || err?.code === 'not-ff') ? 409 : 502;
+      res.status(status).json({ error: err?.message ?? String(err), code: err?.code ?? null });
+    }
+  });
+
+  app.delete('/api/v2/projects/:id/branches/:name', async (req, res) => {
+    if (!needProjects(res) || !needBranches(res)) return;
+    const project = getProject(db, req.params.id);
+    const branch = branchName(req);
+    if (!project || !branch) return res.status(404).json({ error: 'not found' });
+    if (!await approve(req, res, {
+      action: 'branch.discard',
+      detail: `delete ${branch} in “${clampName(project.name)}”`
+        + `${req.body?.force ? ' and discard its unmerged commits' : ''}`,
+      grace: false,
+    })) return;
+    try {
+      res.json(await branches.remove(project.path, branch, { force: !!req.body?.force }));
+    } catch (err) {
+      const status = err?.code === 'unknown-branch' ? 404 : err?.code === 'unmerged' ? 409 : 502;
+      res.status(status).json({ error: err?.message ?? String(err), code: err?.code ?? null });
+    }
+  });
+
   // ------------------------------------------------- v2: plan candidates
   // GET /api/v2/plan-candidates (claude-scheduler-btv.12, D2) — the ONE
   // additive endpoint the /v2 epic still needed, and the bead authorised it in
@@ -2161,6 +2282,8 @@ export async function main() {
   // settings change takes effect without a restart.
   const beads = createBeads({ db, bdPath: () => getSetting(db, 'bdPath', 'bd') || 'bd' });
   const worktrees = createWorktrees();
+  // The review queue's list/merge/delete over scheduler/* bead branches.
+  const branches = createBranches();
   const projects = createProjects({ db, beads, runner, worktrees, pause });
   // A daemon that swallows these is a daemon that polls silently and tells nobody
   // why nothing ran. Busy is logged as the routine event it is, not as a fault.
@@ -2279,7 +2402,7 @@ export async function main() {
   // declared after, and moving the use above the declaration cost a TDZ
   // ReferenceError that stopped the daemon booting at all — caught by running it.
   const port = Number(process.env.CS_PORT) || PORT_BASE;
-  const app = createApp({ db, runner, scheduler, extensions, awake, usage, budget, pause, projects, beads, burst, sessions, approval, originPort: port });
+  const app = createApp({ db, runner, scheduler, extensions, awake, usage, budget, pause, projects, beads, branches, burst, sessions, approval, originPort: port });
   // Deliberately no callback arg here: Express's app.listen(port, host, cb) wraps
   // cb with once() and registers it via BOTH server.once('error', done) and
   // server.listen(..., done) — so on EADDRINUSE the "success" callback fires

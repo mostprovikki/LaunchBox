@@ -1648,3 +1648,52 @@ tested red-then-green in `qa-interactions.test.js`.
 keyboard focus"), 2 polls seen. Restored (byte-identical), then two consecutive
 `qa:v2:interactions` runs: 4 tooltip controls measured, `2 poll(s) seen; same node true; focus kept
 true`, `interaction gates clean` both times. Nothing committed.
+
+## Task 8 — the review queue (`#review`, three `/api/v2` branch routes)
+
+The scheduler leaves finished work on `scheduler/<repo>--<beadId>` and never touches main; this
+is the screen where a human moves main. Merge is fast-forward only and discard is
+delete-with-force, both behind `approve()` (`branch.merge` / `branch.discard`).
+
+**What decides a merge is offered at all:** the run's evidence note (Task 4 writes
+`run: gates passed|gates failed|no gates — branch <name>` as its first line), the tip not being
+Task 6's `wip(<bead>): uncommitted work at run end` snapshot, and `behind === 0`. Anything else
+renders the button disabled with the reason in `data-tip` *and* in prose on the row.
+
+**Two things the plan's sketch got wrong, both measured rather than reasoned:**
+
+1. `normaliseBead()` dropped `notes`, so every bead read as "no note" and the queue could not
+   tell "nobody ran gates" from "the field was never carried". Pinned red-first in
+   `tests/beads.test.js`; `notes`/`design` now come through as `null`-not-`undefined`.
+2. A disabled Merge marked `data-mutating` is re-enabled milliseconds later: `main.js` sweeps the
+   whole body after every render and `setDisabledReason(elm, null)` sets `disabled = false`. So
+   the attribute goes on live controls only, and `frontend-v2-review.test.js` runs the REAL sweep
+   and looks again — the guarantee, not one instance of it.
+
+**Browser evidence** (throwaway `CS_DATA`, throwaway repo, port 43412, stubbed approval helper and
+a fake `bd` supplying the notes; the owner's 43400 daemon untouched):
+
+```
+· #review rendered 2 row(s):
+  - scheduler/tmprepo--sp-1  merge disabled=false  tip="Fast-forward main to this branch"
+  - scheduler/tmprepo--sp-2  merge disabled=true
+      tip="The tip is an unreviewed snapshot (wip) of work a run left behind — inspect it before merging"
+· main before: 075745b init
+· Merge on scheduler/tmprepo--sp-1: clicked
+· main after: 09f2b86 feat: the finished work (sp-1) | 075745b init
+· toast: Merged sp-1 into main
+· Discard on scheduler/tmprepo--sp-2: clicked
+· branches after: * main scheduler/tmprepo--sp-1
+```
+
+**Mutations.** Dropping `name.includes('/') || name.includes('..')` from `branchName()` →
+`review-api.test.js` red on "a name that can never resolve must not raise a dialog". Worth
+recording precisely: the four escape shapes still answered 404 even mutated, because git's own
+ref-name rules refuse `refs/heads/scheduler/../main` — the guard's observable effect is that the
+owner is never shown a Touch ID sheet for a request the server was always going to refuse, and
+the prefix stays a single-source fact. Removing `disabled: true` from the non-mergeable Merge →
+4 red in `frontend-v2-review.test.js`, including the sweep test. Both reverted.
+
+**Gates:** `npm test` 889/889; `qa:v2` clean (10 routes × 2 themes, 0 skipped — `review` walks the
+empty state, the walk's fixture project has no scheduler branches); `qa:v2:parity` clean with the
+three new endpoints declared; `qa:v2:interactions` clean.

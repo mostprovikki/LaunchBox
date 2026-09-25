@@ -126,6 +126,28 @@ test('get uses show (the only source of assignee) and unwraps the one-element ar
   assert.equal(b.status, 'in_progress');
 });
 
+// The review queue reads a bead's evidence note (Task 4 writes one whose first
+// line is `run: gates passed|gates failed|no gates — branch <name>`), and the
+// design field is the other long text a reviewer wants. normaliseBead dropped
+// both, so every consumer saw `undefined` and could not tell "no note" from
+// "not carried" — the queue would have silently shown every branch as
+// unreviewed.
+test('get carries the bead\'s notes and design through, rather than dropping them', async () => {
+  const notes = 'run: gates passed — branch scheduler/repo--sp-1\ncommit abc1234';
+  const bd = fakeBd({
+    show: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', notes, design: 'the plan' })]) },
+  });
+  const beads = createBeads({ execFileFn: bd });
+
+  const b = await beads.get(PROJECT, 'sp-1');
+  assert.equal(b.notes, notes, 'the evidence note is what the review queue reads');
+  assert.equal(b.design, 'the plan');
+  // Absent is null, never undefined: a consumer must be able to tell "this bead
+  // has no note" from "this field was never carried".
+  assert.equal(normaliseBead({ id: 'x' }).notes, null);
+  assert.equal(normaliseBead({ id: 'x' }).design, null);
+});
+
 test('get returns null for a missing bead rather than escalating', async () => {
   const bd = fakeBd({ show: { code: 1, stderr: 'Error: issue not found: sp-nope\n' } });
   const beads = createBeads({ execFileFn: bd });

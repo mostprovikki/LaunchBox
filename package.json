@@ -12,6 +12,7 @@
   "scripts": {
     "start": "node server.js",
     "test": "node --test tests/*.test.js",
+    "install:skills": "node bin/install-skills.mjs",
     "screenshots": "node tools/screenshots/capture.mjs",
     "qa:v2": "node tools/qa/v2-route-walk.mjs",
     "qa:v2:interactions": "node tools/qa/v2-interactions.mjs",
