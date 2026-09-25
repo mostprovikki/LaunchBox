@@ -50,6 +50,14 @@ of 3–8 lines: what changed, what was measured, what is open.
 
 ## 6. Marker
 
+**Your process ends when your final message ends.** Nothing you put in the background
+survives it: a backgrounded test battery, a queued follow-up, "I'll report when it lands"
+— the scheduler sees a run that stopped without a marker and hands the bead back, and
+whatever was still running is killed. So never end a turn waiting on work of your own.
+Run the gates in the foreground, read the output, and only then write the final message.
+If something genuinely takes longer than the run's timeout, that is a blocked run: say so,
+no marker, and let a human size the bead down.
+
 End your final message with exactly `TASK-COMPLETE: <id>` **only if** the gates ran and passed
 (or the bead has no gates and Done-when is met by the diff). Otherwise write one plain paragraph
 on what stopped you and no marker; the bead is handed back with your message attached.
