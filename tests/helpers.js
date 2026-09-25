@@ -108,11 +108,23 @@ export async function waitFor(cond, timeoutMs = 5000, intervalMs = 20) {
 //   { timeout: true }          the contention case: node kills the child, so the
 //                              error carries killed/signal and no exit code
 //   { spawnError: 'ENOENT' }   binary missing — a string `code`, not a number
+// Handler lookup key: normally `args[0]`, but `git -c user.name=... -c
+// user.email=... commit ...` (the snapshot commit in lib/worktree.js) puts the
+// subcommand after a run of `-c NAME=VALUE` pairs — skip each `-c` and the
+// token right after it. `sub` on the recorded call stays `args[0]` verbatim;
+// only the handler lookup changes, so every existing keyed-on-args[0] fake
+// (bd's own subcommands, plain git calls) is unaffected.
 export function fakeBd(handlers = {}) {
   const calls = [];
   const fn = (cmd, args, opts, cb) => {
     calls.push({ cmd, args, opts, env: opts?.env ?? {}, sub: args[0] });
-    const h = handlers[args[0]] ?? handlers.default ?? { stdout: '' };
+    let key = args[0];
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '-c') { i++; continue; }
+      key = args[i];
+      break;
+    }
+    const h = handlers[key] ?? handlers.default ?? { stdout: '' };
     const reply = typeof h === 'function' ? h({ args, opts, calls }) : h;
     const stdout = reply.stdout ?? '';
     const stderr = reply.stderr ?? '';

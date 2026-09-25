@@ -130,6 +130,58 @@ test('ensure refuses to run without a configured root', async () => {
   await assert.rejects(() => wt.ensure(PROJECT, { root: null }), /worktreeRoot is not configured/);
 });
 
+test('snapshot commits a dirty worktree as wip(<bead>) with the scheduler identity, and skips a clean one', async () => {
+  const dirty = fakeGit({
+    status: { stdout: ' M lib/a.js\n?? new.txt\n' },
+    add: { stdout: '' },
+    commit: { stdout: '' },
+    'rev-parse': { stdout: 'abc1234\n' },
+  });
+  const wt = createWorktrees({ execFileFn: dirty });
+  const r = await wt.snapshot(PROJECT, { root: '/outside', beadId: 'sp-1' });
+  assert.equal(r.committed, true);
+  assert.equal(r.sha, 'abc1234');
+  const commit = dirty.calls.find((c) => c.args[0] === '-c' || c.args[0] === 'commit');
+  assert.ok(commit, 'a commit was made');
+  assert.ok(commit.args.includes('user.name=claude-scheduler'), 'committed as the scheduler, not as the owner');
+  assert.ok(commit.args.some((a) => /^wip\(sp-1\): uncommitted work at run end$/.test(a)), 'fixed-form message the review queue recognises');
+  assert.equal(commit.opts.cwd, join('/outside', worktreeName(PROJECT, 'sp-1')), 'runs IN the bead worktree');
+  // -A on purpose here and nowhere else: the point is to lose nothing. `.beads/`
+  // is excluded (see the next test) — this is the final shape of that call.
+  const add = dirty.calls.find((c) => c.args[0] === 'add');
+  assert.deepEqual(add.args, ['add', '-A', '--', '.', ':(exclude).beads']);
+
+  const clean = fakeGit({ status: { stdout: '' } });
+  const wt2 = createWorktrees({ execFileFn: clean });
+  const r2 = await wt2.snapshot(PROJECT, { root: '/outside', beadId: 'sp-1' });
+  assert.equal(r2.committed, false);
+  assert.ok(!clean.calls.some((c) => c.args.includes('commit')), 'nothing to commit → no commit');
+});
+
+test('snapshot never touches .beads/ — the scheduler owns bead writes, and a stray audit line must not ride along', async () => {
+  const git = fakeGit({
+    status: { stdout: ' M .beads/interactions.jsonl\n M src/x.js\n' },
+    add: { stdout: '' }, commit: { stdout: '' }, 'rev-parse': { stdout: 'def5678\n' },
+  });
+  const wt = createWorktrees({ execFileFn: git });
+  await wt.snapshot(PROJECT, { root: '/outside', beadId: 'sp-1' });
+  const add = git.calls.find((c) => c.args[0] === 'add');
+  assert.deepEqual(add.args, ['add', '-A', '--', '.', ':(exclude).beads']);
+});
+
+test('snapshot surfaces an unreadable HEAD after a successful commit, rather than a silent null sha', async () => {
+  const git = fakeGit({
+    status: { stdout: ' M src/x.js\n' },
+    add: { stdout: '' }, commit: { stdout: '' },
+    'rev-parse': { code: 1, stderr: 'boom' },
+  });
+  const wt = createWorktrees({ execFileFn: git });
+  await assert.rejects(
+    wt.snapshot(PROJECT, { root: '/outside', beadId: 'sp-1' }),
+    (e) => e instanceof WorktreeError && /HEAD is unreadable/.test(e.message),
+  );
+});
+
 test('remove tolerates an already-absent worktree', async () => {
   const git = fakeGit({ worktree: { code: 128, stderr: "fatal: '/outside/x' is not a working tree\n" } });
   const wt = createWorktrees({ execFileFn: git });

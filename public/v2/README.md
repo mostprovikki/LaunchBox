@@ -23,6 +23,12 @@ import foo from './pages/foo.js';
 registerRoute('foo', foo);
 ```
 
+Two later routes reach only from the project detail page, not the appbar nav: `graph`
+(read-only bead graph for a project) and `review` (`#review?id=<projectId>` — the merge queue
+for a project's `scheduler/*` branches: fast-forward-only merge or discard, both Touch ID-gated
+server-side; see `pages/review.js`'s header comment for the three facts that make a branch
+mergeable).
+
 - Unknown fragments fall back to `overview` (`router.js` `DEFAULT_ROUTE`) —
   never leave a route unregistered expecting a blank page; register a
   placeholder instead.

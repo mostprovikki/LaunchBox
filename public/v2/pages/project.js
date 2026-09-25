@@ -387,6 +387,14 @@ function render() {
     'data-tip': 'Every bead in this project and what blocks what',
   }, 'Dependency graph'));
 
+  // The review queue. Also a link rather than a data-mutating control: reading
+  // what is waiting is safe, and each action ON that page is gated there.
+  actions.unshift(el('a', {
+    class: 'btn btn--ghost',
+    href: `#review?id=${encodeURIComponent(p.id)}`,
+    'data-tip': 'Scheduler branches main has not absorbed yet',
+  }, 'Review queue'));
+
   const head = pageHead({
     title: p.name,
     sub: el('span', {}, [

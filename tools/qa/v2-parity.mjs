@@ -61,6 +61,34 @@ export const ACCEPTED = Object.freeze([
       + 'carries instead, so the API token never enters a URL. Additive and paired with the '
       + 'graph page: the existing UI has no dependency-graph view, so it needs neither.',
   },
+  // The review queue (Task 8 of .superpowers/sdd/2026-09-24-scheduler-skills).
+  // Three endpoints, one page. The `:id` in the branch position is the parity
+  // gate's normalisation of a template hole, not a project id — it is the
+  // branch name WITHOUT its `scheduler/` prefix, which the server adds.
+  {
+    endpoint: '/api/v2/projects/:id/branches',
+    side: 'v2-only',
+    status: 'additive by design',
+    why: 'review queue for scheduled work (spec 2026-09-24-scheduler-skills-design). The existing '
+      + 'UI has no notion of scheduler branches; merge and discard are Touch ID-gated and '
+      + 'fast-forward only.',
+  },
+  {
+    endpoint: '/api/v2/projects/:id/branches/:id/merge',
+    side: 'v2-only',
+    status: 'additive by design',
+    why: 'review queue for scheduled work (spec 2026-09-24-scheduler-skills-design). The existing '
+      + 'UI has no notion of scheduler branches; merge and discard are Touch ID-gated and '
+      + 'fast-forward only.',
+  },
+  {
+    endpoint: '/api/v2/projects/:id/branches/:id',
+    side: 'v2-only',
+    status: 'additive by design',
+    why: 'review queue for scheduled work (spec 2026-09-24-scheduler-skills-design). The existing '
+      + 'UI has no notion of scheduler branches; merge and discard are Touch ID-gated and '
+      + 'fast-forward only.',
+  },
   {
     endpoint: '/api/v2/plan-candidates',
     side: 'v2-only',
