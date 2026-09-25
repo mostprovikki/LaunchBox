@@ -7,13 +7,14 @@ import { tmpData, jobPayload, fakeSpawn, fakeBd, bdReadyRow, sleep, extensions }
 import { ensureDirs } from '../lib/paths.js';
 import { ensureToken } from '../lib/token.js';
 import { readFileSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { readdir, readFile } from 'node:fs/promises';
 import {
   openDb, listRuns, getSetting, setSetting, recordRunUsage,
   createProject, getProject, acquireLease, listJobsByProject, createJob, getJob, findJobByBead,
   listJobs, listProjects, insertRun, updateRun, upsertSession,
 } from '../lib/db.js';
 import { createBeads } from '../lib/beads.js';
-import { createProjects } from '../lib/projects.js';
+import { createProjects, parseProjectConfig } from '../lib/projects.js';
 import { createSessionIndex } from '../lib/sessions.js';
 import { createRunner } from '../lib/runner.js';
 import { createScheduler } from '../lib/scheduler.js';
@@ -97,6 +98,7 @@ async function bootWithUsage({ fiveHour = 20, sevenDay = 20, buckets = [], reset
   const projects = withBurst ? {
     readyFor: () => ({ count: 2, at: new Date().toISOString() }),
     async refreshHealth() { return { ok: true, busy: false, beadsDir: '/tmp/fx/.beads' }; },
+    async readDeclaration() { return null; },
     explain: () => [],
     warningsFor: () => [],
     async pollProject(projectId, opts) {
@@ -1494,6 +1496,44 @@ test('PUT /api/projects/:id is the airlock: active|paused and nothing else', asy
   assert.equal(r.status, 404);
 });
 
+test('re-activation adopts the declaration as it is now — the only way a widened permMode is accepted', async (t) => {
+  // Seen live: the poller refused `acceptEdits` → `auto` and told the owner to
+  // pause and re-activate. They did, and nothing changed — a paused project is
+  // not polled, and activation only flipped `state`, so the stored copy stayed
+  // `acceptEdits` forever.
+  const p = await bootWithProjects({ fsx: { readdir, readFile } });
+  t.after(() => p.close());
+  const dir = repoDir({ autoLabel: 'unattended', defaults: { permMode: 'acceptEdits' } });
+  const proj = createProject(p.db, {
+    name: 'repo', path: dir, state: 'active', beadsDir: '/repo/.beads',
+    config: parseProjectConfig({ autoLabel: 'unattended', defaults: { permMode: 'acceptEdits' } }).config,
+  });
+  writeFileSync(join(dir, '.scheduler.json'), JSON.stringify({ autoLabel: 'unattended', defaults: { permMode: 'auto' } }));
+  await p.projects.pollProject(proj.id);
+  assert.match(p.projects.warningsFor(proj.id).join(' '), /was activated with "acceptEdits"/, 'precondition: the poller refused the widening');
+
+  let r = await req(p.base(), 'PUT', `/api/projects/${proj.id}`, { state: 'paused' });
+  assert.equal(r.status, 200);
+  assert.equal(getProject(p.db, proj.id).config.defaults.permMode, 'acceptEdits', 'pausing accepts nothing');
+
+  r = await req(p.base(), 'PUT', `/api/projects/${proj.id}`, { state: 'active' });
+  assert.equal(r.status, 200);
+  assert.equal(getProject(p.db, proj.id).config.defaults.permMode, 'auto', 'the human re-activated it: the file as written now is what they approved');
+  assert.equal(r.body.project.state, 'active');
+  // Seen live: the widening landed but the refusal stayed on screen until the
+  // next poll, telling the owner to do again what they had just done.
+  assert.deepEqual(r.body.warnings.filter((w) => /permMode/.test(w)), [], 'the refusal is answered, so it goes');
+  const listed = (await req(p.base(), 'GET', '/api/projects')).body.projects.find((x) => x.id === proj.id);
+  assert.deepEqual(listed.warnings.filter((w) => /permMode/.test(w)), []);
+
+  // A declaration that has since become invalid is stored as rejected, not
+  // silently kept as the last good copy.
+  writeFileSync(join(dir, '.scheduler.json'), '{ "autoLabel": "unattended", }');
+  r = await req(p.base(), 'PUT', `/api/projects/${proj.id}`, { state: 'active' });
+  assert.equal(r.status, 200);
+  assert.match(r.body.project.configErrors.join(' '), /not valid JSON/);
+});
+
 test('GET /api/projects carries bd version, roots, pollSec and the audit note', async (t) => {
   const p = await bootWithProjects();
   t.after(() => p.close());
@@ -1888,6 +1928,7 @@ async function bootGated(answer) {
   // so without them it answers 501 and never reaches the gate under test.
   const projects = {
     refreshHealth: async () => ({ ok: true, busy: false }),
+    readDeclaration: async () => null,
     explain: () => [],
     warningsFor: () => [],
     busyStreakFor: () => 0,
@@ -1901,8 +1942,23 @@ async function bootGated(answer) {
   });
   const server = app.listen(0, '127.0.0.1');
   await new Promise((r) => server.once('listening', r));
-  return { db, server, approval, base: () => `http://127.0.0.1:${server.address().port}` };
+  return { db, server, approval, projects, base: () => `http://127.0.0.1:${server.address().port}` };
 }
+
+test('a denied re-activation adopts nothing, and the prompt names the mode being accepted', async (t) => {
+  const { server, base, approval, db, projects } = await bootGated({ ok: false, code: 'approval_denied' });
+  t.after(() => server.close());
+  const narrow = { autoLabel: 'unattended', defaults: { permMode: 'acceptEdits' } };
+  const proj = createProject(db, { name: 'repo', path: '/repo', state: 'paused', config: narrow });
+  projects.readDeclaration = async () => ({ autoLabel: 'unattended', defaults: { permMode: 'auto' } });
+
+  const r = await req(base(), 'PUT', `/api/projects/${proj.id}`, { state: 'active' });
+  assert.equal(r.status, 403);
+  const after = getProject(db, proj.id);
+  assert.equal(after.config.defaults.permMode, 'acceptEdits', 'the widening lands only once the human approves');
+  assert.equal(after.state, 'paused');
+  assert.match(approval.asked[0].detail, /permission mode: auto/, 'the human is told what they are accepting');
+});
 
 test('creating a job is gated, and a denial writes nothing', async (t) => {
   const { server, base, approval, db } = await bootGated({ ok: false, code: 'approval_denied' });

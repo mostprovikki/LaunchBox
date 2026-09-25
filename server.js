@@ -1132,11 +1132,18 @@ export function createApp({
     // Ordered AFTER validation deliberately: a malformed request must be refused
     // without making the user authenticate something that was never going to
     // happen. Same rule as POST /api/jobs.
+    // Read before the approval so the prompt names the permission mode being
+    // accepted; written only after it, so a denial leaves no partial state.
+    const declared = state === 'active' ? await projects.readDeclaration(project.id) : null;
+    const mode = (declared ?? project.config)?.defaults?.permMode ?? 'default';
     if (state === 'active' && !await approve(req, res, {
       action: 'project.activate',
-      detail: `activate the project “${project.name}” so it can run agents unattended in ${project.path}`,
+      detail: `activate the project “${project.name}” so it can run agents unattended in ${project.path} (permission mode: ${mode})`,
       grace: false,
     })) return;
+    // Activation adopts the declaration as it is now, unpinned: this approval is
+    // the human accepting it. Without it a widened permMode could never land.
+    if (declared) projects.adoptDeclaration(project.id, declared);
     // Probe before flipping the state so the response can say what activating
     // just signed up for, including a beads dir that doesn't resolve.
     let health = null;

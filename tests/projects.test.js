@@ -233,6 +233,28 @@ test('re-discovery refreshes the declaration but never resurrects state', async 
   assert.equal(after.config.autoLabel, 'changed-label', 'but the declaration is refreshed');
 });
 
+test('re-discovery cannot widen an active project\'s permMode — it pins like the poller', async () => {
+  // The same escalation as the poller's, by the other door: discovery re-reads
+  // every declaration under projectRoots and used to store it whole, whatever
+  // the project's state.
+  const db = freshDb();
+  const stored = { ...CONFIG, defaults: { ...CONFIG.defaults, permMode: 'acceptEdits' } };
+  const p = createProject(db, { name: 'repo', path: '/roots/repoA', state: 'active', config: stored });
+  const projects = createProjects({
+    db, beads: createBeads({ execFileFn: fakeBd() }), runner: fakeRunner(),
+    fsx: {
+      readdir: async () => [{ name: 'repoA', isDirectory: () => true }],
+      readFile: async () => JSON.stringify({ autoLabel: 'changed-label', defaults: { permMode: 'auto' } }),
+    },
+  });
+
+  await projects.discover({ roots: ['/roots'] });
+  const after = getProject(db, p.id);
+  assert.equal(after.config.defaults.permMode, 'acceptEdits', 'the approved mode is kept');
+  assert.equal(after.config.autoLabel, 'changed-label', 'the rest of the declaration is still refreshed');
+  assert.match(projects.warningsFor(p.id).join(' '), /was activated with "acceptEdits"/, 'a refusal is never silent');
+});
+
 // --- eligibility -------------------------------------------------------
 
 test('only beads carrying autoLabel run; an unlabelled one is ignored, not fatal', async () => {
