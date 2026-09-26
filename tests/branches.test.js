@@ -10,16 +10,16 @@ import { join } from 'node:path';
 import { createBranches, parseBeadId, BranchError } from '../lib/branches.js';
 
 const g = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], { cwd, encoding: 'utf8' });
-function repo() {
+function repo(branch = 'main') {
   const dir = mkdtempSync(join(tmpdir(), 'cs-branches-'));
-  g(dir, 'init', '-q', '-b', 'main');
+  g(dir, 'init', '-q', '-b', branch);
   writeFileSync(join(dir, 'a.txt'), 'a\n'); g(dir, 'add', 'a.txt'); g(dir, 'commit', '-q', '-m', 'init');
   return dir;
 }
-function branchWithCommit(dir, name, file, msg) {
+function branchWithCommit(dir, name, file, msg, base = 'main') {
   g(dir, 'checkout', '-q', '-b', name);
   writeFileSync(join(dir, file), `${msg}\n`); g(dir, 'add', file); g(dir, 'commit', '-q', '-m', msg);
-  g(dir, 'checkout', '-q', 'main');
+  g(dir, 'checkout', '-q', base);
 }
 
 test('parseBeadId reads the segment after the last "--", or null', () => {
@@ -67,6 +67,31 @@ test('mergeFastForward: merges when ff is possible, refuses dirty tree and non-f
     assert.equal(g(dir, 'rev-parse', '--short', 'main').trim(), r.sha);
     assert.equal(g(dir, 'rev-list', '--count', 'main'), '3\n');
     await assert.rejects(b.mergeFastForward(dir, 'scheduler/nope'), (e) => e.code === 'unknown-branch');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a repo whose primary checkout is on master (no origin) lists and fast-forward merges against master, not main', async () => {
+  const dir = repo('master');
+  try {
+    const b = createBranches();
+    branchWithCommit(dir, 'scheduler/p-1--sp-1', 'b.txt', 'feat (sp-1)', 'master');
+    const rows = await b.list(dir);
+    assert.deepEqual(rows.map((r) => r.branch), ['scheduler/p-1--sp-1']);
+    assert.equal(rows[0].ahead, 1); assert.equal(rows[0].behind, 0);
+    assert.match(rows[0].shortstat, /1 file changed/);
+    const r = await b.mergeFastForward(dir, 'scheduler/p-1--sp-1');
+    assert.equal(g(dir, 'rev-parse', '--short', 'master').trim(), r.sha);
+    assert.equal(g(dir, 'rev-list', '--count', 'master'), '2\n');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('an unresolvable default branch (no origin/HEAD, detached primary checkout) yields a clear BranchError', async () => {
+  const dir = repo('master');
+  try {
+    branchWithCommit(dir, 'scheduler/p-1--sp-1', 'b.txt', 'feat (sp-1)', 'master');
+    g(dir, 'checkout', '-q', g(dir, 'rev-parse', 'master').trim()); // detach HEAD
+    const b = createBranches();
+    await assert.rejects(b.list(dir), (e) => e instanceof BranchError && e.code === 'no-default' && /default branch/.test(e.message));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
