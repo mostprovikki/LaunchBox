@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Overview mockup</title>
+<script src="../../../public/v2/assets/theme.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../../public/v2/assets/system.css">
+<link rel="stylesheet" href="../../../public/v2/assets/launchbox.css">
+<style>
+  /* mockup-only: flavour gating, demobar, Monitor layouts. Nothing here ships. */
+  body[data-flavour="1"] .flav-2 { display: none !important; }
+  body[data-flavour="2"] .flav-1 { display: none !important; }
+  .demobar { display:flex; flex-wrap:wrap; gap:12px; align-items:center; padding:6px 16px; font-size:12px; border-bottom:1px solid var(--line, #333); }
+  .demobar .seg[aria-pressed="true"] { font-weight:600; text-decoration: underline; }
+  :root { --ok:#3fb950; --warn:#d9a441; --bad:#f06a6a; }
+  .light { display:inline-block; width:14px; height:14px; border-radius:50%; flex:none; }
+  .light--ok { background: var(--ok); box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 25%, transparent); }
+  .light--warn { background: var(--warn); box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn) 25%, transparent); }
+  .light--bad { background: var(--bad); box-shadow: 0 0 0 4px color-mix(in srgb, var(--bad) 25%, transparent); }
+  .status { display:flex; gap:14px; align-items:center; margin: 8px 0 22px; }
+  .status__t { font-size: 22px; font-weight: 600; }
+  .status__why { margin-top: 2px; }
+  .fault { margin: -8px 0 20px; }
+  a.tile, a.fact3 { color: inherit; text-decoration: none; }
+  /* Option 1: four equal tiles */
+  .tiles { display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 14px; }
+  .tile { display:block; padding: 18px 18px 16px; }
+  .tile:hover { background: var(--hover, rgba(127,127,127,.08)); }
+  .tile__v { font-size: 34px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.1; margin: 6px 0 4px; }
+  .tile__v small { font-size: 15px; font-weight: 500; opacity: .75; }
+  .tile--warn .tile__v { color: var(--warn); }
+  .tile--bad .tile__v { color: var(--bad); }
+  /* Option 2: needs-me as hero, three facts beneath */
+  .hero { display:flex; align-items:center; gap: 20px; padding: 20px 22px; }
+  .hero__v { font-size: 46px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1; }
+  .hero__go { margin-left:auto; }
+  .facts3 { display:grid; grid-template-columns: minmax(0,1fr) minmax(0,1.5fr); grid-template-rows: auto auto; gap: 14px; margin-top: 14px; }
+  .fact3.fact3--spend { grid-column: 2; grid-row: 1 / span 2; display:flex; flex-direction:column; }
+  .share { display:flex; gap: 3px; }
+  .share__seg { min-width: 0; display:flex; flex-direction:column; gap: 6px; }
+  .share__bar { display:block; height: 10px; border-radius: 3px; background: currentColor; }
+  .share__n { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size: 12px; }
+  .spend__v { font-size: 44px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.05; }
+  .fact3--spend .spend2 { margin: 14px 0 18px; }
+  .spend2 { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 6px 0 14px; }
+  .byproj { display:grid; grid-template-columns: 130px minmax(0,1fr) 44px; gap: 6px 10px; align-items:center; font-size: 13px; }
+  .byproj__bar { height: 8px; border-radius: 4px; background: var(--hover, rgba(127,127,127,.18)); overflow:hidden; }
+  .byproj__bar > span { display:block; height:100%; background: currentColor; opacity:.55; }
+  .byproj__n { text-align:right; font-variant-numeric: tabular-nums; }
+  .fact3 { display:block; padding: 14px 16px; }
+  .fact3:hover { background: var(--hover, rgba(127,127,127,.08)); }
+  .fact3__v { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; margin: 4px 0 2px; }
+  .fact3--warn .fact3__v { color: var(--warn); }
+  .elsewhere { margin-top: 26px; }
+  @media (max-width: 760px) {
+    .tiles { grid-template-columns: repeat(2, minmax(0,1fr)); }
+    .facts3 { grid-template-columns: 1fr; }
+    .fact3--spend { grid-column: auto; grid-row: auto; }
+    .hero { flex-wrap: wrap; }
+  }
+</style>
+</head>
+<body data-flavour="1" data-state="clear">
+
+<div class="demobar">
+  <b>Mockup</b>
+  <span class="segs" role="group" aria-label="Flavour">
+    <button class="seg" data-f="1">Option 1</button>
+    <button class="seg" data-f="2">Option 2</button>
+  </span>
+  <span id="viewing" class="t-meta"></span>
+  <span class="t-meta" style="margin-left:12px">State:</span>
+  <span class="segs" role="group" aria-label="State">
+    <button class="seg" data-s="clear">All clear</button>
+    <button class="seg" data-s="needs">Needs you</button>
+    <button class="seg" data-s="fault">Fault</button>
+  </span>
+  <span style="margin-left:auto" class="t-meta">headroom + running live 26 Sep 15:40 · spend and "needs you" counts are samples</span>
+  <button class="iconbtn themebtn" onclick="lbToggleTheme()" aria-label="Switch theme">◐</button>
+</div>
+
+<header class="appbar">
+  <h1 class="appbar__brand">LaunchBox</h1>
+  <nav class="mainnav">
+    <a href="#" aria-current="page">Overview</a><a href="#">Inbox <span class="tab__n" id="navbadge"></span></a><a href="#">Runs</a><a href="#">Projects</a><a href="#">Jobs</a><a href="#">Settings</a>
+  </nav>
+  <div class="appbar__spacer"></div>
+</header>
+
+<main class="shell">
+  <div class="status">
+    <span class="light" id="light"></span>
+    <div>
+      <div class="status__t" id="status-t"></div>
+      <div class="status__why t-meta" id="status-why"></div>
+    </div>
+  </div>
+  <div class="banner banner--bad fault" id="fault" hidden>
+    <b>LaunchBox cannot start Claude.</b> <span class="mono">/opt/homebrew/bin/claude</span> does not exist, so every bead run fails on start. Bead pickup is stopped until this is fixed.
+    <a class="btn" href="#" style="margin-left:8px">Fix in Settings</a>
+  </div>
+
+  <!-- ===== Option 1: four equal tiles ===== -->
+  <div class="flav-1">
+    <div class="tiles" id="tiles"></div>
+  </div>
+
+  <!-- ===== Option 2: needs-you as the hero, three facts beneath ===== -->
+  <div class="flav-2">
+    <a class="card hero tile" href="#inbox" id="hero"></a>
+    <div class="facts3" id="facts3"></div>
+  </div>
+
+  <p class="elsewhere t-meta">Next 24 hours → Jobs · Running-run controls → Runs · Project automation → Projects</p>
+</main>
+
+<script>
+  // Live 26 Sep 15:40 IST: 5h window 11% used, week 89% used, 0 running, Soft pause.
+  // Samples (not live): needs-you counts, spend since last visit.
+  const LIVE = { fiveLeft: 89, weekLeft: 11, running: 0, asOf: '15:40', paused: 'Soft', lastVisit: '01:19', spend: '+4%' };
+  const STATES = {
+    clear: { light: 'warn', needs: 0, title: 'Nothing needs you', why: `paused (${LIVE.paused}) · weekly headroom is low` },
+    needs: { light: 'warn', needs: 3, title: 'Waiting on you', why: `paused (${LIVE.paused}) · weekly headroom is low` },
+    fault: { light: 'bad', needs: 0, title: 'Cannot run beads', why: 'the claude binary is missing' },
+  };
+
+  function render() {
+    const s = STATES[document.body.dataset.state];
+    document.getElementById('light').className = `light light--${s.light}`;
+    document.getElementById('status-t').textContent = s.title;
+    document.getElementById('status-why').textContent = s.why;
+    document.getElementById('fault').hidden = document.body.dataset.state !== 'fault';
+    document.getElementById('navbadge').textContent = s.needs ? String(s.needs) : '';
+
+    const needsTile = { k: 'Needs you', v: String(s.needs), d: s.needs ? 'open the Inbox' : 'Inbox is empty', href: '#inbox', cls: s.needs ? 'warn' : '' };
+    const head = { k: 'Headroom left', v: `${LIVE.weekLeft}%<small> week</small>`, d: `${LIVE.fiveLeft}% of the 5-hour window · as of ${LIVE.asOf}`, href: '#settings', cls: 'warn' };
+    const run = { k: 'Running now', v: String(LIVE.running), d: `paused (${LIVE.paused}) · nothing starts`, href: '#runs' };
+    const spend = { k: 'Spent since last visit', v: `${LIVE.spend}<small> week</small>`, d: `since ${LIVE.lastVisit} · sample`, href: '#runs' };
+
+    document.getElementById('tiles').innerHTML = [needsTile, head, run, spend].map((t) => `
+      <a class="card tile ${t.cls ? `tile--${t.cls}` : ''}" href="${t.href}">
+        <div class="t-eyebrow">${t.k}</div>
+        <div class="tile__v">${t.v}</div>
+        <div class="t-meta">${t.d}</div>
+      </a>`).join('');
+
+    document.getElementById('hero').innerHTML = `
+      <div class="hero__v" style="${s.needs ? 'color:var(--warn)' : ''}">${s.needs}</div>
+      <div><div class="t-card">${s.needs ? 'need you' : 'Nothing needs you'}</div>
+        <div class="t-meta">${s.needs ? '1 branch waiting to merge · 2 handed back' : 'no branches waiting · nothing handed back'}</div></div>
+      ${s.needs ? '<span class="btn btn--primary hero__go">Open Inbox</span>' : ''}`;
+    // Spend: what LaunchBox's own runs used, in % of the weekly window, and
+    // roughly where it went. SAMPLE numbers — the per-run usage is recorded
+    // (recordRunUsage), the rollup is not built yet.
+    const BYPROJ = [['system_migration', 19], ['trip-planner', 8], ['claude-scheduler', 5], ['other', 2]];
+    const total7 = BYPROJ.reduce((a, [, n]) => a + n, 0);
+    const spendCard = `
+      <a class="card fact3 fact3--spend" href="#runs">
+        <div class="t-eyebrow">LaunchBox spend <span class="t-meta">· % of weekly window · sample</span></div>
+        <div class="spend2">
+          <div><div class="spend__v">${LIVE.spend}</div><div class="t-meta">since last visit (${LIVE.lastVisit})</div></div>
+          <div><div class="spend__v">${total7}%</div><div class="t-meta">last 7 days</div></div>
+        </div>
+        <div class="share" style="margin-top:auto" aria-label="Last 7 days by project">${BYPROJ.map(([n, v], i) => `
+          <div class="share__seg" style="flex-basis:${v / total7 * 100}%" title="${n}">
+            <span class="share__bar" style="opacity:${[0.95, 0.65, 0.42, 0.25][i] ?? 0.25}"></span>
+            <span class="share__n t-meta">${v / total7 >= 0.12 ? n : ''}</span>
+          </div>`).join('')}
+        </div>
+      </a>`;
+    document.getElementById('facts3').innerHTML = [head, run].map((t) => `
+      <a class="card fact3 ${t.cls ? `fact3--${t.cls}` : ''}" href="${t.href}">
+        <div class="t-eyebrow">${t.k}</div>
+        <div class="fact3__v">${t.v}</div>
+        <div class="t-meta">${t.d}</div>
+      </a>`).join('') + spendCard;
+  }
+
+  const LABEL = { 1: 'Viewing: Option 1 — four equal tiles', 2: 'Viewing: Option 2 — "needs you" as the hero' };
+  function sync() {
+    const f = document.body.dataset.flavour, st = document.body.dataset.state;
+    document.querySelectorAll('.demobar .seg[data-f]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.f === f)));
+    document.querySelectorAll('.demobar .seg[data-s]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.s === st)));
+    document.getElementById('viewing').textContent = LABEL[f];
+    render();
+    const rest = location.hash.replace(/^#/, '').split('&').filter((t) => t && !/^(flavour|state)=/.test(t));
+    history.replaceState(null, '', '#' + [...rest, `flavour=${f}`, `state=${st}`].join('&'));
+  }
+  document.querySelectorAll('.demobar .seg[data-f]').forEach((b) => b.addEventListener('click', () => { document.body.dataset.flavour = b.dataset.f; sync(); }));
+  document.querySelectorAll('.demobar .seg[data-s]').forEach((b) => b.addEventListener('click', () => { document.body.dataset.state = b.dataset.s; sync(); }));
+  document.body.dataset.flavour = (location.hash.match(/(?:^#|&)flavour=([12])/) || [])[1] || '1';
+  document.body.dataset.state = (location.hash.match(/(?:^#|&)state=(clear|needs|fault)/) || [])[1] || 'clear';
+  sync();
+</script>
+</body>
+</html>
