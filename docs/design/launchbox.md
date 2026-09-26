@@ -1,6 +1,6 @@
 # LaunchBox — design identity
 
-Status: **draft** (smoke-test review pending). Owner: vigneshwar.mk. Suite grammar: none —
+Status: **agreed 2026-09-26**. Owner: vigneshwar.mk. Suite grammar: none —
 LaunchBox is standalone; `system_migration/docs/design/suite.md` is the media-apps suite and
 does not apply here.
 Every UI change to `/v2` cites a section of this file (design-gate) or proposes a change to it
@@ -123,6 +123,13 @@ are a glance copy and must show the same reading and "as of" time.
 |---|---|---|---|---|
 | 2026-09-26 | Sessions in main nav | appbar | not in the top jobs of any mode | you open Sessions weekly |
 | 2026-09-26 | Usage history charts at rest | Overview | no decision depends on history at a glance | you tune budgets from history |
+| 2026-09-26 | Poll now, Pause/Resume, delete on each row | Projects | not the row's job; §5 allows one action per row (Burst) | you pause projects often from the list |
+| 2026-09-26 | Register form + Discover button at rest | Projects | rare setup job; behind "Add a project…" footer link | you add projects weekly |
+| 2026-09-26 | "An active project lets LaunchBox…" explainer | Projects | the Touch ID prompt already explains activation at the moment it matters | a new user is confused |
+| 2026-09-26 | Filter box | Projects | 6 rows; filtering has no job at this size | more than ~15 projects |
+| 2026-09-26 | Per-row "schedule is paused (soft)" line | Projects | the appbar banner already says it (one fact, one place) | — |
+| 2026-09-26 | "Would contribute nothing yet" banner | Projects | restates "0 ready"; problem line kept for real faults only | — |
+| 2026-09-26 | active/paused chip on each row | Projects | the Active / Paused group headings already say it | — |
 
 ## 8. Reference apps
 
@@ -141,9 +148,10 @@ Stylesheets `public/v2/assets/system.css` + `launchbox.css`; dark default, light
 (`theme.js`); IBM Plex Sans/Mono. Decided, not inherited: the owner chose on 2026-09-26 to keep
 the current `/v2` styles as the visual system.
 
-Mockup: `docs/design/mockups/inbox-flavours.html` (Option 2 chosen).
+Mockups: `docs/design/mockups/inbox-flavours.html` (Option 2 chosen), `docs/design/mockups/projects-flavours.html` (Option 2 chosen).
 
 | Date | Change | Proposed by | Reason |
 |---|---|---|---|
 | 2026-09-26 | initial | interview + Inbox mockups (Option 2, triage split, chosen) | |
 | 2026-09-26 | handed-back actions are *Log* and *Hold*; *Re-queue* removed | agent, from `lib/projects.js` `handBack`; owner agreed | a handed-back bead is already open and back in `bd ready`, so the scheduler retries it on its own and "Re-queue" would be a no-op. *Hold* stops the retries (defer, or take the bead yourself). |
+| 2026-09-26 | marked agreed | owner | smoke test was the Projects design-gate + mockup (Option 2 chosen, cuts in §7), not a full `ux-expert-review` run; no identity changes raised |
