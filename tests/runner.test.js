@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { EventEmitter } from 'node:events';
 import { tmpData, validJob, fakeSpawn, sleep, extensions } from './helpers.js';
 import { ensureDirs } from '../lib/paths.js';
 import { openDb, createJob, getRun, listRuns, setSetting, getRunUsage, avgDeltaForJob } from '../lib/db.js';
@@ -99,6 +100,111 @@ test('command run: zsh -lc, raw log, fail status + notify on failure', async () 
   assert.equal(done.exitCode, 3);
   assert.ok(readFileSync(done.logPath, 'utf8').includes('hi'));
   assert.deepEqual(notifications, ['test job: fail']);
+});
+
+// claude-scheduler-8ry: a missing/moved claude binary made every bead run die
+// with `spawn ... ENOENT` in ~1ms, get recorded `fail`, and be re-claimed on
+// the next 60s poll — 18 fail rows in 8 minutes off one stale settings.claudePath.
+// ENOENT means the executable could not be found at all: a daemon/config fault,
+// not the job's fault, so it must not be counted or retried as one.
+test('spawn ENOENT is a daemon fault: skipped (not fail), no retry, remembered until the executable works again', async () => {
+  const { db, notifications, runner } = setup({ minuteMs: 1 });
+  setSetting(db, 'claudePath', '/opt/homebrew/bin/claude');
+  const job = createJob(db, validJob({ retryCount: 1, retryDelayMin: 1 }));
+
+  // Real node behaviour for a missing executable: spawn() returns a child
+  // synchronously, and the 'error' event (code ENOENT) fires on a later tick —
+  // no 'spawn' and no 'close' ever follow.
+  let calls = 0;
+  const enoentSpawn = () => {
+    calls++;
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => {};
+    child.unref = () => {};
+    process.nextTick(() => {
+      const err = new Error('spawn /opt/homebrew/bin/claude ENOENT');
+      err.code = 'ENOENT';
+      child.emit('error', err);
+    });
+    return child;
+  };
+  const faultyRunner = createRunner({
+    db, extensions, spawnFn: enoentSpawn, notifyFn: (t, m) => notifications.push(m), minuteMs: 1,
+  });
+
+  const run = faultyRunner.start(job, 'manual');
+  await sleep(40);
+
+  const done = getRun(db, run.id);
+  assert.equal(done.status, 'skipped', 'a missing binary is a daemon fault, not a bead/job failure');
+  assert.match(done.meta.skipReason, /not spawnable/i);
+  assert.match(done.meta.skipReason, /ENOENT/);
+  assert.deepEqual(notifications, [], 'never notified as a run failure');
+
+  // No retry noise: retryCount was 1, but a config fault never re-fires the runner's own retry.
+  await sleep(60);
+  assert.equal(listRuns(db, { jobId: job.id }).length, 1, 'no retry run was inserted');
+  assert.equal(calls, 1, 'the runner never re-spawned the same missing binary on its own');
+
+  // Remembered: the very next start of the same cmd is refused before spawning again.
+  const run2 = faultyRunner.start(job, 'manual');
+  assert.equal(run2.status, 'skipped');
+  assert.match(run2.meta.skipReason, /not spawnable/i);
+  assert.equal(calls, 1, 'refused without spawning a second time');
+});
+
+test('spawn ENOENT fault clears once the same cmd spawns successfully again', async () => {
+  const { db } = setup({ minuteMs: 1 });
+  setSetting(db, 'claudePath', '/opt/homebrew/bin/claude');
+  const jobA = createJob(db, validJob({ name: 'a' }));
+  const jobB = createJob(db, validJob({ name: 'b' }));
+
+  let mode = 'enoent';
+  let calls = 0;
+  const flakySpawn = () => {
+    calls++;
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => {};
+    child.unref = () => {};
+    if (mode === 'enoent') {
+      process.nextTick(() => {
+        const err = new Error('spawn /opt/homebrew/bin/claude ENOENT');
+        err.code = 'ENOENT';
+        child.emit('error', err);
+      });
+    } else {
+      process.nextTick(() => child.emit('spawn'));
+    }
+    return child;
+  };
+  // A short cooldown so the test can observe both halves for real: refused
+  // immediately after the fault (< cooldown), then re-verified once it's stale
+  // (> cooldown) — no fake clock needed.
+  const runner = createRunner({
+    db, extensions, spawnFn: flakySpawn, notifyFn: () => {}, minuteMs: 1, spawnFaultCooldownMs: 20,
+  });
+
+  const run1 = runner.start(jobA, 'manual');
+  await sleep(5); // just enough for the nextTick ENOENT to fire — well under the 20ms cooldown
+  assert.equal(getRun(db, run1.id).status, 'skipped');
+
+  const run2 = runner.start(jobB, 'manual');
+  assert.equal(run2.status, 'skipped', 'still remembered — refused before spawning');
+  assert.equal(calls, 1, 'jobB was refused without ever reaching the spawner');
+
+  // The owner fixed settings.claudePath (or reinstalled the binary), and the
+  // cooldown has since elapsed: the next real attempt succeeds, so the fault
+  // must not haunt the job forever.
+  await sleep(30); // total elapsed since the fault > the 20ms cooldown
+  mode = 'ok';
+  const run3 = runner.start(jobA, 'manual');
+  assert.equal(run3.status, 'running', 'no longer refused — reality is re-verified once stale');
+  await sleep(30);
+  runner.kill(run3.id); // tidy up the still-running fake child
 });
 
 test('overlap: second start of same job is skipped', async () => {

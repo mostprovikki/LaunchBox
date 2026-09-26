@@ -342,6 +342,47 @@ test('maxConcurrent caps how many beads a project runs at once', async () => {
   assert.equal(runner.starts.length, 2);
 });
 
+// claude-scheduler-8ry: a missing claude binary must not be treated as a bead
+// problem — no claim, no hand-back-and-retry churn on the bead, one guard
+// refusal that stops the rest of this poll's ready beads exactly like any
+// other guard (budget/pause) already does.
+test('a remembered claude spawn fault refuses every ready bead without claiming (or even re-reading) any of them', async () => {
+  const db = freshDb();
+  const bd = fakeBd({
+    '--version': { stdout: 'bd version 1.1.0 (Homebrew)' },
+    where: { stdout: JSON.stringify({ path: '/repo/.beads', database_path: '/repo/.beads/embeddeddolt' }) },
+    ready: { stdout: JSON.stringify([
+      bdReadyRow({ id: 'sp-1', labels: ['unattended'] }),
+      bdReadyRow({ id: 'sp-2', labels: ['unattended'] }),
+    ]) },
+    // No `show`/`update` handler: if the fix regresses and either is called,
+    // fakeBd's default `{stdout: ''}` reply would make `beads.get`/`claim`
+    // return nonsense rather than fail loudly — so the real assertion below is
+    // on `bd.calls`, not on tolerating an unexpected call.
+  });
+  const beads = createBeads({ execFileFn: bd });
+  const runner = fakeRunner({ db });
+  runner.spawnFault = (cmd) => (cmd === 'claude'
+    ? { code: 'ENOENT', message: 'spawn claude ENOENT', at: new Date().toISOString() }
+    : null);
+  const project = createProject(db, { name: 'repo', path: '/repo', state: 'active', config: CONFIG, beadsDir: '/repo/.beads' });
+  const projects = createProjects({ db, beads, runner });
+
+  const r = await projects.pollProject(project.id);
+  assert.equal(r.started.length, 0, 'nothing started');
+  assert.equal(runner.starts.length, 0, 'the runner was never asked to launch anything');
+  assert.match(r.reasons.join(' '), /not spawnable \(ENOENT\)/, 'the fault is named, not swallowed');
+  assert.match(r.reasons.join(' '), /the same guard would refuse the other/, 'stopped early, same as any other guard refusal');
+
+  const subs = bd.calls.map((c) => c.sub);
+  assert.ok(!subs.includes('show'), 'no pre-launch re-read — never even looked at a bead');
+  assert.ok(!subs.includes('update'), 'no claim — nothing to hand back, no retry noise on the bead');
+
+  // The Overview status light: `explain()` surfaces the same fault, once, on
+  // the project itself — not per run.
+  assert.match(projects.explain(project, { config: CONFIG }).join(' '), /claude is not spawnable \(ENOENT\)/);
+});
+
 // --- pre-launch re-read ----------------------------------------------
 
 test('pre-launch re-read aborts when the bead is no longer open', async () => {
