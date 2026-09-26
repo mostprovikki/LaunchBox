@@ -74,20 +74,34 @@ Optional keys on Inbox: ↑↓ move selection, Enter = primary action, L = log, 
 
 ## 5. Density and action stance
 
-- **Overview (Monitor):** status light (ok / warn / bad) and exactly four numbers, each with an
-  "as of" time:
-  - needs-me count (branches waiting + handed back) → decides "review now?"; opens Inbox;
-  - headroom left (session/weekly %) → decides "can I burst today?";
-  - running now (count + bead) → decides "don't touch that repo";
-  - overnight spend (since last visit) → decides budget tuning.
-  No list at rest, no actions except opening the thing a number points at.
+- **Overview (Monitor):** status light (ok / warn / bad) with a one-line state ("Nothing needs
+  you", "Waiting on you", "Cannot run beads") and why. A daemon fault (e.g. the claude binary is
+  missing) is a red banner with one fix link. Below it:
+  - **needs-you card**, the largest: the count, what it is made of, and *Open Inbox* (the one
+    action on the page) → decides "review now?";
+  - **headroom left** (weekly %, 5-hour % beneath, "as of" time) → "can I burst today?";
+  - **running now** (count, pause state) → "don't touch that repo"; opens Runs;
+  - **LaunchBox spend** card: two large numbers — since last visit, and last 7 days (% of the
+    weekly window) — and one thin share bar of the last 7 days by project, **names only, no
+    numbers** → "which project is eating headroom, by how big a margin, so I reprioritise".
+    Exact figures live on Runs.
+  No list at rest. Mockup: `docs/design/mockups/overview-flavours.html` (Option 2).
 - **Inbox (Workbench, triage split):** list on the left, grouped *waiting to merge* /
   *handed back*; detail on the right for the selected item. Actions appear **only for the
   selected item**, never per row at rest. Primary action moves with state: branch → *Review*;
   handed back → *Log*, with *Hold* secondary.
 - **Projects (Browser):** one action at rest per row: *Burst*. Everything else is on the
   Project page.
-- **Project (Workbench):** *Burst* primary; activate/pause as the one state control.
+- **Project (Workbench):** *Burst* primary; activate/pause as the one state control; *Poll now*,
+  *Dependency graph* and *Remove project…* in a ⋯ menu. Poll now and the graph also have
+  in-place shortcuts where they act: "polled 25 min ago · ↻ Poll now" (relative time) at the
+  foot of the Ready card, "graph →" in the Up next header. A "N waiting to merge → Review in
+  Inbox" strip appears only when N > 0. Three facts: **Ready** (wider, larger number), Running
+  here, Permission mode. Then **Up next** (ready beads: priority badge, short id, title, type on
+  line 2; right: "unblocks N" when N > 0, "filed … ago"), **Recent runs** (status dot, short id,
+  bead title; line 2 starts with the status word; right: time, *Log →*, whole row opens the log),
+  and a collapsed *Declared config*. Both lists share one grid: ids and titles start at the same
+  x. Mockup: `docs/design/mockups/project-flavours.html` (Option 2).
 - **Admin surfaces:** one Save per section; destructive edits confirm.
 
 ## 6. Vocabulary
@@ -102,6 +116,11 @@ Optional keys on Inbox: ↑↓ move selection, Enter = primary action, L = log, 
 | headroom | account usage left before the guard stops runs | quota, credits |
 | burst | a budgeted batch run over a project's ready beads | batch, sprint |
 | activate | the owner's click that lets a project run unattended | enable, approve |
+
+**Bead ids:** where the project is already on screen, show the short id (`85ht.1`, not
+`system_migration-85ht.1`), in mono, before the title — it is how sessions and searches name a
+bead. Bead type (task / bug / feature) is neutral grey text; red and yellow stay reserved for run
+state and priority.
 
 **One number, one place:** the needs-me count lives on Overview and as the Inbox nav badge
 (the same number, the Inbox's own size). Headroom lives on Overview; the appbar usage chips
@@ -130,6 +149,13 @@ are a glance copy and must show the same reading and "as of" time.
 | 2026-09-26 | Per-row "schedule is paused (soft)" line | Projects | the appbar banner already says it (one fact, one place) | — |
 | 2026-09-26 | "Would contribute nothing yet" banner | Projects | restates "0 ready"; problem line kept for real faults only | — |
 | 2026-09-26 | active/paused chip on each row | Projects | the Active / Paused group headings already say it | — |
+| 2026-09-26 | Needs-attention list | Overview | a list at rest; the needs-you card + Inbox carry it | you triage from Overview, not Inbox |
+| 2026-09-26 | Next 24 hours card | Overview | no morning-review decision; lives on Jobs | you check upcoming fires daily |
+| 2026-09-26 | Running-now card with stop/kill | Overview | actions on a Monitor; controls live on Runs | you stop runs often from Overview |
+| 2026-09-26 | Automation (projects) card | Overview | duplicates Projects | — |
+| 2026-09-26 | Three headroom meters + refresh buttons | Overview | one headroom fact is enough at a glance; detail in Settings | you tune reserves daily |
+| 2026-09-26 | Auto label, Last poll, Leases held, Min headroom facts | Project | no decision at a glance; auto label + timeout live in the collapsed config line | you change config often |
+| 2026-09-26 | Review queue + Poll now + Remove as header buttons | Project | not the page's job at rest; ⋯ menu, with Poll now / graph shortcuts in place | — |
 
 ## 8. Reference apps
 
@@ -148,10 +174,12 @@ Stylesheets `public/v2/assets/system.css` + `launchbox.css`; dark default, light
 (`theme.js`); IBM Plex Sans/Mono. Decided, not inherited: the owner chose on 2026-09-26 to keep
 the current `/v2` styles as the visual system.
 
-Mockups: `docs/design/mockups/inbox-flavours.html` (Option 2 chosen), `docs/design/mockups/projects-flavours.html` (Option 2 chosen).
+Mockups (Option 2 chosen in each): `docs/design/mockups/inbox-flavours.html`, `projects-flavours.html`, `overview-flavours.html`, `project-flavours.html`.
 
 | Date | Change | Proposed by | Reason |
 |---|---|---|---|
 | 2026-09-26 | initial | interview + Inbox mockups (Option 2, triage split, chosen) | |
 | 2026-09-26 | handed-back actions are *Log* and *Hold*; *Re-queue* removed | agent, from `lib/projects.js` `handBack`; owner agreed | a handed-back bead is already open and back in `bd ready`, so the scheduler retries it on its own and "Re-queue" would be a no-op. *Hold* stops the retries (defer, or take the bead yourself). |
 | 2026-09-26 | marked agreed | owner | smoke test was the Projects design-gate + mockup (Option 2 chosen, cuts in §7), not a full `ux-expert-review` run; no identity changes raised |
+| 2026-09-26 | Overview: needs-you hero + spend card with per-project share bar | owner, via Overview mockup | owner wants to see which project consumed the most, by what margin, at a glance; replaces "overnight spend" as a single number |
+| 2026-09-26 | Project page: Poll now and graph get in-place shortcuts besides the ⋯ menu; short bead ids everywhere the project is in context | owner, via Project mockup | owner refers to beads by short id; poll/graph are wanted next to what they act on |

@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project mockup</title>
+<script src="../../../public/v2/assets/theme.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../../public/v2/assets/system.css">
+<link rel="stylesheet" href="../../../public/v2/assets/launchbox.css">
+<style>
+  /* mockup-only: flavour gating, demobar, layouts. Nothing here ships. */
+  body[data-flavour="1"] .flav-2 { display: none !important; }
+  body[data-flavour="2"] .flav-1 { display: none !important; }
+  body[data-pause="off"] .when-paused { display: none !important; }
+  body[data-pause="soft"] .when-running { display: none !important; }
+  .demobar { display:flex; flex-wrap:wrap; gap:12px; align-items:center; padding:6px 16px; font-size:12px; border-bottom:1px solid var(--line, #333); }
+  .demobar .seg[aria-pressed="true"] { font-weight:600; text-decoration: underline; }
+  .hd { display:flex; gap:12px; align-items:flex-start; margin: 4px 0 16px; flex-wrap: wrap; }
+  .hd__acts { margin-left:auto; display:flex; gap:8px; align-items:center; position:relative; }
+  .menu { position:absolute; right:0; top:calc(100% + 6px); min-width: 210px; padding: 6px; z-index: 5; }
+  .menu button, .menu a { display:block; width:100%; text-align:left; padding: 7px 10px; background:none; border:0; color:inherit; font:inherit; text-decoration:none; border-radius:6px; cursor:pointer; }
+  .menu button:hover, .menu a:hover { background: var(--hover, rgba(127,127,127,.12)); }
+  .menu .danger { color: var(--bad, #f06a6a); }
+  .facts3 { display:grid; grid-template-columns: minmax(0,1.5fr) minmax(0,1fr) minmax(0,1fr); gap: 14px; margin-bottom: 16px; }
+  .f--ready { border-color: color-mix(in srgb, currentColor 28%, transparent); }
+  .f--ready .f__v { font-size: 34px; }
+  .f { padding: 12px 16px; }
+  .f__v { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; margin: 2px 0; }
+  .bead { display:grid; grid-template-columns: 40px minmax(0,1fr) auto; gap: 12px; align-items:center; padding: 9px 16px; border-top: 1px solid var(--line, #333); }
+  .bead:first-child { border-top: 0; }
+  .bead__t { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .run { display:grid; grid-template-columns: 110px minmax(0,1fr) auto; gap: 12px; align-items:center; padding: 9px 16px; border-top:1px solid var(--line, #333); }
+  .run:first-child { border-top:0; }
+  .q, .r { display:grid; gap: 14px; align-items:center; padding: 11px 18px; border-top: 1px solid var(--line, #333); color: inherit; text-decoration: none; }
+  .q:first-child, .r:first-child { border-top: 0; }
+  .q { grid-template-columns: 44px minmax(0,1fr) 80px 96px; }
+  .q .r__w { text-align: right; }
+  .r { grid-template-columns: 44px minmax(0,1fr) auto auto; }
+  a.r:hover, a.r:hover * { text-decoration: none; }
+  a.r:hover { color: inherit; }
+  .ric { justify-content: center; }
+  .ric .state__dot { width: 9px; height: 9px; }
+  .st--ok { color: var(--ok, #3fb950); }
+  .st--warn { color: var(--warn, #d9a441); }
+  .st--bad { color: var(--bad, #f06a6a); }
+  a.r:hover, a.q--more:hover { background: var(--hover, rgba(127,127,127,.08)); }
+  .q__n { text-align:right; font-variant-numeric: tabular-nums; opacity:.5; font-size: 13px; }
+  .q__main { min-width:0; }
+  .q__t { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .q__m { margin-top: 2px; font-size: 12.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .prio { display:inline-block; padding: 1px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; border: 1px solid currentColor; opacity: .7; }
+  .prio--0, .prio--1 { color: var(--warn, #d9a441); opacity: 1; }
+  /* fixed width so every title starts at the same x, whatever the id's length */
+  .sid { display:inline-block; width: 72px; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-weight: 600; }
+  .type { font-size: 12px; }
+  .q__m { padding-left: 72px; }
+  .q__m .type, .q__m { font-family: inherit; }
+  .r__w { white-space: nowrap; font-size: 12.5px; }
+  .r__log { font-size: 13px; opacity: .55; }
+  a.r:hover .r__log { opacity: 1; }
+  .p1-facts { display:grid; grid-template-columns: repeat(6, minmax(0,1fr)); gap: 12px; }
+  details.cfg summary { cursor:pointer; padding: 12px 16px; }
+  details.cfg pre { margin: 0; padding: 0 16px 14px; }
+  .iconbtn.inline-ic { display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; min-width:0; padding:0; font-size:14px; line-height:1; vertical-align:middle; }
+  .polled { display:flex; align-items:center; gap:10px; margin-top:10px; padding-top:10px; border-top:1px solid var(--line, #333); font-size:13px; }
+  .polled .btn { margin-left:auto; padding: 4px 10px; }
+  .waiting { margin: -6px 0 14px; }
+  @media (max-width: 760px) { .facts3, .p1-facts { grid-template-columns: 1fr 1fr; } .hd__acts { margin-left:0; } }
+</style>
+</head>
+<body data-flavour="1" data-pause="soft">
+
+<div class="demobar">
+  <b>Mockup</b>
+  <span class="segs" role="group" aria-label="Flavour">
+    <button class="seg" data-f="1">Option 1</button>
+    <button class="seg" data-f="2">Option 2</button>
+  </span>
+  <span id="viewing" class="t-meta"></span>
+  <span class="t-meta" style="margin-left:12px">Global pause:</span>
+  <span class="segs" role="group" aria-label="Global pause">
+    <button class="seg" data-p="soft">Soft</button>
+    <button class="seg" data-p="off">Off</button>
+  </span>
+  <span style="margin-left:auto" class="t-meta">system_migration, live 26 Sep 16:10 · the "1 waiting" branch and run rows are samples</span>
+  <button class="iconbtn themebtn" onclick="lbToggleTheme()" aria-label="Switch theme">◐</button>
+</div>
+
+<header class="appbar">
+  <h1 class="appbar__brand">LaunchBox</h1>
+  <nav class="mainnav"><a href="#">Overview</a><a href="#">Inbox <span class="tab__n">1</span></a><a href="#">Runs</a><a href="#" aria-current="page">Projects</a><a href="#">Jobs</a><a href="#">Settings</a></nav>
+  <div class="appbar__spacer"></div>
+</header>
+<div class="appbanner appbanner--warn when-paused">Soft drain. Nothing new starts — scheduled or manual.</div>
+
+<main class="shell">
+  <div class="t-meta" style="margin-bottom:4px"><a href="#">← Projects</a></div>
+
+  <!-- ===== Option 1: current build (recreated from public/v2/pages/project.js) ===== -->
+  <div class="flav-1">
+    <div class="pagehead">
+      <h2 class="t-page">system_migration</h2>
+      <div class="pagehead__sub t-meta"><span class="state state--ok"><span class="state__dot"></span>active</span> · <span class="mono">~/mydevelopment/system_migration</span> · registered 24 Sep · 13 ready (polled 1 min ago)</div>
+      <div class="pagehead__actions"><a class="btn btn--ghost" href="#">Review queue</a><a class="btn btn--ghost" href="#">Dependency graph</a><button class="btn btn--ghost">Poll now</button><button class="btn btn--ghost">Pause</button><button class="btn btn--ghost">Remove</button></div>
+    </div>
+    <section class="card" style="margin-bottom:16px"><div class="card__body" style="padding:14px 18px"><div class="p1-facts">
+      <div class="fact"><div class="fact__k">Ready beads</div><div class="fact__v mono">13</div><div class="fact__d">as of 16:10</div></div>
+      <div class="fact"><div class="fact__k">Auto label</div><div class="fact__v mono">unattended</div><div class="fact__d">required on every bead</div></div>
+      <div class="fact"><div class="fact__k">Last poll</div><div class="fact__v mono">16:10</div><div class="fact__d">every 60s · bd 1.1.0</div></div>
+      <div class="fact"><div class="fact__k">Leases held</div><div class="fact__v mono">0</div><div class="fact__d">nothing claimed right now</div></div>
+      <div class="fact"><div class="fact__k">Permission mode</div><div class="fact__v mono">auto</div><div class="fact__d">from .scheduler.json</div></div>
+      <div class="fact"><div class="fact__k">Min headroom</div><div class="fact__v mono">—</div><div class="fact__d">extra, on top of reserves</div></div>
+    </div></div></section>
+    <section class="card" style="margin-bottom:16px"><div class="card__head"><h2>Ready to be claimed</h2></div><div id="p1-beads"></div></section>
+    <div class="ovgrid">
+      <section class="card"><div class="card__head"><h2>Recent scheduler activity here</h2></div><div id="p1-runs"></div></section>
+      <section class="card"><div class="card__head"><h2>Declared config</h2></div><div class="card__body"><pre class="mono t-meta" id="p1-cfg"></pre></div></section>
+    </div>
+  </div>
+
+  <!-- ===== Option 2: Workbench — Burst primary, one state control, the rest in a menu ===== -->
+  <div class="flav-2">
+    <div class="hd">
+      <div>
+        <h2 class="t-page" style="margin:0">system_migration</h2>
+        <div class="t-meta"><span class="state state--ok"><span class="state__dot"></span>active</span> · <span class="mono">~/mydevelopment/system_migration</span></div>
+      </div>
+      <div class="hd__acts">
+        <button class="btn btn--primary when-running" data-mutating>⚡ Burst…</button>
+        <button class="btn btn--primary when-paused" disabled title="The schedule is paused (soft). Set pause to Off to burst.">⚡ Burst…</button>
+        <button class="btn">Pause</button>
+        <button class="iconbtn" id="f2-more" aria-haspopup="menu" aria-expanded="false" aria-label="More actions">⋯</button>
+        <div class="card menu" id="f2-menu" role="menu" hidden>
+          <button role="menuitem">Poll now</button>
+          <a role="menuitem" href="#">Dependency graph</a>
+          <button role="menuitem" class="danger">Remove project…</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="banner banner--info waiting"><b>1 branch waiting to merge</b> from this project. <a href="#">Review in Inbox →</a></div>
+
+    <div class="facts3">
+      <div class="card f f--ready"><div class="t-eyebrow">Ready</div><div class="f__v">13</div>
+        <div class="polled"><span id="f2-ago">polled 1 min ago</span><button class="btn btn--ghost btn--sm" title="Re-read bd ready now">↻ Poll now</button></div></div>
+      <div class="card f"><div class="t-eyebrow">Running here</div><div class="f__v">0</div><div class="t-meta">no bead claimed right now</div></div>
+      <div class="card f"><div class="t-eyebrow">Permission mode</div><div class="f__v mono">auto</div><div class="t-meta">agents run without asking</div></div>
+    </div>
+
+    <section class="card" style="margin-bottom:16px"><div class="card__head"><h2>Up next</h2><span class="t-meta">13</span><a class="t-meta" href="#" style="margin-left:auto" title="Every bead in this project and what blocks what">graph →</a></div><div id="p2-beads"></div></section>
+    <section class="card" style="margin-bottom:16px"><div class="card__head"><h2>Recent runs</h2><a class="t-meta" href="#" style="margin-left:auto">all in Runs →</a></div><div id="p2-runs"></div></section>
+    <section class="card"><details class="cfg"><summary class="t-meta">Declared config · auto label <span class="mono">unattended</span> · timeout 180 min · no gates</summary><pre class="mono t-meta" id="p2-cfg"></pre></details></section>
+  </div>
+</main>
+
+<script>
+  // Live: `bd ready -l unattended` in system_migration, 26 Sep 16:10 (first 5 of 13).
+  const BEADS = [
+    [1, 'task', 'system_migration-85ht.1', 'Out-of-sync 1: persist missing per item on rescan (missingSince), offline root is not missing', 2, '15 h ago'],
+    [2, 'task', 'system_migration-85ht.3', 'Out-of-sync 3: undo for dropMissing (restoreDropped + route), bulk drop', 2, '15 h ago'],
+    [2, 'bug', 'system_migration-afep.24', 'e2e: audit every browser e2e file that boots a hub for missing TENGEN_PORT_* / SM_HUB_URL overrides', 0, '2 d ago'],
+    [2, 'feature', 'system_migration-gy70.6', 'deja-view Compare: cells fill the height, 1:1 toggle, skeleton while previews load', 0, '2 d ago'],
+    [2, 'bug', 'system_migration-afep.23', 'hub project detail People section uses the stored rollup count, which never drops culled heads', 0, '2 d ago'],
+  ];
+  // Real bead titles; the outcome/time/detail on each row are samples.
+  const RUNS = [
+    ['finished', 'ok', 'system_migration-gy70.3', 'deja-view: stale and broken surfaces — Rotate copy names a dead setting', 'gates passed · branch waiting', 'yesterday 03:40'],
+    ['handed back', 'warn', 'system_migration-gy70.4', 'deja-view loupe: footer answers Who · Where · When · What', 'no completion marker', 'yesterday 01:15'],
+    ['failed', 'bad', 'system_migration-gy70.2', 'deja-view: numbers disagree — NaN KB reclaimed, 0 renders as 1 KB', 'claude binary missing', 'today 01:03'],
+  ];
+  const CFG = JSON.stringify({ enabled: true, autoLabel: 'unattended', cwd: '.', maxConcurrent: 1, defaults: { timeoutMin: 180, model: 'default', notify: 'failure', permMode: 'auto' } }, null, 2);
+  // The project prefix repeats the page title; sessions and searches use the short id.
+  const short = (id) => id.replace(/^system_migration-/, '');
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  // Option 1 keeps the current row shape.
+  const beadRowsOld = BEADS.map(([p, , id, t]) => `<div class="bead"><span class="pill">P${p}</span><span class="bead__t">${esc(t)} <span class="t-meta mono">${id}</span></span><span></span></div>`).join('')
+    + '<div class="bead"><span></span><span class="t-meta">+ 8 more</span><span></span></div>';
+  const runRowsOld = RUNS.map(([l, c, id, , d, w]) => `<div class="run"><span class="state state--${c}"><span class="state__dot"></span>${l}</span><span class="bead__t mono">${id}</span><span class="t-meta">${esc(w)} · ${esc(d)}</span></div>`).join('');
+  // Option 2: title first on its own line; id, type and priority as a quiet second line;
+  // order number so "next up first" reads as a queue; runs say when and offer the log.
+  // Same shape as a run row: a fixed left column (priority), title with a quiet
+  // second line, facts on the right — "unblocks N" (dependent_count) only when it
+  // is non-zero, because that is what makes one bead worth running before another.
+  const beadRows = BEADS.map(([p, type, id, t, unblocks, age]) => `
+    <div class="q">
+      <span><span class="prio prio--${p}">P${p}</span></span>
+      <div class="q__main"><div class="q__t"><span class="sid">${short(id)}</span>${esc(t)}</div>
+        <div class="q__m t-meta"><span class="type type--${type}">${type}</span></div></div>
+      <span class="r__w t-meta">${unblocks ? `unblocks ${unblocks}` : ''}</span>
+      <span class="r__w t-meta">filed ${age}</span>
+    </div>`).join('') + '<a class="q q--more t-meta" href="#"><span></span><span>8 more</span><span></span><span></span></a>';
+  const runRows = RUNS.map(([l, c, id, t, d, w]) => `
+    <a class="r" href="#" title="Open the run log">
+      <span class="state state--${c} ric" aria-hidden="true"><span class="state__dot"></span></span>
+      <div class="q__main"><div class="q__t"><span class="sid">${short(id)}</span>${esc(t)}</div>
+        <div class="q__m t-meta"><span class="st st--${c}">${l}</span> · ${esc(d)}</div></div>
+      <span class="r__w t-meta">${esc(w)}</span>
+      <span class="r__log">Log →</span>
+    </a>`).join('');
+  document.getElementById('p1-beads').innerHTML = beadRowsOld;
+  document.getElementById('p1-runs').innerHTML = runRowsOld;
+  document.getElementById('p2-beads').innerHTML = beadRows;
+  document.getElementById('p2-runs').innerHTML = runRows;
+  document.getElementById('p1-cfg').textContent = CFG;
+  document.getElementById('p2-cfg').textContent = CFG;
+
+  const more = document.getElementById('f2-more'), menu = document.getElementById('f2-menu');
+  more.addEventListener('click', () => { menu.hidden = !menu.hidden; more.setAttribute('aria-expanded', String(!menu.hidden)); });
+
+  const LABEL = { 1: 'Viewing: Option 1 — current build', 2: 'Viewing: Option 2 — Burst primary, rest in a menu' };
+  function sync() {
+    const f = document.body.dataset.flavour, pz = document.body.dataset.pause;
+    document.querySelectorAll('.demobar .seg[data-f]').forEach((s) => s.setAttribute('aria-pressed', String(s.dataset.f === f)));
+    document.querySelectorAll('.demobar .seg[data-p]').forEach((s) => s.setAttribute('aria-pressed', String(s.dataset.p === pz)));
+    document.getElementById('viewing').textContent = LABEL[f];
+    const rest = location.hash.replace(/^#/, '').split('&').filter((t) => t && !/^(flavour|pause)=/.test(t));
+    history.replaceState(null, '', '#' + [...rest, `flavour=${f}`, `pause=${pz}`].join('&'));
+  }
+  document.querySelectorAll('.demobar .seg[data-f]').forEach((s) => s.addEventListener('click', () => { document.body.dataset.flavour = s.dataset.f; sync(); }));
+  document.querySelectorAll('.demobar .seg[data-p]').forEach((s) => s.addEventListener('click', () => { document.body.dataset.pause = s.dataset.p; sync(); }));
+  document.body.dataset.flavour = (location.hash.match(/(?:^#|&)flavour=([12])/) || [])[1] || '1';
+  document.body.dataset.pause = (location.hash.match(/(?:^#|&)pause=(soft|off)/) || [])[1] || 'soft';
+  sync();
+</script>
+</body>
+</html>
