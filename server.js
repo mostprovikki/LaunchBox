@@ -467,7 +467,7 @@ export function createApp({
   // before. Deliberately unauthenticated, same as the rest of `public/`: the
   // page has to load before it can explain a missing/invalid token.
   app.get('/v2', (req, res) => {
-    res.sendFile(join(ROOT, 'public', 'v2', 'index.html'));
+    res.sendFile(join('public', 'v2', 'index.html'), { root: ROOT });
   });
 
   // ------------------------------------------------- the cutover flag (E3)
@@ -483,14 +483,14 @@ export function createApp({
   // keeps working after the flip and there is always a way back without
   // touching the setting — which is what "kept at /v1 for one release" means.
   const v2IsDefault = () => String(getSetting(db, 'v2Default', '0')) === '1';
-  const sendExistingUi = (res) => res.sendFile(join(ROOT, 'public', 'index.html'));
+  const sendExistingUi = (res) => res.sendFile(join('public', 'index.html'), { root: ROOT });
 
   app.get('/v1', (req, res) => sendExistingUi(res));
 
   // Ahead of express.static, which would otherwise serve public/index.html for
   // `/` before this could choose. Only the literal root is matched.
   app.get('/', (req, res) => {
-    if (v2IsDefault()) return res.sendFile(join(ROOT, 'public', 'v2', 'index.html'));
+    if (v2IsDefault()) return res.sendFile(join('public', 'v2', 'index.html'), { root: ROOT });
     return sendExistingUi(res);
   });
 
