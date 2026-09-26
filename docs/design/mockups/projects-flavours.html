@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Projects mockup</title>
+<script src="../../../public/v2/assets/theme.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../../public/v2/assets/system.css">
+<link rel="stylesheet" href="../../../public/v2/assets/launchbox.css">
+<style>
+  /* mockup-only: flavour gating, demobar, row layouts. Nothing here ships. */
+  body[data-flavour="1"] .flav-2 { display: none !important; }
+  body[data-flavour="2"] .flav-1 { display: none !important; }
+  body[data-pause="off"] .when-paused { display: none !important; }
+  body[data-pause="soft"] .when-running { display: none !important; }
+  .demobar { display:flex; flex-wrap:wrap; gap:12px; align-items:center; padding:6px 16px; font-size:12px; border-bottom:1px solid var(--line, #333); }
+  .demobar .seg[aria-pressed="true"] { font-weight:600; text-decoration: underline; }
+  .demobar .seg:disabled { opacity:.45; }
+  /* Option 1: the current build */
+  .p1-head { display:flex; gap:14px; align-items:center; padding:12px 16px; }
+  .p1-acts { margin-left:auto; display:flex; gap:6px; align-items:center; }
+  .p1-body { padding:10px 16px 14px; border-top:1px solid var(--line, #333); }
+  .p1-warn { margin-top:8px; }
+  /* Option 2: proposed */
+  .p2-list { padding:0; }
+  .p2-row { display:grid; grid-template-columns: minmax(0,1fr) auto 104px; gap:14px; align-items:center; padding:12px 16px; color:inherit; text-decoration:none; border-top:1px solid var(--line, #333); }
+  .p2-row:first-child { border-top:0; }
+  .p2-row:hover { background: var(--hover, rgba(127,127,127,.08)); }
+  .p2-row__name { min-width:0; }
+  .p2-row__name .t-meta { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .p2-ready { text-align:right; font-variant-numeric: tabular-nums; }
+  .p2-ready b { font-size: 15px; }
+  .p2-act { text-align:right; }
+  .p2-issue { color: var(--warn, #d9a441); }
+  .p2-group { margin: 18px 0 6px; }
+  .p2-foot { margin-top: 14px; }
+  @media (max-width: 760px) {
+    .p2-row { grid-template-columns: minmax(0,1fr) auto; }
+    .p2-row > .p2-act:empty { display:none; }
+  }
+</style>
+</head>
+<body data-flavour="1" data-pause="soft">
+
+<div class="demobar">
+  <b>Mockup</b>
+  <span class="segs" role="group" aria-label="Flavour">
+    <button class="seg" data-f="1">Option 1</button>
+    <button class="seg" data-f="2">Option 2</button>
+  </span>
+  <span id="viewing" class="t-meta"></span>
+  <span class="t-meta" style="margin-left:12px">Global pause:</span>
+  <span class="segs" role="group" aria-label="Global pause">
+    <button class="seg" data-p="soft">Soft</button>
+    <button class="seg" data-p="off">Off</button>
+  </span>
+  <span style="margin-left:auto" class="t-meta">live data from 26 Sep 15:37 · annotate keep / cut / move per element</span>
+  <button class="iconbtn themebtn" onclick="lbToggleTheme()" aria-label="Switch theme">◐</button>
+</div>
+
+<header class="appbar">
+  <h1 class="appbar__brand">LaunchBox</h1>
+  <nav class="mainnav">
+    <a href="#">Overview</a><a href="#">Jobs</a><a href="#">Runs</a><a href="#" aria-current="page">Projects</a><a href="#">Sessions</a><a href="#">Settings</a>
+  </nav>
+  <div class="appbar__spacer"></div>
+  <div class="uchips"><span class="uchip"><span class="uchip__k">5H</span> <span class="uchip__v">11%</span></span> <span class="uchip uchip--crit"><span class="uchip__k">WK</span> <span class="uchip__v">89%</span></span></div>
+</header>
+<div class="appbanner appbanner--warn when-paused">Soft drain. Nothing new starts — scheduled or manual.</div>
+
+<main class="shell">
+
+  <!-- ===== Option 1: current build (recreated from the 26 Sep screenshot) ===== -->
+  <div class="flav-1">
+    <div class="pagehead">
+      <h2 class="t-page">Projects</h2>
+      <div class="pagehead__sub t-meta">6 registered · 3 active · beads polled every 60s · bd 1.1.0 (Homebrew)</div>
+      <div class="pagehead__actions"><button class="btn">⚡ Start a burst…</button><button class="btn">Discover in project roots</button></div>
+    </div>
+    <div class="toolbar" style="margin-bottom:10px"><input class="search" style="flex:1" placeholder="Register a repo by path — it needs a committed .scheduler.json"><button class="btn">Register</button></div>
+    <p class="t-meta">An <b>active</b> project lets LaunchBox claim ready beads, run them in disposable worktrees, and write results back to that repo's tracker. Registering and configuring can be automated; <b>activation is always your click</b> and asks for Touch ID.</p>
+    <div class="toolbar" style="margin-bottom:12px"><input class="search" placeholder="Filter by name or path…"></div>
+    <div class="stack" id="p1"></div>
+  </div>
+
+  <!-- ===== Option 2: Browser — one action per row (Burst), row opens the project ===== -->
+  <div class="flav-2">
+    <div class="pagehead">
+      <h2 class="t-page">Projects</h2>
+      <div class="pagehead__sub t-meta">3 active · 3 paused · <span class="asof">polled 15:37</span></div>
+      <div class="pagehead__actions"><button class="btn f2-burstall" data-mutating>⚡ Burst all active…</button></div>
+    </div>
+
+    <div class="p2-group t-eyebrow">Active</div>
+    <section class="card p2-list" id="p2-active"></section>
+
+    <div class="p2-group t-eyebrow">Paused</div>
+    <section class="card p2-list" id="p2-paused"></section>
+
+    <div class="p2-foot t-meta"><a href="#">Add a project…</a> — register a repo by path, or discover in project roots</div>
+  </div>
+</main>
+
+<script>
+  // Live values from GET /api/projects, 26 Sep 15:37 IST.
+  const PROJECTS = [
+    { name: 'system_migration', path: '~/mydevelopment/system_migration', state: 'active', ready: 14, polled: '15:37', issue: null },
+    { name: 'trip-planner', path: '~/mydevelopment/tripper/trip-planner', state: 'active', ready: 1, polled: '15:37', issue: null },
+    { name: 'claude-scheduler', path: '~/mydevelopment/claude-scheduler', state: 'active', ready: 0, polled: '15:37', issue: 'no bead labelled unattended is ready' },
+    { name: 'runcoach', path: '~/mydevelopment/runcoach', state: 'paused', ready: 0, polled: '25 Sep 19:33', issue: 'no bead labelled unattended is ready' },
+    { name: 'splitease', path: '~/mydevelopment/splitease', state: 'paused', ready: 0, polled: '25 Sep 19:33', issue: 'no bead labelled unattended is ready' },
+    { name: 'torquery', path: '~/mydevelopment/torquery', state: 'paused', ready: 0, polled: '25 Sep 19:33', issue: 'no bead labelled unattended is ready' },
+  ];
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const stateChip = (s) => s === 'active'
+    ? '<span class="state state--ok"><span class="state__dot"></span>active</span>'
+    : '<span class="state state--muted"><span class="state__dot"></span>paused</span>';
+
+  // Option 1 — the current row: four actions, detail lines, full-width warning.
+  document.getElementById('p1').innerHTML = PROJECTS.map((p) => `
+    <section class="card">
+      <div class="p1-head">${stateChip(p.state)} <b>${esc(p.name)}</b> <span class="t-meta mono">${esc(p.path)}</span>
+        <span class="p1-acts"><button class="btn btn--ghost">Poll now</button><button class="btn btn--ghost">${p.state === 'active' ? 'Pause' : 'Resume'}</button><button class="btn btn--ghost">Open project</button><button class="iconbtn" aria-label="Remove">🗑</button></span>
+      </div>
+      <div class="p1-body">
+        <div class="t-meta">${p.ready} ready · autoLabel unattended · polled ${esc(p.polled)} · every 60s</div>
+        ${p.state === 'paused' ? '<div class="t-meta">paused</div>' : ''}
+        <div class="t-meta when-paused">the schedule is paused (soft), so no bead is picked up until you resume</div>
+        ${p.issue ? `<div class="banner p1-warn"><b>Would contribute nothing yet.</b> Its config declares autoLabel unattended, and the last poll found no bead that is open, unblocked and carries that label. Label the beads you want automated, or activating this buys you nothing.</div>` : ''}
+      </div>
+    </section>`).join('');
+
+  // Option 2 shows `problem` only for a real fault (config error, bd unreachable),
+  // never "no bead labelled": the ready count already says that. One sample fault
+  // so the state is visible; it is not in the live data.
+  PROJECTS.find((p) => p.name === 'torquery').problem = '.scheduler.json is not valid JSON (sample fault)';
+
+  // Option 2 — one row, one action. Burst appears only where it can do something;
+  // where it cannot, the row says why in words instead of showing a dead button.
+  function burstCell(p) {
+    if (p.state !== 'active') return '';
+    if (p.ready === 0) return '';
+    return `<button class="btn when-running" data-mutating onclick="event.preventDefault()">⚡ Burst…</button>`
+      + `<button class="btn when-paused" disabled title="The schedule is paused (soft). Set pause to Off to burst.">⚡ Burst…</button>`;
+  }
+  const row = (p) => `
+    <a class="p2-row" href="#project" title="Open ${esc(p.name)}">
+      <span class="p2-row__name"><b>${esc(p.name)}</b>
+        <div class="t-meta">${p.problem ? `<span class="p2-issue">${esc(p.problem)}</span> · ` : ''}<span class="mono">${esc(p.path)}</span></div></span>
+      ${p.state === 'active'
+        ? `<span class="p2-ready"><b>${p.ready}</b> <span class="t-meta">ready</span></span>`
+        : '<span class="p2-ready t-meta">not polled</span>'}
+      <span class="p2-act">${burstCell(p)}</span>
+    </a>`;
+  document.getElementById('p2-active').innerHTML = PROJECTS.filter((p) => p.state === 'active').map(row).join('');
+  document.getElementById('p2-paused').innerHTML = PROJECTS.filter((p) => p.state !== 'active').map(row).join('');
+
+  const LABEL = { 1: 'Viewing: Option 1 — current build', 2: 'Viewing: Option 2 — one action per row (Burst)' };
+  function sync() {
+    const f = document.body.dataset.flavour, pz = document.body.dataset.pause;
+    document.querySelectorAll('.demobar .seg[data-f]').forEach((s) => s.setAttribute('aria-pressed', String(s.dataset.f === f)));
+    document.querySelectorAll('.demobar .seg[data-p]').forEach((s) => s.setAttribute('aria-pressed', String(s.dataset.p === pz)));
+    document.getElementById('viewing').textContent = LABEL[f];
+    document.querySelector('.f2-burstall').disabled = pz === 'soft';
+    document.querySelector('.f2-burstall').title = pz === 'soft' ? 'The schedule is paused (soft). Set pause to Off to burst.' : '';
+    const rest = location.hash.replace(/^#/, '').split('&').filter((t) => t && !/^(flavour|pause)=/.test(t));
+    history.replaceState(null, '', '#' + [...rest, `flavour=${f}`, `pause=${pz}`].join('&'));
+  }
+  document.querySelectorAll('.demobar .seg[data-f]').forEach((s) => s.addEventListener('click', () => { document.body.dataset.flavour = s.dataset.f; sync(); }));
+  document.querySelectorAll('.demobar .seg[data-p]').forEach((s) => s.addEventListener('click', () => { document.body.dataset.pause = s.dataset.p; sync(); }));
+  document.body.dataset.flavour = (location.hash.match(/(?:^#|&)flavour=([12])/) || [])[1] || '1';
+  document.body.dataset.pause = (location.hash.match(/(?:^#|&)pause=(soft|off)/) || [])[1] || 'soft';
+  sync();
+</script>
+</body>
+</html>
