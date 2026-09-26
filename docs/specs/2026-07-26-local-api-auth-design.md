@@ -216,10 +216,20 @@ For the client to comply, refusals carry **machine-readable codes**, not just pr
 | Code | HTTP | Client behaviour |
 |---|---|---|
 | `approval_denied` | 403 | toast "you denied that — nothing was saved, press Submit to try again"; **state kept** |
-| `approval_timeout` | 408 | toast naming the timeout; **state kept** |
+| `approval_timeout` | 409 | toast naming the timeout; **state kept** |
 | `approval_unavailable` | 503 | toast naming the missing/broken helper and the fix; **state kept** |
 | `approval_busy` | 409 | toast "another approval is waiting"; **state kept** |
 | `token_invalid` | 401 | **persistent banner** (not a 3.5s toast — it needs an action): "this session key is no longer valid — stop the scheduler, start it again, then reopen from the CLI"; **state kept** |
+
+> **claude-scheduler-hn2 (2026-09-26):** `approval_timeout` was `408` at M4a. 408 means "the
+> client took too long to *send* its request", which is not what happened — the server took too
+> long waiting for a human. Worse, RFC 7231 §6.5.7 reads a 408 on a persistent connection as "the
+> server is closing this idle connection", so a client (Chrome, confirmed on the wire) is entitled
+> to presume the request unprocessed and silently resend it — one Submit produced two Touch ID
+> sheets (claude-scheduler-tki). It now shares `409` with `approval_busy`; the two are still
+> distinguished by `code`, and the client dispatches on `code`, never on the raw status. tki's
+> armed single-shot replay guard stays as belt-and-braces for any other client with the same retry
+> heuristic, but 409 removes the retry trigger at the source.
 
 No automatic retry after an approval failure. The user re-presses Submit, so a re-prompt is
 always something they chose.
@@ -298,7 +308,7 @@ that exists. Every other failure mode fails closed:
 | Helper missing / not compiled | **refuse**, `503 approval_unavailable` naming the fix |
 | Helper SIGKILLed (tampered) | **refuse**, log loudly |
 | User denies (`-2`) | **refuse**, `403`, no retry loop |
-| Timeout (180s) | **refuse**, `408` |
+| Timeout (180s) | **refuse**, `409` (claude-scheduler-hn2; was `408` — see above) |
 | Prompt already open | **queue**; `409` when the queue is full |
 | Token file missing at boot | generate it, `0600` |
 | Token wrong or absent | `401` on all `/api/*` |
