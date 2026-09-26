@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
-import { tmpData, fakeBd, bdReadyRow } from './helpers.js';
+import { tmpData, fakeBd, bdReadyRow, waitFor } from './helpers.js';
 import { openDb, createProject, getLease, setSetting } from '../lib/db.js';
 import { createBeads } from '../lib/beads.js';
 import { createProjects } from '../lib/projects.js';
@@ -182,6 +182,40 @@ test('snapshot surfaces an unreadable HEAD after a successful commit, rather tha
   );
 });
 
+test('snapshot surfaces a broken status read as a WorktreeError, not a silent no-op', async () => {
+  const git = fakeGit({ status: { code: 1, stderr: 'fatal: not a git repository\n' } });
+  const wt = createWorktrees({ execFileFn: git });
+  await assert.rejects(
+    wt.snapshot(PROJECT, { root: '/outside', beadId: 'sp-1' }),
+    (e) => e instanceof WorktreeError && /could not read status of/.test(e.message),
+  );
+});
+
+test('snapshot surfaces a refused stage as a WorktreeError, not a silent no-op', async () => {
+  const git = fakeGit({
+    status: { stdout: ' M src/x.js\n' },
+    add: { code: 1, stderr: 'fatal: pathspec did not match\n' },
+  });
+  const wt = createWorktrees({ execFileFn: git });
+  await assert.rejects(
+    wt.snapshot(PROJECT, { root: '/outside', beadId: 'sp-1' }),
+    (e) => e instanceof WorktreeError && /could not stage leftovers in/.test(e.message),
+  );
+});
+
+test('snapshot surfaces a refused commit as a WorktreeError, not a silent no-op', async () => {
+  const git = fakeGit({
+    status: { stdout: ' M src/x.js\n' },
+    add: { stdout: '' },
+    commit: { code: 1, stderr: 'fatal: cannot commit\n' },
+  });
+  const wt = createWorktrees({ execFileFn: git });
+  await assert.rejects(
+    wt.snapshot(PROJECT, { root: '/outside', beadId: 'sp-1' }),
+    (e) => e instanceof WorktreeError && /could not snapshot/.test(e.message),
+  );
+});
+
 test('remove tolerates an already-absent worktree', async () => {
   const git = fakeGit({ worktree: { code: 128, stderr: "fatal: '/outside/x' is not a working tree\n" } });
   const wt = createWorktrees({ execFileFn: git });
@@ -338,3 +372,44 @@ test('a failed reap is reported, never fatal to the run\'s outcome', async () =>
   assert.equal(failures[0].beadId, 'sp-1');
   assert.equal(finished.length, 1, 'and it must not change what happened to the bead');
 });
+
+// --- snapshot() failure paths, through reap() -------------------------------
+// snapshot() runs inside reap()'s `try`, which never blocks the reap on a
+// failure (see the big comment above `reap` in lib/projects.js): each of these
+// asserts the WorktreeError-shaped reason reaches `snapshot-failed` AND that
+// `remove` still ran, for every one of snapshot()'s three git steps.
+
+for (const [label, gitOverrides, reasonPattern] of [
+  ['cannot read status', { status: { code: 1, stderr: 'fatal: not a git repository\n' } }, /could not read status of/],
+  ['cannot stage leftovers', {
+    status: { stdout: ' M src/x.js\n' },
+    add: { code: 1, stderr: 'fatal: pathspec did not match\n' },
+  }, /could not stage leftovers in/],
+  ['cannot commit', {
+    status: { stdout: ' M src/x.js\n' },
+    add: { stdout: '' },
+    commit: { code: 1, stderr: 'fatal: cannot commit\n' },
+  }, /could not snapshot/],
+]) {
+  test(`a snapshot that ${label} is reported, and reap still removes the worktree`, async () => {
+    const { projects, project, runner, git } = pollerSetup({
+      gitHandlers: {
+        worktree: ({ args }) => (args[1] === 'list' ? listing(['/repo']) : { stdout: '' }),
+        'show-ref': { code: 1 },
+        ...gitOverrides,
+      },
+    });
+    const failures = [];
+    projects.events.on('snapshot-failed', (e) => failures.push(e));
+
+    const r = await projects.pollProject(project.id);
+    runner.events.emit(`done:${r.started[0].runId}`, 'fail');
+    await waitFor(() => removals(git).length > 0);
+
+    assert.equal(failures.length, 1, 'a lost snapshot must be reported rather than swallowed');
+    assert.equal(failures[0].beadId, 'sp-1');
+    assert.match(failures[0].reason, reasonPattern);
+    assert.deepEqual(removals(git), [`/outside/repo-${project.id.slice(0, 8)}--sp-1`],
+      'a failed snapshot must not block the reap');
+  });
+}

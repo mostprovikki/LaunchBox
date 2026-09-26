@@ -449,10 +449,17 @@ test('on ok the bead is closed and the lease completes', async () => {
 
 test('reap snapshots first and records meta.snapshotted on the run', async () => {
   const calls = [];
+  // `finally { await reap(...) }` runs after the `finished` event fires, and reap
+  // does its work (snapshot, then remove) before resolving. Rather than sleep a
+  // fixed guess at how long that takes, wait on `remove()`'s own resolution —
+  // it is the last thing reap does, and by the time it is called the snapshot's
+  // meta write has already happened (reap awaits snapshot before remove).
+  let removeResolved;
+  const removed = new Promise((res) => { removeResolved = res; });
   const worktrees = {
     ensure: async (p, { beadId }) => { calls.push('ensure'); return { path: `/tmp/wt/repo--${beadId}`, created: true }; },
     snapshot: async () => { calls.push('snapshot'); return { path: '/tmp/wt/repo--sp-1', committed: true, sha: 'abc1234' }; },
-    remove: async () => { calls.push('remove'); return { removed: true }; },
+    remove: async () => { calls.push('remove'); removeResolved(); return { removed: true }; },
   };
   const { db, projects, project, runner } = setup({
     worktrees,
@@ -469,9 +476,7 @@ test('reap snapshots first and records meta.snapshotted on the run', async () =>
   const finished = new Promise((r) => projects.events.once('finished', r));
   runner.finish('run-1', 'ok', { said: `done.\n${completionMarker('sp-1')}` });
   await finished;
-  // `finally { await reap(...) }` runs after the `finished` event fires, so give
-  // it a tick — same pattern as the reap tests in tests/worktree.test.js.
-  await new Promise((res) => setTimeout(res, 30));
+  await removed;
 
   const run = getRun(db, 'run-1');
   assert.equal(run.meta.snapshotted, true);
