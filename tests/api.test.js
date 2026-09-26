@@ -1982,7 +1982,7 @@ test('a timeout is distinct from a denial, and also writes nothing', async (t) =
   t.after(() => server.close());
 
   const r = await req(base(), 'POST', '/api/jobs', jobPayload());
-  assert.equal(r.status, 408);
+  assert.equal(r.status, 409, 'claude-scheduler-hn2: 408 is what made Chrome resend the request');
   assert.equal(r.body.code, 'approval_timeout');
   assert.equal(listJobs(db).length, 0);
 });

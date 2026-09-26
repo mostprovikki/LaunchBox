@@ -10,10 +10,12 @@
 //
 // What the user saw was ONE Submit and TWO Touch ID sheets, six seconds apart.
 // server.js therefore arms a timed-out refusal to answer one identical resend
-// with the same 408 and no dialog.
+// with the same refusal and no dialog. claude-scheduler-hn2 (below) then
+// removed the retry trigger at the source: approval_timeout now answers 409,
+// not 408, so this arm is belt-and-braces rather than the only guard.
 //
 // These tests do not drive Chrome — they send the resend the way Chrome sends it
-// (byte-identical, immediately after the 408) and assert on the number of times
+// (byte-identical, immediately after the timeout refusal) and assert on the number of times
 // the approval layer was ASKED, which is the thing the user experiences as a
 // dialog. The browser half is pinned by the harness in the bead's notes.
 import test from 'node:test';
@@ -81,18 +83,33 @@ async function post(base, path, body, { token = currentToken } = {}) {
 const TIMEOUT = { ok: false, code: 'approval_timeout' };
 const PAYLOAD = () => jobPayload({ name: 'timeout probe' });
 
+test('hn2: approval_timeout answers 409, not 408 — 408 is what makes Chrome resend', async (t) => {
+  // RFC 7231 §6.5.7: a 408 on a connection pulled from the idle pool reads as
+  // "the server is closing this idle connection", so Chrome presumes the
+  // request unprocessed and resends it verbatim — the phantom second dialog
+  // from claude-scheduler-tki. 409 states the true condition (server-side
+  // refusal) and carries no such retry semantics.
+  const { server, base, db } = await boot(TIMEOUT);
+  t.after(() => server.close());
+
+  const first = await post(base(), '/api/jobs', PAYLOAD());
+  assert.equal(first.status, 409, 'approval_timeout must not answer 408');
+  assert.equal(first.body.code, 'approval_timeout');
+  assert.equal(listJobs(db).length, 0);
+});
+
 test('tki: the resend of a timed-out POST is refused without a second dialog', async (t) => {
   const { server, base, approval, db } = await boot(TIMEOUT);
   t.after(() => server.close());
 
   const first = await post(base(), '/api/jobs', PAYLOAD());
-  assert.equal(first.status, 408);
+  assert.equal(first.status, 409);
   assert.equal(first.body.code, 'approval_timeout');
   assert.equal(approval.asked.length, 1, 'the user was asked once');
 
   // Chrome's resend: same method, same URL, same bytes, immediately after.
   const resent = await post(base(), '/api/jobs', PAYLOAD());
-  assert.equal(resent.status, 408, 'the resend gets the same refusal');
+  assert.equal(resent.status, 409, 'the resend gets the same refusal');
   assert.equal(resent.body.code, 'approval_timeout');
   assert.equal(approval.asked.length, 1, 'and NO second system dialog was raised');
 
@@ -110,7 +127,7 @@ test('tki: the arm is single-shot — a second retry is prompted, not silently r
   // A client that keeps retrying must not be refused invisibly forever: the
   // second retry is a fresh intent as far as this server can tell.
   const third = await post(base(), '/api/jobs', PAYLOAD());
-  assert.equal(third.status, 408);
+  assert.equal(third.status, 409);
   assert.equal(approval.asked.length, 2, 'the third attempt raised its own dialog');
 });
 
@@ -123,7 +140,7 @@ test('tki: the arm expires, so a human pressing Submit again is prompted', async
   await sleep(80);
 
   const again = await post(base(), '/api/jobs', PAYLOAD());
-  assert.equal(again.status, 408);
+  assert.equal(again.status, 409);
   assert.equal(approval.asked.length, 2, 'a later identical submit is asked about again');
 });
 
@@ -138,7 +155,7 @@ test('tki: a DIFFERENT request after a timeout is never swallowed', async (t) =>
   // action gets its own dialog. This is the guard's blast radius: it must be
   // exactly one request, not "job creation for the next second".
   const other = await post(base(), '/api/jobs', jobPayload({ name: 'a different job' }));
-  assert.equal(other.status, 408);
+  assert.equal(other.status, 409);
   assert.equal(approval.asked.length, 2);
   assert.match(approval.asked[1].detail, /a different job/);
 });
@@ -167,9 +184,9 @@ test('tki: an armed replay never turns into a grant', async (t) => {
   });
   t.after(() => server.close());
 
-  assert.equal((await post(base(), '/api/jobs', PAYLOAD())).status, 408);
+  assert.equal((await post(base(), '/api/jobs', PAYLOAD())).status, 409);
   const resent = await post(base(), '/api/jobs', PAYLOAD());
-  assert.equal(resent.status, 408, 'the resend is refused, never approved');
+  assert.equal(resent.status, 409, 'the resend is refused, never approved');
   assert.equal(approval.asked.length, 1);
   assert.equal(listJobs(db).length, 0, 'no job was created by the resend');
 });

@@ -510,12 +510,20 @@ export function createApp({
   // helper needs a reinstall.
   const APPROVAL_STATUS = {
     approval_denied: 403,
-    approval_timeout: 408,
+    // claude-scheduler-hn2: was 408. 408 means "the client took too long to
+    // SEND its request", which is not what happened — the SERVER took too
+    // long waiting for a human. Worse, RFC 7231 §6.5.7 reads a 408 on a
+    // persistent connection as "the server is closing this idle connection",
+    // so a client is entitled to presume the request unprocessed and resend
+    // it — see the note below. 409 (already used for approval_busy) states
+    // the true condition — a refusal, not a transport problem — and carries
+    // no such retry semantics.
+    approval_timeout: 409,
     approval_unavailable: 503,
     approval_busy: 409,
   };
 
-  // ---- The phantom second sheet (claude-scheduler-tki)
+  // ---- The phantom second sheet (claude-scheduler-tki / claude-scheduler-hn2)
   //
   // Chrome resends a request VERBATIM on a fresh connection when the response is
   // 408 and the connection it went out on came from its idle socket pool. That is
@@ -533,18 +541,16 @@ export function createApp({
   // which is itself never retried, so the doubling stops at exactly two.
   //
   // The user's cost is one action and two Touch ID sheets, i.e. being trained to
-  // approve reflexively — the exact thing this layer exists to prevent. So a
-  // timeout refusal arms ONE replay of itself, keyed to the identical request,
-  // for a window far longer than that resend and far shorter than a human. The
-  // resend consumes the arm and is refused with the same 408 and no dialog; a
-  // human pressing Submit again arrives later, finds nothing armed, and is
-  // prompted normally. The guard can only ever REFUSE, never approve, so both
-  // outcomes still fail closed.
-  //
-  // The deeper repair is to stop answering with 408 at all — it means "the client
-  // took too long to SEND its request", which is not what happened here — but the
-  // status table is documented in docs/specs and asserted across the suite, so
-  // that is filed separately rather than smuggled in here.
+  // approve reflexively — the exact thing this layer exists to prevent. hn2 is
+  // the real repair: approval_timeout now answers 409, which removes the retry
+  // trigger at the source (a 409 is never presumed unprocessed). The armed replay
+  // below is kept anyway — belt-and-braces for any other client with the same
+  // retry heuristic — so a timeout refusal still arms ONE replay of itself, keyed
+  // to the identical request, for a window far longer than that resend and far
+  // shorter than a human. The resend consumes the arm and is refused with the
+  // same status and no dialog; a human pressing Submit again arrives later, finds
+  // nothing armed, and is prompted normally. The guard can only ever REFUSE,
+  // never approve, so both outcomes still fail closed.
   const armedTimeoutReplay = new Map(); // request fingerprint → expiry (ms)
   const resendFingerprint = (req, action) => [
     req.csToken ?? '', req.method, req.originalUrl, action ?? '',
