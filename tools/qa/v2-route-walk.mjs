@@ -40,7 +40,7 @@ import {
   V2_ROUTES, resolveHash, isWalkable, evaluateRoute, summarise,
   AA_NORMAL, AA_LARGE, LARGE_PX, LARGE_BOLD_PX, LARGE_BOLD_WEIGHT,
   STRANDED_MIN_ALPHA, STRANDED_MIN_LUM, STRANDED_MIN_W, STRANDED_MIN_H,
-  MIN_PAGE_TEXT_LEN,
+  MIN_PAGE_TEXT_LEN, SENTINEL_ATTR,
 } from './audit-rules.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -100,6 +100,29 @@ async function settleAndMeasure(page, probe) {
     measured = await page.eval(new Function(`return ${probe}`));
   }
   return measured; // never settled: report what is actually on screen
+}
+
+// Stamp a one-shot marker CHILD onto #v2-page, right before navigating to the
+// route about to be walked. A route's page module clears #v2-page's children
+// as its first act (public/v2/ui.js clear()) without replacing the element,
+// so this marker survives a same-document hash navigation until the route's
+// own clear(page) call removes it — see audit-rules.mjs's SENTINEL_ATTR.
+async function stampSentinel(page, value) {
+  await page.eval((attr, val) => {
+    const p = document.querySelector('#v2-page');
+    if (!p) return;
+    const s = document.createElement('div');
+    s.setAttribute(attr, val);
+    s.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden;';
+    p.appendChild(s);
+  }, SENTINEL_ATTR, value);
+}
+
+// True if the marker `stampSentinel` planted before this route navigated is
+// STILL on the page — meaning #v2-page was never cleared, so whatever text is
+// on screen belongs to the previous route, not this one.
+async function sentinelSurvived(page, attr, value) {
+  return page.eval((a, v) => !!document.querySelector(`#v2-page [${a}="${v}"]`), attr, value);
 }
 
 function probeSource(thresholds) {
@@ -356,9 +379,12 @@ async function main() {
           log(`  – ${route.name}: skipped (no id)`);
           continue;
         }
+        const sentinel = `${theme}:${route.name}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+        await stampSentinel(page, sentinel);
         await page.goto(`${baseUrl}/v2/${resolveHash(route.hash, ids)}`);
         const measured = await settleAndMeasure(page, probe);
-        const found = evaluateRoute({ route: route.name, theme, page: measured });
+        const stale = await sentinelSurvived(page, SENTINEL_ATTR, sentinel);
+        const found = evaluateRoute({ route: route.name, theme, page: { ...measured, sentinelSurvived: stale } });
         routeFindings.push(...found);
         log(`  ${found.length ? '✗' : '✓'} ${route.name}${found.length ? ` — ${found.length} finding${found.length === 1 ? '' : 's'}` : ''}`);
         for (const f of found) log(`      ${f.kind}: ${f.detail}`);

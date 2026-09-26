@@ -128,6 +128,41 @@ test('evaluateRoute fails a route that presents an (almost) empty page', () => {
   assert.deepEqual(ok, []);
 });
 
+test('evaluateRoute fails a route whose content is the PREVIOUS route left up (claude-scheduler-7l3)', () => {
+  // The shape the plain-length check is blind to: the route returned before
+  // its clear(page) call, so #v2-page still shows the last route's content —
+  // plenty of text, but none of it belongs to this route. The driver stamps a
+  // sentinel child before navigating; if it is still there after settling,
+  // nothing cleared the page.
+  const stale = evaluateRoute({
+    route: 'graph', theme: 'dark',
+    page: { pageTextLen: 500, contrast: [], stranded: [], sentinelSurvived: true },
+  });
+  assert.equal(stale.length, 1);
+  assert.equal(stale[0].kind, 'stranded_page');
+  assert.match(stale[0].detail, /never cleared/);
+
+  // The OTHER mutation shape (clear(page), then return) must stay caught by
+  // the existing length check and must NOT also trip this one — clear()
+  // removes the sentinel along with everything else, so sentinelSurvived is
+  // false, and only the pre-existing finding should fire.
+  const blank = evaluateRoute({
+    route: 'graph', theme: 'dark',
+    page: { pageTextLen: 0, contrast: [], stranded: [], sentinelSurvived: false },
+  });
+  assert.equal(blank.length, 1);
+  assert.equal(blank[0].kind, 'stranded_page');
+  assert.match(blank[0].detail, /claude-scheduler-7j2/);
+
+  // A route that rendered correctly clears the sentinel AND has real content:
+  // clean either way.
+  const ok = evaluateRoute({
+    route: 'graph', theme: 'dark',
+    page: { pageTextLen: 500, contrast: [], stranded: [], sentinelSurvived: false },
+  });
+  assert.deepEqual(ok, []);
+});
+
 test('evaluateRoute treats a probe that returned nothing as a failure, not a pass', () => {
   // The precise shape of "the gate did not actually run". Returning [] here
   // would report a clean route the walk never measured.

@@ -112,6 +112,17 @@ export const isAllowedRequestFailure = (text) => ALLOWED_REQUEST_FAILURES.some((
  */
 export const MIN_PAGE_TEXT_LEN = 60;
 
+// The attribute the driver stamps onto a child of #v2-page immediately before
+// navigating to a route, so it can tell "this route rendered" from "the
+// previous route's content is still up" (claude-scheduler-7l3). router.js
+// pages clear #v2-page's CHILDREN as their first act (public/v2/ui.js
+// clear()), never replacing the element itself, so a marker child survives a
+// same-document hash navigation right up until the route's own clear(page)
+// call removes it. If it is still there once the walk has settled, nothing
+// cleared the page — the route never actually rendered, whatever text is on
+// screen belongs to whatever ran before it.
+export const SENTINEL_ATTR = 'data-qa-sentinel';
+
 export function evaluateRoute({ route, theme, page }) {
   const findings = [];
   const at = (kind, detail) => findings.push({ route, theme, kind, detail });
@@ -123,6 +134,9 @@ export function evaluateRoute({ route, theme, page }) {
 
   if ((page.pageTextLen ?? 0) < MIN_PAGE_TEXT_LEN) {
     at('stranded_page', `#v2-page has ${page.pageTextLen} characters — a route must never present an empty page (claude-scheduler-7j2)`);
+  }
+  if (page.sentinelSurvived) {
+    at('stranded_page', `#v2-page still holds the sentinel stamped before this route navigated — the route never cleared the page, so this content belongs to whatever rendered before it (claude-scheduler-7l3)`);
   }
   if ((page.overflowPx ?? 0) > 0) {
     at('overflow', `the document scrolls ${page.overflowPx}px horizontally`);
