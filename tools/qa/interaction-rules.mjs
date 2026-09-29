@@ -187,25 +187,26 @@ export function evaluateRecovery({ controls = [] }) {
 }
 
 /**
- * btv.17 — the appbar poll must not steal focus. chrome.js refreshes the
- * keep-awake chip in place on each 15s poll instead of wiping the appbar; a
- * focusable control wiped every 15s loses keyboard focus every 15s. Measured
- * over two REAL polls (counted from the page's own /api/awake fetches), on the
- * node identity and document.activeElement, never inferred from a DOM dump.
+ * btv.17/btv.18 — the appbar poll must not steal focus. chrome.js refreshes
+ * the focusable appbar controls (keep-awake chip, pause segs, running link) in
+ * place on each 15s poll instead of rebuilding them; a focusable control wiped
+ * every 15s loses keyboard focus every 15s. Measured per `target` over two
+ * REAL polls (counted from the page's own /api/awake fetches), on the node
+ * identity and document.activeElement, never inferred from a DOM dump.
  */
-export function evaluateAppbarPollFocus({ startedOnChip, pollsSeen = 0, sameNode, focusStillOnChip }) {
+export function evaluateAppbarPollFocus({ target = '#v2-awake', startedOnChip, pollsSeen = 0, sameNode, focusStillOnChip }) {
   const findings = [];
   const at = (detail) => findings.push({ kind: 'appbar-poll', surface: 'appbar', detail });
   if (startedOnChip !== true) {
-    at('tabbing never reached #v2-awake — focus survival across the poll was not measured at all');
+    at(`tabbing never reached ${target} — focus survival across the poll was not measured at all`);
     return findings;
   }
   if (pollsSeen < 2) {
-    at(`only ${pollsSeen} poll(s) of /api/awake happened while waiting (expected 2) — the wait did not span two cycles, so nothing was proven`);
+    at(`only ${pollsSeen} poll(s) of /api/awake happened while waiting on ${target} (expected 2) — the wait did not span two cycles, so nothing was proven`);
     return findings;
   }
-  if (sameNode !== true) at('#v2-awake was rebuilt by the poll — it is a different node than the one that had focus');
-  if (focusStillOnChip !== true) at('#v2-awake lost keyboard focus across the appbar poll');
+  if (sameNode !== true) at(`${target} was rebuilt by the poll — it is a different node than the one that had focus`);
+  if (focusStillOnChip !== true) at(`${target} lost keyboard focus across the appbar poll`);
   return findings;
 }
 

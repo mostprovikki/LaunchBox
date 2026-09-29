@@ -387,39 +387,42 @@ async function main() {
     log(`  ${tips.length} tooltip control(s) measured`);
 
     // ------------------------------------------- appbar poll vs focus
-    log('\n· appbar poll vs keyboard focus (btv.17)');
+    log('\n· appbar poll vs keyboard focus (btv.17, btv.18)');
     // chrome.js polls every 15s and used to wipe the whole appbar each time,
-    // so a keyboard user resting on the keep-awake chip lost focus every 15s.
-    // Tab to the chip for real, mark the node, then wait out two REAL polls —
-    // counted from the page's own /api/awake fetches, not from a stopwatch —
-    // and ask whether it is still the same node and still focused.
-    await page.eval(() => { document.body.focus(); window.__qaAwake = null; });
-    let startedOnChip = false;
-    for (let i = 0; i < 60 && !startedOnChip; i++) {
-      await pressTab(conn);
-      startedOnChip = await page.eval(() => {
-        const a = document.activeElement;
-        if (a?.id !== 'v2-awake') return false;
-        window.__qaAwake = a;
-        window.__qaAwakePolls0 = performance.getEntriesByType('resource').filter((e) => /\/api\/awake(\?|$)/.test(e.name)).length;
-        return true;
-      });
+    // so a keyboard user resting on an appbar control lost focus every 15s.
+    // For each target: Tab to it for real, mark the node, then wait out two
+    // REAL polls — counted from the page's own /api/awake fetches, not from a
+    // stopwatch — and ask whether it is still the same node and still focused.
+    // btv.17 fixed the keep-awake chip; btv.18 the pause segs beside it.
+    for (const target of ['#v2-awake', '.segs .seg']) {
+      await page.eval(() => { document.body.focus(); window.__qaPollNode = null; });
+      let startedOnChip = false;
+      for (let i = 0; i < 60 && !startedOnChip; i++) {
+        await pressTab(conn);
+        startedOnChip = await page.eval((sel) => {
+          const a = document.activeElement;
+          if (!a?.matches(sel)) return false;
+          window.__qaPollNode = a;
+          window.__qaPollAwake0 = performance.getEntriesByType('resource').filter((e) => /\/api\/awake(\?|$)/.test(e.name)).length;
+          return true;
+        }, target);
+      }
+      let pollMeasure = { target, startedOnChip, pollsSeen: 0, sameNode: false, focusStillOnChip: false };
+      if (startedOnChip) {
+        // Two cycles of the 15s poll, plus slack for the fetch to land.
+        await sleep(32_000);
+        pollMeasure = { target, ...await page.eval(() => ({
+          startedOnChip: true,
+          pollsSeen: performance.getEntriesByType('resource').filter((e) => /\/api\/awake(\?|$)/.test(e.name)).length - window.__qaPollAwake0,
+          sameNode: window.__qaPollNode.isConnected, // a rebuilt node's old copy is detached
+          focusStillOnChip: document.activeElement === window.__qaPollNode,
+        })) };
+      }
+      const pollFound = evaluateAppbarPollFocus(pollMeasure);
+      findings.push(...pollFound);
+      log(`  ${pollFound.length ? '✗' : '✓'} ${target}: ${pollMeasure.pollsSeen} poll(s) seen; same node ${pollMeasure.sameNode}; focus kept ${pollMeasure.focusStillOnChip}`);
+      for (const f of pollFound) log(`      ${f.detail}`);
     }
-    let pollMeasure = { startedOnChip, pollsSeen: 0, sameNode: false, focusStillOnChip: false };
-    if (startedOnChip) {
-      // Two cycles of the 15s poll, plus slack for the fetch to land.
-      await sleep(32_000);
-      pollMeasure = await page.eval(() => ({
-        startedOnChip: true,
-        pollsSeen: performance.getEntriesByType('resource').filter((e) => /\/api\/awake(\?|$)/.test(e.name)).length - window.__qaAwakePolls0,
-        sameNode: document.getElementById('v2-awake') === window.__qaAwake,
-        focusStillOnChip: document.activeElement === window.__qaAwake,
-      }));
-    }
-    const pollFound = evaluateAppbarPollFocus(pollMeasure);
-    findings.push(...pollFound);
-    log(`  ${pollFound.length ? '✗' : '✓'} ${pollMeasure.pollsSeen} poll(s) seen; same node ${pollMeasure.sameNode}; focus kept ${pollMeasure.focusStillOnChip}`);
-    for (const f of pollFound) log(`      ${f.detail}`);
 
     // ------------------------------------------ daemon-down disabling
     log('\n· daemon-down disabling (REVIEW #2)');
