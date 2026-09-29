@@ -31,6 +31,7 @@ import { createBeads } from './lib/beads.js';
 import { localiseGraphHtml } from './lib/beads-graph.js';
 import { createWorktrees } from './lib/worktree.js';
 import { createBranches } from './lib/branches.js';
+import { inboxItems } from './lib/inbox.js';
 import {
   createProjects, parseProjectConfig, rejectedConfig, CONFIG_FILE,
   DEFAULT_POLL_SEC as BEADS_DEFAULT_POLL_SEC, POLL_FLOOR_SEC as BEADS_POLL_FLOOR_SEC,
@@ -1931,6 +1932,19 @@ export function createApp({
     } catch (err) {
       const status = err?.code === 'unknown-branch' ? 404 : err?.code === 'unmerged' ? 409 : 502;
       res.status(status).json({ error: err?.message ?? String(err), code: err?.code ?? null });
+    }
+  });
+
+  // GET /api/v2/inbox (claude-scheduler-btv.22) — waiting to merge + handed
+  // back, across every registered project. lib/inbox.js is the one definition
+  // of the needs-me count; without a branches engine the count would be short
+  // with no sign, so it is 501 like the per-project branch routes.
+  app.get('/api/v2/inbox', async (req, res) => {
+    if (!needBranches(res)) return;
+    try {
+      res.json(await inboxItems(db, { branches }));
+    } catch (err) {
+      res.status(500).json({ error: err?.message ?? String(err) });
     }
   });
 
