@@ -1703,3 +1703,11 @@ three new endpoints declared; `qa:v2:interactions` clean.
 - Latest-run ordering is createdAt DESC, rowid DESC — createdAt ties within one ms (a mutation dropping rowid failed 2 tests).
 - A project git can't read → listed in `errors`, others still shown; no branches engine → 501 (a short count must not be silent).
 - tests/v2-inbox.test.js: 10 tests, 7 mutations each went red. Hold filter not applied yet (btv.23).
+
+## claude-scheduler-btv.23 — /v2 Hold API (2026-09-30)
+- POST /api/v2/projects/:id/beads/:beadId/hold → `bd defer <id> --until <now+7d ISO> --json` (lib/beads.js `defer`, argv); hold recorded in settings (`hold:[projectId,beadId]` → {at,until}), no schema change.
+- Inbox handedBack drops a bead while hold unlapsed AND hold.at ≥ latest run's finishedAt (later hand-back = new news).
+- Prefix check = "scheduler has a bead job for this id in THIS project" (project row stores no prefix; asking bd would run bd before refusing) + anchored id regex (no leading '-'). Refusals 400/404 before bd; bd fail 502, busy 503, no hold recorded.
+- Measured: bd 1.1.0 `defer --until` takes ISO as-is → status deferred, defer_until set, gone from ready.
+- 11 mutations all red. Branch ff'd onto unmerged btv.22 (lib/inbox.js dependency) — merge btv.22 first or together.
+- No Touch ID approve() on hold (reversible; not in Done-when). Open: scheduler.test.js multi-schedule once-entries flaked once under full suite.
