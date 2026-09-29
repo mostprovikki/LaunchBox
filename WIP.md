@@ -1703,3 +1703,17 @@ three new endpoints declared; `qa:v2:interactions` clean.
 - Latest-run ordering is createdAt DESC, rowid DESC — createdAt ties within one ms (a mutation dropping rowid failed 2 tests).
 - A project git can't read → listed in `errors`, others still shown; no branches engine → 501 (a short count must not be silent).
 - tests/v2-inbox.test.js: 10 tests, 7 mutations each went red. Hold filter not applied yet (btv.23).
+
+
+## 2026-09-30 — claude-scheduler-btv.25 — /v2 Overview spend rollup + daemon-side last visit
+
+`GET /api/v2/overview` gains `spend: { asOf, sinceVisit: { pct, from }, last7: { pct, byProject } }`,
+summed from `run_usage.deltaPct.seven_day` joined to `jobs.params._projectId` (`spendRollup`,
+lib/db.js); negative/missing deltas count 0, project-less runs count in `last7.pct` only.
+`POST /api/v2/visits` applies `nextVisit()` (server.js): a POST >30 min after `lastVisitAt` makes it
+`prevVisitAt`; inside the gap only `lastVisitAt` slides. `sinceVisit.pct` is null until a 2nd visit.
+
+**Mutations** (tests/v2-overview-spend.test.js): drop neg-clamp, drop 7-day window, leak project-less
+row into byProject, break grouping, drop 30-min rule, zero sinceVisit.pct, exempt route from the
+token gate — all 7 red, reverted. **Gates:** `npm test` 922/922. **Open:** no UI consumes `spend`
+or posts visits yet — that is btv.21.
