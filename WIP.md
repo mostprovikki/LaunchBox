@@ -1697,3 +1697,9 @@ the prefix stays a single-source fact. Removing `disabled: true` from the non-me
 **Gates:** `npm test` 889/889; `qa:v2` clean (10 routes × 2 themes, 0 skipped — `review` walks the
 empty state, the walk's fixture project has no scheduler branches); `qa:v2:parity` clean with the
 three new endpoints declared; `qa:v2:interactions` clean.
+
+## 2026-09-30 claude-scheduler-btv.22 — /v2 Inbox API: GET /api/v2/inbox
+- New `lib/inbox.js` `inboxItems(db, {branches})`: one definition of needs-me count (Overview/badge reuse it). waiting = branches.list() over every registered project; handedBack = latest run per (_projectId,_beadId) via ROW_NUMBER window, kept only if beadOutcome handed-back|stranded (`kind` carries which), reason = last 600 chars of meta.resultText.
+- Latest-run ordering is createdAt DESC, rowid DESC — createdAt ties within one ms (a mutation dropping rowid failed 2 tests).
+- A project git can't read → listed in `errors`, others still shown; no branches engine → 501 (a short count must not be silent).
+- tests/v2-inbox.test.js: 10 tests, 7 mutations each went red. Hold filter not applied yet (btv.23).
