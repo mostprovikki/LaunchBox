@@ -289,7 +289,17 @@ input.field:disabled, textarea.field:disabled, select:disabled { opacity: .55; }
   box-shadow: var(--shadow-1);
   padding: 13px 15px;
   display: grid;
+  /* An implicit `auto` track grows to the widest nowrap child (the job tag),
+     pushing the title and the right-aligned Delete out over the next card. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 7px;
+}
+.sescard > .tag {
+  display: block;
+  max-width: 100%;
+  line-height: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .sescard__t {
   font-family: var(--mono);
