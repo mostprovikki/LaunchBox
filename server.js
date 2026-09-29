@@ -13,7 +13,7 @@ import {
   insertRun, getRun, listRuns, lastRun, failOrphanRuns,
   getSetting, setSetting, cleanupAll, listUsageSnapshots,
   listProjects, getProject, getProjectByPath, createProject, updateProject, deleteProject,
-  listLeases, listJobsByProject, avgDeltaForJob,
+  listLeases, listJobsByProject, avgDeltaForJob, spendRollup,
 } from './lib/db.js';
 import { validateJob, previewSchedule, scheduleEntries, hasAfterReset } from './lib/validate.js';
 import { loadExtensions, manifest, validateFields } from './lib/extensions.js';
@@ -332,6 +332,17 @@ export function createGraphTickets({ ttlMs = GRAPH_TICKET_TTL_MS, now = () => Da
 // path reads INSIDE the `/api` mount.
 const GRAPH_DOC_PATH = /^\/v2\/projects\/([^/]+)\/graph\.html$/;
 
+// "Last visit" for the Overview spend card (claude-scheduler-btv.25) lives on
+// the daemon, not in localStorage (owner, 2026-09-29). A POST more than this
+// long after the previous one starts a new visit, so the old lastVisitAt
+// becomes prevVisitAt; a POST inside the gap only slides lastVisitAt, so a tab
+// left open and re-polling never moves "since last visit" forward.
+export const VISIT_GAP_MS = 30 * 60_000;
+export function nextVisit({ lastVisitAt, prevVisitAt }, nowMs) {
+  const gapOpen = lastVisitAt && nowMs - Date.parse(lastVisitAt) > VISIT_GAP_MS;
+  return { lastVisitAt: new Date(nowMs).toISOString(), prevVisitAt: gapOpen ? lastVisitAt : (prevVisitAt ?? null) };
+}
+
 export function createApp({
   db, runner, scheduler, extensions, awake, usage = null, budget = null, pause = null,
   projects = null, beads = null, burst = null, sessions = null,
@@ -361,6 +372,9 @@ export function createApp({
   // How long a graph frame's one-time ticket stays redeemable. Injectable so a
   // test can expire one without sleeping through the real window.
   graphTicketTtlMs = GRAPH_TICKET_TTL_MS,
+  // Clock for the spend rollup and visit stamps only; injectable so a test can
+  // pin the 7-day boundary and the 30-minute visit gap exactly.
+  clock = () => Date.now(),
 }) {
   const app = express();
 
@@ -1754,6 +1768,23 @@ export function createApp({
       automation = { available: false, asOf: null, pollSec: null, bd: null, projects: null, burst: null };
     }
 
+    // ---- spend (btv.25) -----------------------------------------------------
+    // LaunchBox's own use, in % of the weekly window, from per-run deltas. Read
+    // live at request time, so the (injectable) clock is its honest as-of.
+    const spendNowMs = clock();
+    const spendNowIso = new Date(spendNowMs).toISOString();
+    const prevVisitAt = getSetting(db, 'prevVisitAt');
+    const last7 = spendRollup(db, { sinceIso: new Date(spendNowMs - 7 * 24 * 3600_000).toISOString(), untilIso: spendNowIso });
+    const spend = {
+      asOf: spendNowIso,
+      // null before any second visit — not 0, which would read as "nothing spent".
+      sinceVisit: {
+        pct: prevVisitAt ? spendRollup(db, { sinceIso: prevVisitAt, untilIso: spendNowIso }).pct : null,
+        from: prevVisitAt,
+      },
+      last7,
+    };
+
     res.json({
       generatedAt: nowIso,
       pause: pause ? pause.status() : null,
@@ -1763,7 +1794,20 @@ export function createApp({
       running,
       today,
       automation,
+      spend,
     });
+  });
+
+  // POST /api/v2/visits (btv.25) — the /v2 page announces a visit; the rule is
+  // nextVisit() above. Behind the same /api token gate as every other route.
+  app.post('/api/v2/visits', (req, res) => {
+    const next = nextVisit({
+      lastVisitAt: getSetting(db, 'lastVisitAt'),
+      prevVisitAt: getSetting(db, 'prevVisitAt'),
+    }, clock());
+    setSetting(db, 'lastVisitAt', next.lastVisitAt);
+    if (next.prevVisitAt) setSetting(db, 'prevVisitAt', next.prevVisitAt);
+    res.json(next);
   });
 
   // ------------------------------------------------------ v2: project graph
