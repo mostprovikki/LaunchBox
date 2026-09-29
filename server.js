@@ -31,7 +31,7 @@ import { createBeads } from './lib/beads.js';
 import { localiseGraphHtml } from './lib/beads-graph.js';
 import { createWorktrees } from './lib/worktree.js';
 import { createBranches } from './lib/branches.js';
-import { inboxItems } from './lib/inbox.js';
+import { inboxItems, recordHold, knownBead, HOLD_DAYS } from './lib/inbox.js';
 import {
   createProjects, parseProjectConfig, rejectedConfig, CONFIG_FILE,
   DEFAULT_POLL_SEC as BEADS_DEFAULT_POLL_SEC, POLL_FLOOR_SEC as BEADS_POLL_FLOOR_SEC,
@@ -111,6 +111,10 @@ function executableChanges(db, extensions, body) {
 // what is being granted. The safety-relevant tail must never be the part that
 // gets cut, so the untrusted part is what gives way.
 const NAME_IN_DIALOG_MAX = 60;
+// A bd issue id: `<prefix>-<suffix>`, optionally `.<n>` children. Anchored so
+// nothing bd would parse as a flag or a second argument gets through.
+const BEAD_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
 const clampName = (name) => {
   const n = String(name ?? '');
   return n.length <= NAME_IN_DIALOG_MAX ? n : `${n.slice(0, NAME_IN_DIALOG_MAX - 1)}…`;
@@ -1946,6 +1950,30 @@ export function createApp({
     } catch (err) {
       res.status(500).json({ error: err?.message ?? String(err) });
     }
+  });
+
+  // POST /api/v2/projects/:id/beads/:beadId/hold (claude-scheduler-btv.23) —
+  // a handed-back bead is open and in `bd ready`, so the scheduler retries it
+  // by itself; Hold defers it HOLD_DAYS and takes it off the Inbox. The token
+  // gate above has already run; everything bd could be handed is checked here
+  // before it runs, so a refusal leaves no partial state.
+  app.post('/api/v2/projects/:id/beads/:beadId/hold', async (req, res) => {
+    if (!needProjects(res)) return;
+    const project = getProject(db, req.params.id);
+    const beadId = req.params.beadId;
+    // Never a flag: a leading '-' would be read by bd as an option, not an id.
+    if (!BEAD_ID_RE.test(beadId)) return res.status(400).json({ error: 'invalid bead id' });
+    if (!project || !knownBead(db, project.id, beadId)) return res.status(404).json({ error: 'not found' });
+    const at = new Date();
+    const until = new Date(at.getTime() + HOLD_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    try {
+      const r = await beads.defer(project, beadId, until);
+      if (!r.ok) return res.status(r.busy ? 503 : 502).json({ error: r.reason, busy: r.busy });
+    } catch (err) {
+      return res.status(502).json({ error: err?.message ?? String(err), busy: false });
+    }
+    recordHold(db, project.id, beadId, { at: at.toISOString(), until });
+    res.json({ ok: true, projectId: project.id, beadId, until });
   });
 
   // ------------------------------------------------- v2: plan candidates
