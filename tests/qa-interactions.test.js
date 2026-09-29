@@ -304,4 +304,13 @@ test('appbar-poll focus: the chip must be the same node, still focused, after tw
   // Every miss is its own finding — a rebuilt chip that ALSO dropped focus reports both.
   assert.equal(evaluateAppbarPollFocus({ ...ok, sameNode: false, focusStillOnChip: false }).length, 2);
   for (const f of evaluateAppbarPollFocus({ ...ok, sameNode: false })) assert.equal(f.kind, 'appbar-poll');
+  // btv.18: the same measurement on a pause seg names the seg, not the chip.
+  const seg = evaluateAppbarPollFocus({ ...ok, target: '.segs .seg', focusStillOnChip: false });
+  assert.equal(seg.length, 1);
+  assert.match(seg[0].detail, /^\.segs \.seg lost keyboard focus/);
+});
+
+test('appbar-poll focus: the driver measures a pause seg as well as the chip (btv.18)', () => {
+  const src = read('tools/qa/v2-interactions.mjs');
+  assert.match(src, /for \(const target of \[[^\]]*'#v2-awake'[^\]]*'\.segs \.seg'[^\]]*\]\)/);
 });

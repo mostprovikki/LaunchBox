@@ -314,3 +314,51 @@ test('keyboard focus on the chip survives the appbar poll — the chip is update
   assert.deepEqual(kids, ['uchips', 'runchip', 'runchip', 'segs']);
   assert.equal(document.getElementById('v2-chips').children[2], chip);
 });
+
+test('keyboard focus on a pause seg and on the running link survives the appbar poll (btv.18)', async () => {
+  // btv.17 kept the awake chip in place but still rebuilt .segs and the
+  // running link every 15s — the same focus loss on the other focusable
+  // appbar controls. Served state flips between polls so "in place" is
+  // proven to still follow it: the selection moves, the count changes.
+  freshDom();
+  const m = mockFetch();
+  let pause = { mode: 'off' };
+  let runs = [];
+  globalThis.fetch = async (path, init = {}) => {
+    if (path.startsWith('/api/pause')) return { ok: true, status: 200, text: async () => JSON.stringify(pause) };
+    if (path.startsWith('/api/runs')) return { ok: true, status: 200, text: async () => JSON.stringify({ runs }) };
+    return m.fn(path, init);
+  };
+  const chrome = await loadChrome();
+  chrome.mountChrome();
+  await tick(60);
+  const poll = lastIntervalFn;
+
+  const host = document.getElementById('v2-chips');
+  const segs = host.querySelector('.segs');
+  const hold = [...segs.children].find((b) => b.textContent === 'Hold');
+  const run = host.querySelector('a.runchip');
+  assert.equal(segs.querySelector('[aria-selected="true"]').textContent, 'Off', 'sanity: served mode selected');
+  hold.focus();
+  assert.equal(document.activeElement, hold, 'sanity: a seg can take focus');
+
+  pause = { mode: 'hold' };
+  runs = [{ status: 'running' }, { status: 'queued' }, { status: 'done' }];
+  await poll(); await tick(20);
+  await poll(); await tick(20);
+
+  assert.equal(host.querySelector('.segs'), segs, 'two polls later .segs must be the SAME node');
+  assert.equal([...segs.children].find((b) => b.textContent === 'Hold'), hold, 'and so must the seg');
+  assert.equal(document.activeElement, hold, 'focus on a seg must survive two poll cycles');
+  assert.deepEqual([...segs.querySelectorAll('[aria-selected="true"]')].map((b) => b.textContent), ['Hold'],
+    'the selection must move to the served mode, and only one seg may be selected');
+
+  run.focus();
+  await poll(); await tick(20);
+  assert.equal(host.querySelector('a.runchip'), run, 'the running link must be the SAME node');
+  assert.equal(document.activeElement, run, 'focus on the running link must survive the poll');
+  assert.equal(run.querySelector('.num').textContent, '2', 'and its count must follow the served runs');
+
+  const kids = [...host.children].map((c) => c.className.split(' ')[0]);
+  assert.deepEqual(kids, ['uchips', 'runchip', 'runchip', 'segs'], 'appbar order is unchanged');
+});

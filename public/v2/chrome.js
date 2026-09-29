@@ -306,12 +306,17 @@ function renderChips() {
   // wrapper's own box disappear so its children become real appbar flex
   // items, matching the mockup layout exactly.
   host.style.display = 'contents';
-  // Everything is rebuilt EXCEPT the keep-awake chip, which is refreshed in
-  // place (see updateAwakeChip). It is the one focusable control here whose
-  // focus a poll must not steal; it keeps its slot between the running chip
-  // and the pause segs below.
-  const keptAwake = awakeUnsupported ? null : host.querySelector('#v2-awake');
-  for (const child of [...host.children]) if (child !== keptAwake) child.remove();
+  // The focusable controls — running link, keep-awake chip, pause segs — are
+  // built once and refreshed in place on every poll: a focused node wiped and
+  // rebuilt every 15s drops keyboard focus (and any open tooltip) every 15s
+  // (btv.17, btv.18). Only the usage chips, which take no focus, are rebuilt.
+  // An existing node is never re-inserted either — moving it drops focus too —
+  // so only a freshly built one is placed, after its predecessor.
+  let run = host.querySelector(':scope > a.runchip');
+  let awake = host.querySelector(':scope > #v2-awake');
+  let segs = host.querySelector(':scope > .segs');
+  if (awake && awakeUnsupported) { awake.remove(); awake = null; }
+  host.querySelector(':scope > .uchips')?.remove();
 
   const checked = fmtTime(usageState?.checkedAt);
   const uchips = el('div', {
@@ -321,32 +326,44 @@ function renderChips() {
     el('span', { class: 'uchip__k' }, b.k),
     el('span', { class: 'uchip__v' }, b.v),
   ])));
-  host.insertBefore(uchips, keptAwake);
+  host.prepend(uchips);
 
-  host.insertBefore(el('a', { class: 'runchip', href: '#runs' }, [
-    el('span', { class: 'state__dot' }),
-    el('span', { class: 'num' }, String(runningCount)),
-    ' running',
-  ]), keptAwake);
+  if (!run) {
+    run = el('a', { class: 'runchip', href: '#runs' }, [
+      el('span', { class: 'state__dot' }),
+      el('span', { class: 'num' }),
+      ' running',
+    ]);
+    uchips.after(run);
+  }
+  run.querySelector('.num').textContent = String(runningCount);
 
   // Keep-awake sits between the running chip and the pause segs, the same
   // order the existing UI uses (public/index.html:20-33).
-  if (keptAwake) updateAwakeChip(keptAwake);
-  else { const awake = awakeChip(); if (awake) host.appendChild(awake); }
+  if (awake) updateAwakeChip(awake);
+  else if ((awake = awakeChip())) run.after(awake);
 
-  const reason = degradedReason();
-  const segsAttrs = { class: 'segs segs--bar', role: 'radiogroup', 'aria-label': 'Pause mode' };
-  if (reason) segsAttrs['data-tip'] = reason;
-  const segs = el('div', segsAttrs);
-  for (const [mode, label] of PAUSE_SEGS) {
-    const attrs = { class: 'seg' };
-    if (pauseState?.mode === mode) attrs['aria-selected'] = 'true';
-    const btn = el('button', attrs, label);
-    btn.addEventListener('click', () => setPauseMode(mode));
-    setDisabledReason(btn, reason);
-    segs.appendChild(btn);
+  if (!segs) {
+    segs = el('div', { class: 'segs segs--bar', role: 'radiogroup', 'aria-label': 'Pause mode' });
+    for (const [mode, label] of PAUSE_SEGS) {
+      const btn = el('button', { class: 'seg' }, label);
+      btn.addEventListener('click', () => setPauseMode(mode));
+      segs.appendChild(btn);
+    }
+    (awake ?? run).after(segs);
   }
-  host.appendChild(segs);
+  const reason = degradedReason();
+  if (reason) segs.setAttribute('data-tip', reason);
+  else segs.removeAttribute('data-tip');
+  PAUSE_SEGS.forEach(([mode], i) => {
+    const btn = segs.children[i];
+    if (pauseState?.mode === mode) btn.setAttribute('aria-selected', 'true');
+    else btn.removeAttribute('aria-selected');
+    // setDisabledReason derives aria-disabled from aria-selected; clear it so a
+    // seg that lost the selection while disabled does not keep a stale one.
+    btn.removeAttribute('aria-disabled');
+    setDisabledReason(btn, reason);
+  });
 }
 
 function renderBanner() {
