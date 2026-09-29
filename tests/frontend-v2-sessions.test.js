@@ -586,3 +586,16 @@ test('jsdom: a missing transcript says so instead of rendering an empty shell', 
   assert.match(page.textContent, /no longer exists/);
   assert.match(page.textContent, /Back to Sessions/);
 });
+
+test('source: compact cards pin their track so a long job tag cannot widen the card', () => {
+  // An implicit `auto` grid track grows to the widest nowrap child; the tag then
+  // pushed the title and the right-aligned Delete out over the neighbouring card.
+  const css = readV2('assets/launchbox.css');
+  const card = css.match(/\.sescard\s*\{([^}]*)\}/);
+  assert.ok(card, '.sescard rule exists');
+  assert.match(card[1], /grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+  const tag = css.match(/\.sescard\s*>\s*\.tag\s*\{([^}]*)\}/);
+  assert.ok(tag, '.sescard > .tag rule exists');
+  assert.match(tag[1], /overflow:\s*hidden/);
+  assert.match(tag[1], /text-overflow:\s*ellipsis/);
+});
