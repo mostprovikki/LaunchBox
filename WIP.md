@@ -1697,3 +1697,17 @@ the prefix stays a single-source fact. Removing `disabled: true` from the non-me
 **Gates:** `npm test` 889/889; `qa:v2` clean (10 routes × 2 themes, 0 skipped — `review` walks the
 empty state, the walk's fixture project has no scheduler branches); `qa:v2:parity` clean with the
 three new endpoints declared; `qa:v2:interactions` clean.
+
+## 2026-09-30 claude-scheduler-btv.20 — /v2 Projects list as Browser
+
+Projects list rebuilt to Option 2 of `docs/design/mockups/projects-flavours.html`: rows grouped
+Active / Paused / Not activated, one `Burst…` per active row with ready > 0 (disabled with a
+`data-tip` reason while paused or a burst runs), paused rows say "not polled", row click opens
+`#project?id=`, page-level "Burst all active…", Register + Discover behind "Add a project…".
+Pure decisions in `projects-logic.js` (`groupProjects`, `rowBurst`, `rowProblem`);
+`openBurstDialog({ projectId })` preselects only that project. CSS = mockup's `.p2-*` verbatim.
+
+**Mutations** (8/8 red): dialog ignoring projectId, Burst with 0 ready, pause not disabling,
+paused grouped as active, warn banner as row problem, Burst click also navigating, row Burst
+unscoped, paused showing a count. **Gates:** `npm test` 925/925; `qa:v2`, `qa:v2:interactions`
+(burst opener now /Burst all active/), `qa:v2:parity` clean. Open: none.

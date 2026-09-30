@@ -20,6 +20,7 @@ import {
   fmtTime, fmtDate, relAgo, readyText, readyIsStale, projectActions, isResume,
   summaryBits, cardBanner, priorityPill, claimOrder, beadAge, beadMeta,
   burstSummary, burstProjectIds, chipFor, filterProjects, listSubline, windowLabel, bdVersionText,
+  groupProjects, rowBurst, rowProblem,
 } from '../public/v2/pages/projects-logic.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -243,14 +244,18 @@ test('exactly one line in all of /v2 can send a project to the active state', ()
   // here by the gate failing on its first run rather than by review.
   const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
   const sites = [];
+  // Since claude-scheduler-btv.20 the Projects list carries no Activate at
+  // all (docs/design/launchbox.md §5: one action per row, Burst), so the
+  // Project page holds the only site.
   for (const f of ['pages/projects.js', 'pages/project.js']) {
     const src = stripComments(readV2(f));
     for (const m of src.matchAll(/state:\s*'active'/g)) {
       sites.push(`${f}:${src.slice(0, m.index).split('\n').length}`);
     }
   }
-  assert.equal(sites.length, 2, `expected one activation call site per page, found: ${sites.join(', ')}`);
-  for (const f of ['pages/projects.js', 'pages/project.js']) {
+  assert.deepEqual(sites.map((s) => s.split(':')[0]), ['pages/project.js'],
+    `expected exactly one activation call site, on the Project page; found: ${sites.join(', ')}`);
+  for (const f of ['pages/project.js']) {
     const src = stripComments(readV2(f));
     // …and each of them is preceded by a human confirm in the same function.
     assert.match(src, /window\.confirm\([\s\S]{0,1200}?state:\s*'active'/,
@@ -259,7 +264,7 @@ test('exactly one line in all of /v2 can send a project to the active state', ()
 });
 
 test('the activation confirm states that runs happen unattended and while away', () => {
-  for (const f of ['pages/projects.js', 'pages/project.js']) {
+  for (const f of ['pages/project.js']) {
     const src = readV2(f);
     assert.match(src, /unattended/, `${f}: the confirm must say runs are unattended`);
     assert.match(src, /away from the machine/, `${f}: the confirm must say it applies while the human is away`);
@@ -321,7 +326,7 @@ const projectsPayload = (over = {}) => ({
 
 const settle = () => new Promise((r) => setTimeout(r, 0));
 
-test('jsdom: the Projects list renders a card, the airlock button and the server audit note', async () => {
+test('jsdom: the Projects list renders a row and the server audit note, and no Activate', async () => {
   mountDom();
   mockFetch({ '/api/projects': projectsPayload(), '/api/bursts': { active: null } });
   const { default: projects } = await import(`../public/v2/pages/projects.js?case=list${Date.now()}`);
@@ -331,20 +336,26 @@ test('jsdom: the Projects list renders a card, the airlock button and the server
   const page = document.querySelector('#v2-page');
   assert.match(page.textContent, /webapp-billing/);
   assert.match(page.textContent, /AUDIT NOTE FROM SERVER/, 'the server owns the audit wording');
-  const activate = page.querySelector('[data-act=activate]');
-  assert.ok(activate, 'a pending project offers Activate');
-  assert.equal(activate.textContent, 'Activate…');
-  assert.match(activate.getAttribute('data-tip'), /Touch ID/);
-  assert.equal(activate.getAttribute('data-mutating'), '');
+  // Activation is the Project page's (claude-scheduler-btv.20); the row says
+  // the state in words and opens that page.
+  assert.equal(page.querySelector('[data-act=activate]'), null);
+  assert.match(page.querySelector('[data-project-id=p1]').textContent, /not activated/);
 });
 
 test('jsdom: Activate does nothing at all when the confirm is declined', async () => {
   mountDom();
-  const calls = mockFetch({ '/api/projects': projectsPayload(), '/api/bursts': { active: null } });
+  // The airlock lives on the Project page (claude-scheduler-btv.20).
+  const calls = mockFetch({
+    '/api/projects': projectsPayload(),
+    '/api/bursts': { active: null },
+    '/api/projects/p1/ready': { autoLabel: 'scheduler-ok', busy: false, reasons: [], beads: [] },
+    '/api/jobs': { jobs: [] },
+    '/api/runs?limit=200': { runs: [] },
+  });
   window.confirm = () => false;
-  const { default: projects } = await import(`../public/v2/pages/projects.js?case=deny${Date.now()}`);
-  projects(new URLSearchParams());
-  await settle(); await settle();
+  const { default: project } = await import(`../public/v2/pages/project.js?case=deny${Date.now()}`);
+  project(new URLSearchParams('id=p1'));
+  await settle(); await settle(); await settle();
 
   calls.length = 0;
   document.querySelector('[data-act=activate]').click();
@@ -358,11 +369,14 @@ test('jsdom: Activate sends exactly {state:"active"} and nothing else', async ()
     '/api/projects': projectsPayload(),
     '/api/bursts': { active: null },
     'PUT /api/projects/p1': { project: { ...PROJECT, state: 'active' }, reasons: [], warnings: [] },
+    '/api/projects/p1/ready': { autoLabel: 'scheduler-ok', busy: false, reasons: [], beads: [] },
+    '/api/jobs': { jobs: [] },
+    '/api/runs?limit=200': { runs: [] },
   });
   window.confirm = () => true;
-  const { default: projects } = await import(`../public/v2/pages/projects.js?case=activate${Date.now()}`);
-  projects(new URLSearchParams());
-  await settle(); await settle();
+  const { default: project } = await import(`../public/v2/pages/project.js?case=activate${Date.now()}`);
+  project(new URLSearchParams('id=p1'));
+  await settle(); await settle(); await settle();
 
   document.querySelector('[data-act=activate]').click();
   await settle(); await settle(); await settle();
@@ -386,6 +400,8 @@ test('jsdom: register and discover never send a state, so neither can activate',
   projects(new URLSearchParams());
   await settle(); await settle();
 
+  // Both sit behind the "Add a project…" footer link (claude-scheduler-btv.20).
+  [...document.querySelectorAll('a, button')].find((b) => /Add a project/.test(b.textContent)).click();
   document.querySelector('#projects-path').value = '/Users/x/newrepo';
   [...document.querySelectorAll('button')].find((b) => b.textContent === 'Register').click();
   await settle(); await settle();
@@ -449,7 +465,8 @@ test('jsdom: the burst strip shows measured spend and offers Cancel', async () =
   // jsdom's CSSOM normalises "58.0%" to "58%", so assert the value, not its spelling.
   assert.equal(Math.round(parseFloat(strip.querySelector('.meter__fill').style.width)), 58);
   // The project in the burst is chipped `burst`, sourced from projectIds.
-  assert.match(document.querySelector('.card__head .state').textContent, /burst/);
+  // (The per-row chip was cut in btv.20; membership is said in the row's meta.)
+  assert.match(document.querySelector('[data-project-id=p1]').textContent, /in burst/);
 
   calls.length = 0;
   [...strip.querySelectorAll('button')].find((b) => /Cancel burst/.test(b.textContent)).click();
@@ -472,7 +489,7 @@ test('jsdom: the burst planner opens when idle and is dead — un-revivably — 
   projects(new URLSearchParams());
   await settle(); await settle();
 
-  let btn = [...document.querySelectorAll('button')].find((b) => /Start a burst/.test(b.textContent));
+  let btn = [...document.querySelectorAll('button')].find((b) => /Burst all active/.test(b.textContent));
   assert.equal(btn.disabled, false, 'with no burst running the planner opens');
   assert.equal(btn.getAttribute('data-mutating'), '', 'and it IS swept by the degraded-state sweep');
 
@@ -485,7 +502,7 @@ test('jsdom: the burst planner opens when idle and is dead — un-revivably — 
   projects2(new URLSearchParams());
   await settle(); await settle();
 
-  btn = [...document.querySelectorAll('button')].find((b) => /Start a burst/.test(b.textContent));
+  btn = [...document.querySelectorAll('button')].find((b) => /Burst all active/.test(b.textContent));
   assert.equal(btn.disabled, true, 'a live burst disables it');
   assert.equal(btn.getAttribute('data-mutating'), null, 'and the sweep must not be able to revive it');
   assert.match(btn.getAttribute('data-tip'), /already running/);
@@ -498,9 +515,12 @@ test('jsdom: every icon-only control on the list is named for assistive tech', a
   projects(new URLSearchParams());
   await settle(); await settle();
 
-  const icons = [...document.querySelectorAll('.iconbtn')];
-  assert.ok(icons.length >= 1, 'there is at least one icon button to check');
-  for (const b of icons) {
+  // Since btv.20 the list has no icon-only control at rest; the contract still
+  // binds any that returns, and every control must have a name.
+  for (const b of document.querySelectorAll('#v2-page button, #v2-page a')) {
+    assert.ok(b.textContent.trim() || b.getAttribute('aria-label'), `unnamed control: ${b.outerHTML}`);
+  }
+  for (const b of document.querySelectorAll('.iconbtn')) {
     assert.ok(b.getAttribute('aria-label'), 'every iconbtn carries an aria-label (REVIEW #5)');
     assert.ok(b.getAttribute('data-tip'), 'every iconbtn carries a focus-visible tooltip');
   }
@@ -752,4 +772,132 @@ test('jsdom: the failed-load card does not also claim to be loading', async () =
   const sub = document.querySelector('.pagehead__sub')?.textContent ?? '';
   assert.ok(!/Loading/.test(sub), `the subline still claims to be loading: "${sub}"`);
   assert.match(document.querySelector('#v2-page').textContent, /Could not read your projects/);
+});
+
+// ------------------------------------------- Browser list (claude-scheduler-btv.20)
+// docs/design/launchbox.md §5: "Projects (Browser): one action at rest per
+// row: Burst. Everything else is on the Project page." Owner chose Option 2 of
+// docs/design/mockups/projects-flavours.html on 2026-09-26; cuts in §7.
+
+const P_ACTIVE = { ...PROJECT, id: 'a1', name: 'system_migration', state: 'active', reasons: [], ready: { count: 14, at: PROJECT.lastPollAt } };
+const P_ACTIVE_ZERO = { ...PROJECT, id: 'a2', name: 'claude-scheduler', state: 'active', reasons: [], ready: { count: 0, at: PROJECT.lastPollAt } };
+const P_PAUSED = { ...PROJECT, id: 's1', name: 'runcoach', state: 'paused', reasons: [], ready: { count: 3, at: PROJECT.lastPollAt } };
+const P_BROKEN = { ...PROJECT, id: 's2', name: 'torquery', state: 'paused', reasons: [], configErrors: ['.scheduler.json is not valid JSON'] };
+const browserPayload = () => ({ ...projectsPayload(), projects: [P_ACTIVE, P_ACTIVE_ZERO, P_PAUSED, P_BROKEN] });
+
+async function mountList(tag, { pause = 'off', burst = null, payload = browserPayload() } = {}) {
+  mountDom();
+  const calls = mockFetch({ '/api/projects': payload, '/api/bursts': { active: burst }, '/api/pause': { mode: pause } });
+  const mod = await import(`../public/v2/pages/projects.js?b20=${tag}${Date.now()}`);
+  mod.default(new URLSearchParams());
+  await settle(); await settle(); await settle();
+  return { calls, page: document.querySelector('#v2-page') };
+}
+const rowOf = (id) => document.querySelector(`[data-project-id="${id}"]`);
+
+test('rowBurst: a button only for an active row with ready beads; disabled with a reason while paused or bursting', () => {
+  assert.equal(rowBurst(P_ACTIVE, { pauseMode: 'off' }).disabled, false);
+  assert.equal(rowBurst(P_ACTIVE_ZERO, { pauseMode: 'off' }), null, '0 ready: nothing to burst');
+  assert.equal(rowBurst({ ...P_ACTIVE, ready: { count: null } }, { pauseMode: 'off' }), null, 'unknown ready is not > 0');
+  assert.equal(rowBurst(P_PAUSED, { pauseMode: 'off' }), null, 'paused rows never burst');
+  assert.equal(rowBurst({ ...P_ACTIVE, state: 'error' }, { pauseMode: 'off' }), null, 'only active is eligible (splitProjects)');
+  const held = rowBurst(P_ACTIVE, { pauseMode: 'soft' });
+  assert.equal(held.disabled, true);
+  assert.match(held.tip, /paused \(soft\)/);
+  assert.match(held.tip, /Off/);
+  const busy = rowBurst(P_ACTIVE, { pauseMode: 'off', burstLive: true });
+  assert.equal(busy.disabled, true);
+  assert.match(busy.tip, /already running/);
+});
+
+test('groupProjects: active first, then paused, then not-yet-activated — never dropping a row', () => {
+  const pend = { ...PROJECT, id: 'n1', state: 'pending' };
+  const err = { ...PROJECT, id: 'e1', state: 'error' };
+  const g = groupProjects([P_PAUSED, pend, P_ACTIVE, err]);
+  assert.deepEqual(g.map((x) => [x.key, x.projects.map((p) => p.id)]),
+    [['active', ['a1', 'e1']], ['paused', ['s1']], ['pending', ['n1']]]);
+  assert.deepEqual(groupProjects([P_ACTIVE]).map((x) => x.key), ['active'], 'empty groups are omitted');
+});
+
+test('rowProblem: real faults only — never the "would contribute nothing" restatement of 0 ready', () => {
+  assert.equal(rowProblem(P_ACTIVE_ZERO), null);
+  assert.match(rowProblem(P_BROKEN), /not valid JSON/);
+  assert.match(rowProblem({ ...P_ACTIVE, lastError: 'bd exploded' }), /bd exploded/);
+  assert.match(rowProblem({ ...P_ACTIVE, busyStreak: 2 }), /2 polls in a row/);
+});
+
+test('jsdom: Projects rows: one Burst… per active row with ready beads, none at rest otherwise', async () => {
+  const { page } = await mountList('rows');
+  const buttonsIn = (id) => [...rowOf(id).querySelectorAll('button')].map((b) => b.textContent.trim());
+  assert.deepEqual(buttonsIn('a1'), ['Burst…']);
+  assert.deepEqual(buttonsIn('a2'), [], '0 ready: no button');
+  assert.deepEqual(buttonsIn('s1'), [], 'paused: no button');
+  assert.deepEqual(buttonsIn('s2'), []);
+  assert.match(rowOf('a1').textContent, /14\s*ready/);
+  assert.match(rowOf('s1').textContent, /not polled/);
+  assert.ok(!/3\s*ready/.test(rowOf('s1').textContent), 'a paused row does not show a live count');
+  assert.match(rowOf('s2').textContent, /not valid JSON/, 'real faults keep one meta line');
+  assert.equal(page.querySelector('.banner'), null, 'no full-width per-row banners');
+  assert.ok(!/contribute nothing/.test(page.textContent));
+  // Headings group the rows; the order of rows under them follows the groups.
+  const heads = [...page.querySelectorAll('.t-eyebrow')].map((h) => h.textContent.trim());
+  assert.deepEqual(heads, ['Active', 'Paused']);
+  const order = [...page.querySelectorAll('[data-project-id]')].map((r) => r.getAttribute('data-project-id'));
+  assert.deepEqual(order, ['a1', 'a2', 's1', 's2']);
+});
+
+test('jsdom: nothing but Burst at rest — no Poll now, Pause, delete, filter, register form or explainer', async () => {
+  const { page } = await mountList('rest', { payload: { ...browserPayload(), projects: [...browserPayload().projects, { ...P_PAUSED, id: 's3' }, { ...P_PAUSED, id: 's4' }] } });
+  const text = page.textContent;
+  for (const re of [/Poll now/, /\bPause\b/, /Resume/, /Open project/, /Start a burst/, /Discover in project roots/, /activation is always your click/]) {
+    assert.ok(!re.test(text), `${re} is still on the page at rest`);
+  }
+  assert.equal(page.querySelector('.iconbtn'), null, 'no delete icon');
+  assert.equal(page.querySelector('#projects-search'), null, 'no filter box, even with 6 rows');
+  assert.equal(page.querySelector('#projects-path'), null, 'register form hidden at rest');
+  const pageButtons = [...page.querySelectorAll('.pagehead__actions button')].map((b) => b.textContent.trim());
+  assert.deepEqual(pageButtons, ['Burst all active…']);
+});
+
+test('jsdom: "Add a project…" reveals Register and Discover', async () => {
+  const { page } = await mountList('add');
+  const link = [...page.querySelectorAll('a, button')].find((b) => /Add a project/.test(b.textContent));
+  assert.ok(link, 'footer link present');
+  link.click();
+  assert.ok(page.querySelector('#projects-path'), 'register input revealed');
+  assert.ok([...page.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Register'));
+  assert.ok([...page.querySelectorAll('button')].some((b) => /Discover/.test(b.textContent)));
+});
+
+test('jsdom: a row click opens the Project page; the Burst click does not', async () => {
+  await mountList('nav');
+  rowOf('s1').click();
+  assert.equal(location.hash, '#project?id=s1');
+  location.hash = '#projects';
+  rowOf('a1').querySelector('button').click();
+  assert.equal(location.hash, '#projects', 'Burst opens the dialog, not the project');
+  // The name is a real link too, so keyboard and middle-click work.
+  assert.equal(rowOf('a1').querySelector('a').getAttribute('href'), '#project?id=a1');
+});
+
+test('jsdom: row Burst… opens the dialog scoped to that project', async () => {
+  const { calls } = await mountList('scope');
+  rowOf('a1').querySelector('button').click();
+  await settle(); await settle(); await settle();
+  assert.ok(document.querySelector('.modalwrap'), 'the burst dialog opened');
+  const checked = [...document.querySelectorAll('.modalwrap input[type=checkbox]')].filter((c) => c.checked);
+  assert.equal(checked.length, 1, 'only the row\'s project is chosen');
+  assert.match(checked[0].closest('label, .defrow, div').textContent, /system_migration/);
+  void calls;
+});
+
+test('jsdom: while globally paused the row Burst… and Burst all active… are disabled with a reason', async () => {
+  const { page } = await mountList('paused', { pause: 'soft' });
+  const rowBtn = rowOf('a1').querySelector('button');
+  assert.equal(rowBtn.disabled, true);
+  assert.match(rowBtn.getAttribute('data-tip'), /paused \(soft\)/);
+  assert.equal(rowBtn.getAttribute('data-mutating'), null, 'the degraded sweep must not revive it');
+  const all = [...page.querySelectorAll('button')].find((b) => /Burst all active/.test(b.textContent));
+  assert.equal(all.disabled, true);
+  assert.match(all.getAttribute('data-tip'), /paused \(soft\)/);
 });

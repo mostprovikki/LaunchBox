@@ -371,3 +371,60 @@ export function bdVersionText(raw) {
   const m = /^bd\s+(?:version\s+)?(.+)$/i.exec(s);
   return m ? m[1] : s;
 }
+
+// ------------------------------------------ Browser list (claude-scheduler-btv.20)
+// docs/design/launchbox.md §5: "Projects (Browser): one action at rest per
+// row: Burst. Everything else is on the Project page." Owner chose Option 2 of
+// docs/design/mockups/projects-flavours.html on 2026-09-26.
+
+const GROUPS = [
+  // `error` is written by the poller onto a project the human activated, so it
+  // sits with the active rows; its fault is said on the row's meta line.
+  { key: 'active', label: 'Active', states: ['active', 'error'] },
+  { key: 'paused', label: 'Paused', states: ['paused'] },
+  { key: 'pending', label: 'Not activated', states: ['pending'] },
+];
+
+/**
+ * Rows grouped under the list's headings, in the order they render. Empty
+ * groups are omitted; a state no group names falls into the last one rather
+ * than vanishing from the list.
+ */
+export function groupProjects(projects = []) {
+  const out = GROUPS.map((g) => ({ key: g.key, label: g.label, projects: [] }));
+  for (const p of projects) {
+    const i = GROUPS.findIndex((g) => g.states.includes(p?.state));
+    out[i === -1 ? out.length - 1 : i].projects.push(p);
+  }
+  return out.filter((g) => g.projects.length);
+}
+
+/**
+ * The row's one action, or null for none. Burst appears only where it can do
+ * something — an active project (plan-dialogs.js's splitProjects eligibility)
+ * with ready beads. Where it cannot run *right now* for a global reason
+ * (pause, a live burst) it stays visible and disabled with the reason, rather
+ * than vanishing and leaving the reader to guess.
+ */
+export function rowBurst(project, { pauseMode = 'off', burstLive = false } = {}) {
+  if (project?.state !== 'active') return null;
+  if (!(project?.ready?.count > 0)) return null;
+  if (burstLive) return { disabled: true, tip: 'A burst is already running — cancel it first' };
+  if (pauseMode && pauseMode !== 'off') {
+    return { disabled: true, tip: `The schedule is paused (${pauseMode}). Set pause to Off to burst.` };
+  }
+  return { disabled: false, tip: `Spend a fixed slice of your limit on ${project.name}'s ready beads, then stop` };
+}
+
+/**
+ * The one meta-line fault a row may carry, or null. Same precedence as
+ * cardBanner(), minus its "would contribute nothing" case: on the list the
+ * ready count already says 0, so restating it as a warning is noise (§7).
+ */
+export function rowProblem(project) {
+  const b = cardBanner(project);
+  if (!b || b.kind === 'warn') return null;
+  if (b.kind === 'busy') return b.title.replace(/\.$/, '');
+  if ((project.configErrors ?? []).length) return project.configErrors.join(' · ');
+  return `last poll failed — ${project.lastError}`;
+}

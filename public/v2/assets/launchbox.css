@@ -680,3 +680,21 @@ input.field--mono { font-family: var(--mono) !important; }
 .themebtn .ic--sun { display: none; }
 [data-theme="dark"] .themebtn .ic--sun { display: block; }
 [data-theme="dark"] .themebtn .ic--moon { display: none; }
+
+/* Projects Browser list (docs/design/mockups/projects-flavours.html Option 2, claude-scheduler-btv.20) */
+.p2-list { padding:0; }
+.p2-row { display:grid; grid-template-columns: minmax(0,1fr) auto 104px; gap:14px; align-items:center; padding:12px 16px; color:inherit; text-decoration:none; border-top:1px solid var(--line, #333); }
+.p2-row:first-child { border-top:0; }
+.p2-row:hover { background: var(--hover, rgba(127,127,127,.08)); }
+.p2-row__name { min-width:0; }
+.p2-row__name .t-meta { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.p2-ready { text-align:right; font-variant-numeric: tabular-nums; }
+.p2-ready b { font-size: 15px; }
+.p2-act { text-align:right; }
+.p2-issue { color: var(--warn, #d9a441); }
+.p2-group { margin: 18px 0 6px; }
+.p2-foot { margin-top: 14px; }
+@media (max-width: 760px) {
+  .p2-row { grid-template-columns: minmax(0,1fr) auto; }
+  .p2-row > .p2-act:empty { display:none; }
+}

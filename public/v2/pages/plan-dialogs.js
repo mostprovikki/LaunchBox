@@ -364,7 +364,10 @@ export function openBurnDownDialog({ onApplied } = {}) {
 
 // ================================================================== burst
 
-export function openBurstDialog({ onStarted } = {}) {
+// `projectId` scopes the dialog to one project — a Projects row's "Burst…"
+// (claude-scheduler-btv.20). Only preselected if eligible; an id that is not
+// (paused, pending, gone) leaves nothing chosen rather than falling back to all.
+export function openBurstDialog({ onStarted, projectId = null } = {}) {
   const ui = shell({ title: 'Start a burst', label: 'Start a burst' });
   const state = {
     window: 'five_hour', budgetPct: 10, preset: '10-5h',
@@ -381,7 +384,9 @@ export function openBurstDialog({ onStarted } = {}) {
       // (where choosing who may spend IS the decision), a burst's scope is
       // "the projects you already activated", and the airlock already made
       // that choice a deliberate one.
-      for (const p of splitProjects(state.projects).eligible) state.chosen.add(p.id);
+      for (const p of splitProjects(state.projects).eligible) {
+        if (projectId == null || p.id === projectId) state.chosen.add(p.id);
+      }
     } catch (err) {
       state.planError = failureToast(err) ?? 'could not read your projects';
     }
@@ -495,7 +500,7 @@ export function openBurstDialog({ onStarted } = {}) {
         state.loading ? 'Reading your projects…' : 'No project is registered yet.')));
     } else if (!eligible.length) {
       card.appendChild(el('div', { class: 'card__body' }, el('p', { class: 't-meta', style: 'margin:0;' },
-        'No activated project — activation is your click, on the Projects tab.')));
+        'No activated project — activation is your click, on the project\'s page.')));
     }
     return el('fieldset', { class: 'fset' }, [el('legend', { class: 'fset__t' }, 'Projects — activated only'), card]);
   }
