@@ -549,16 +549,16 @@ test('jsdom: project detail renders the facts, the ready table in claim order, a
 
   const page = document.querySelector('#v2-page');
   assert.match(page.textContent, /webapp-billing/);
-  // facts
+  // facts (the three Workbench facts since claude-scheduler-btv.24; the rest,
+  // min headroom included, were cut — tests/frontend-v2-project.test.js)
   assert.match(page.textContent, /acceptEdits/);
-  assert.match(page.textContent, /15%/);
   // claim order: P0 first even though it is the newer bead
-  const beadIds = [...page.querySelectorAll('.beadrow:not(.row--head) .mono')].map((n) => n.textContent);
+  const beadIds = [...page.querySelectorAll('[data-bead]')].map((n) => n.getAttribute('data-bead'));
   assert.equal(beadIds[0], 'wb-221', 'the P0 bead is claimed first');
   // declared config verbatim
   assert.match(page.querySelector('.snippet').textContent, /"autoLabel": "scheduler-ok"/);
-  // activity joined from jobs+runs by params._projectId
-  assert.match(page.textContent, /bead wb-142/);
+  // runs joined from jobs+runs by params._projectId
+  assert.ok(page.querySelector('[data-run=r1]'), 'the project\'s bead run is listed');
 });
 
 test('jsdom: project detail says which project is missing rather than rendering an empty shell', async () => {
