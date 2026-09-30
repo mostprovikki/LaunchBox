@@ -151,7 +151,9 @@ export function asOfEl(date) {
 // report it — don't hand-roll a second version of this.
 let toastHost = null;
 export function toast(msg, kind = '', ms = 3500) {
-  if (!toastHost) {
+  // A host that was removed, or that belongs to another document (each jsdom
+  // test builds its own), would swallow every toast appended to it.
+  if (!toastHost?.isConnected || toastHost.ownerDocument !== document) {
     toastHost = el('div', {
       id: 'v2-toasts',
       style: 'position:fixed;right:16px;bottom:16px;z-index:80;display:flex;flex-direction:column;gap:8px;max-width:360px;',

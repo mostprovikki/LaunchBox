@@ -13,6 +13,7 @@ import { el, iconBtn, setDisabledReason, toast } from './ui.js';
 
 const NAV = [
   ['overview', 'Overview'],
+  ['inbox', 'Inbox'],
   ['jobs', 'Jobs'],
   ['runs', 'Runs'],
   ['projects', 'Projects'],
@@ -137,13 +138,36 @@ let awakeState = null;
 let awakeUnsupported = false;
 let pollTimer = null;
 
+let inboxCount = 0;
+
 export function mountNav() {
   const nav = document.getElementById('v2-nav');
   if (!nav) return;
   nav.innerHTML = '';
   for (const [route, label] of NAV) {
-    nav.appendChild(el('a', { href: `#${route}`, 'data-route': route }, label));
+    nav.appendChild(el('a', { href: `#${route}`, 'data-route': route }, [
+      label,
+      route === 'inbox' ? el('span', { class: 'tab__n', hidden: true }) : null,
+    ]));
   }
+  renderInboxBadge();
+}
+
+// The Inbox nav badge (claude-scheduler-btv.19) — launchbox.md §6 "one number,
+// one place": it is GET /api/v2/inbox's `count`, the Inbox's own size. Updated
+// in place on the 15s poll: the nav link is focusable, and a rebuilt one drops
+// keyboard focus every poll (btv.17/btv.18). Hidden at 0 rather than "0".
+function renderInboxBadge() {
+  const badge = document.querySelector('#v2-nav a[data-route="inbox"] .tab__n');
+  if (!badge) return;
+  badge.textContent = inboxCount > 0 ? String(inboxCount) : '';
+  badge.hidden = !(inboxCount > 0);
+}
+
+/** The Inbox page reports its own fresh count, so the badge never lags it. */
+export function setInboxCount(n) {
+  inboxCount = Number.isFinite(n) ? n : 0;
+  renderInboxBadge();
 }
 
 function usageChips(u) {
@@ -409,12 +433,16 @@ function renderBanner() {
 }
 
 async function poll() {
-  const [usage, pause, runs, awake] = await Promise.allSettled([
+  const [usage, pause, runs, awake, inbox] = await Promise.allSettled([
     api('GET', '/api/usage'),
     api('GET', '/api/pause'),
     api('GET', '/api/runs?limit=100'),
     api('GET', '/api/awake'),
+    api('GET', '/api/v2/inbox'),
   ]);
+  // A failed read keeps the last count: an unreachable daemon has its banner,
+  // and blanking the badge would claim nothing needs you.
+  if (inbox.status === 'fulfilled') setInboxCount(inbox.value?.count);
   if (usage.status === 'fulfilled') usageState = usage.value;
   if (pause.status === 'fulfilled') pauseState = pause.value;
   if (awake.status === 'fulfilled') {

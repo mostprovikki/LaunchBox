@@ -96,6 +96,21 @@ export const ACCEPTED = Object.freeze([
     why: 'btv.12 (D2). Per-job learned cost and the guard\'s decoded reason, so the burn-down '
       + 'planner does not have to parse lib/budget.js\'s English.',
   },
+  // The Inbox (claude-scheduler-btv.19; endpoints from btv.22 / btv.23).
+  {
+    endpoint: '/api/v2/inbox',
+    side: 'v2-only',
+    status: 'additive by design',
+    why: 'btv.22. Waiting-to-merge branches and handed-back beads across every project — the '
+      + 'Inbox list and its nav badge (launchbox.md §5/§6). The existing UI has no Inbox.',
+  },
+  {
+    endpoint: '/api/v2/projects/:id/beads/:id/hold',
+    side: 'v2-only',
+    status: 'additive by design',
+    why: 'btv.23. Hold defers a handed-back bead 7 days so the scheduler stops retrying it '
+      + '(launchbox.md §9, which removed Re-queue). The existing UI has no hand-back triage.',
+  },
 ]);
 
 /**
