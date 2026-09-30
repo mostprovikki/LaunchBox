@@ -175,6 +175,7 @@ export function summarise({ routeFindings = [], consoleErrors = [], requestFailu
  */
 export const V2_ROUTES = Object.freeze([
   { name: 'overview', hash: '#overview' },
+  { name: 'inbox', hash: '#inbox' },
   { name: 'jobs', hash: '#jobs' },
   { name: 'runs', hash: '#runs' },
   { name: 'projects', hash: '#projects' },

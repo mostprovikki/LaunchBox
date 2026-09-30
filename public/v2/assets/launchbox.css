@@ -680,3 +680,17 @@ input.field--mono { font-family: var(--mono) !important; }
 .themebtn .ic--sun { display: none; }
 [data-theme="dark"] .themebtn .ic--sun { display: block; }
 [data-theme="dark"] .themebtn .ic--moon { display: none; }
+
+/* Inbox — triage split (claude-scheduler-btv.19; docs/design/mockups/inbox-flavours.html Option 2) */
+.ibx-split { display: grid; grid-template-columns: minmax(260px, 2fr) minmax(0, 3fr); gap: 18px; align-items: start; }
+.ibx-list .ibx-group { margin: 12px 12px 4px; }
+.ibx-item { display: block; width: 100%; text-align: left; padding: 9px 12px; background: none; border: 0;
+            border-left: 3px solid transparent; color: inherit; font: inherit; cursor: pointer; }
+.ibx-item:hover { background: var(--surface-2); }
+.ibx-item[aria-selected="true"] { border-left-color: var(--info); background: var(--surface-2); }
+.ibx-detail .defrow { margin: 4px 0; grid-template-columns: 96px minmax(0, 1fr); }
+/* Branch names are long and unbroken; the base nowrap pushed them over the label. */
+.ibx-detail .defrow__v { white-space: normal; overflow-wrap: anywhere; text-align: right; }
+.ibx-reason { margin: 12px 0; }
+.ibx-keys { margin-top: 14px; }
+@media (max-width: 760px) { .ibx-split { grid-template-columns: 1fr; } }

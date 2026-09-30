@@ -16,6 +16,7 @@ import session from './pages/session.js';
 import settings from './pages/settings.js';
 import graph from './pages/graph.js';
 import review from './pages/review.js';
+import inbox from './pages/inbox.js';
 
 registerRoute('overview', overview);
 registerRoute('jobs', jobs);
@@ -32,6 +33,9 @@ registerRoute('graph', graph);
 // absorbed, with the merge and discard a human has to authorise. Reached from
 // the project detail page, like the graph.
 registerRoute('review', review);
+// The 11th route (claude-scheduler-btv.19): the Inbox — every branch waiting to
+// merge and every handed-back bead, across all projects. In the appbar nav.
+registerRoute('inbox', inbox);
 
 // REVIEW #2's central sweep — the ENTIRE contract a wave-2 page needs is the
 // `data-mutating` attribute (README.md). Two triggers, both required:
