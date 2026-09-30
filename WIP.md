@@ -1711,3 +1711,11 @@ three new endpoints declared; `qa:v2:interactions` clean.
 - Measured: bd 1.1.0 `defer --until` takes ISO as-is → status deferred, defer_until set, gone from ready.
 - 11 mutations all red. Branch ff'd onto unmerged btv.22 (lib/inbox.js dependency) — merge btv.22 first or together.
 - No Touch ID approve() on hold (reversible; not in Done-when). Open: scheduler.test.js multi-schedule once-entries flaked once under full suite.
+
+## claude-scheduler-btv.19 — /v2 Inbox UI: triage split + nav badge (2026-09-30)
+- New `#inbox` (pages/inbox.js + pure inbox-logic.js): listbox grouped "Waiting to merge · N" / "Handed back · N", detail pane (Project / short Bead / Branch / Why + quoted reason), actions only for the selection: Review → `#review?id=`; hand-back → Log (drawer) + Hold. Keys ↑↓ / Enter / L / H on the listbox. Empty "Nothing needs you"; fetch failure is its own error card.
+- Nav badge = /api/v2/inbox `count`, set in place on the 15s poll (same node, focus kept); page pushes its fresh count via `setInboxCount`.
+- Branch ff'd onto btv.23 (contains btv.22) — merge those first or together.
+- Measured in headless Chrome on a seeded sandbox: keys/Enter/L real input OK; Hold on a real fixture bead → `bd` DEFERRED to +7d, row gone, badge 5→4; Hold on an unknown bead → 502 toast, row stays. Found + fixed there: long Branch value overlapped its label (base `.defrow__v` nowrap). Contrast: 0/106 text nodes below AA both themes; injected control went red.
+- ui.js `toast()` now rebuilds a host from another document (each jsdom test's) — the failed-Hold toast test was blind without it.
+- 17 tests, 10 mutations all red. Open: btv.26 (API carries no bead title, so hand-backs are titled by short id), c9n (scheduler.test.js multi-schedule flake, seen again).
