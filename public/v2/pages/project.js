@@ -5,9 +5,15 @@
 // call, which server.js's decorateProject explicitly refuses to make per row),
 // this project's recent scheduler activity, and the repo's declared config.
 //
+// Since claude-scheduler-btv.24 this is a Workbench (docs/design/launchbox.md
+// §5; Option 2 of docs/design/mockups/project-flavours.html): Burst… is the
+// primary, activate/pause the one state control, and Poll now / Dependency
+// graph / Remove project… sit in a ⋯ menu.
+//
 // Endpoints reused unchanged: GET /api/projects, GET /api/projects/:id/ready,
-// POST /api/projects/:id/poll, PUT /api/projects/:id, GET /api/jobs,
-// GET /api/runs, GET /api/bursts. Nothing new was needed.
+// POST /api/projects/:id/poll, PUT/DELETE /api/projects/:id, GET /api/jobs,
+// GET /api/runs, GET /api/bursts, GET /api/pause,
+// GET /api/v2/projects/:id/branches. Nothing new was needed.
 //
 // Two claims from the mockup are NOT rendered here and the reasons are in
 // projects-logic.js's header: "of 23 open" (no open-bead count exists) and the
@@ -16,13 +22,15 @@
 // "handed back" run state, is lifted: claude-scheduler-dc9 persisted the
 // outcome as runs.beadOutcome, so the activity list draws that chip now.
 import { api, failureToast, guardedSubmit } from '../api.js';
-import { $, el, clear, pageHead, toast } from '../ui.js';
+import { $, el, clear, pageHead, toast, iconBtn } from '../ui.js';
 import { onRender } from '../router.js';
 import { statusMeta, beadRunStateKey } from '../state-vocab.js';
 import {
-  fmtTime, fmtDate, relAgo, readyText, projectActions, isResume, cardBanner,
-  burstProjectIds, chipFor, claimOrder, priorityPill, beadAge, beadMeta,
+  fmtDate, fmtHm, relAgo, isResume, cardBanner, burstProjectIds, chipFor, claimOrder, priorityPill,
+  shortBeadId, unblocksText, permModeText, stateControl, projectBurst,
 } from './projects-logic.js';
+import { openBurstDialog } from './plan-dialogs.js';
+import { openLogDrawer } from './runs-log.js';
 
 const POLL_MS = 8000;
 
@@ -32,6 +40,7 @@ const SVG_BEAD = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="curren
 
 const state = {
   id: null, project: null, ready: null, jobs: [], runs: [], burst: null, meta: null, failed: false,
+  pauseMode: 'off', waiting: null, waitingAt: 0,
 };
 // True only while this page owns #v2-page. See render()'s guard.
 let mounted = false;
@@ -46,8 +55,13 @@ function svgNode(html) {
 
 // ---------------- data ----------------
 
-async function loadAndRender() {
-  if (!state.id) { render(); return; }
+// The waiting-to-merge count costs a git walk plus a `bd show` per branch
+// (server.js's GET /api/v2/projects/:id/branches), so it is not re-read on
+// every 8s tick: on open, after a Poll now, and at most once a minute.
+const WAITING_MS = 60000;
+
+async function loadAndRender({ forceWaiting = false } = {}) {
+  if (!state.id) { paint(); return; }
   try {
     const data = await api('GET', '/api/projects');
     state.meta = data;
@@ -58,7 +72,7 @@ async function loadAndRender() {
     // see projects.js's unreachableCard() comment (claude-scheduler-7j2).
     if (!state.project) state.failed = true;
   }
-  if (!state.project) { render(); return; }
+  if (!state.project) { paint(); return; }
 
   // `bd ready` is a blocking call against the repo's database; it is fetched
   // once per render pass here (and never in the list), which is the whole
@@ -69,15 +83,38 @@ async function loadAndRender() {
     state.ready = { error: failureToast(err) ?? 'could not read ready work', beads: [] };
   }
   try {
-    const [jobsRes, runsRes, burstRes] = await Promise.all([
+    const [jobsRes, runsRes, burstRes, pauseRes] = await Promise.all([
       api('GET', '/api/jobs'),
       api('GET', '/api/runs?limit=200'),
       api('GET', '/api/bursts').catch(() => ({ active: null })),
+      api('GET', '/api/pause').catch(() => null),
     ]);
     state.jobs = jobsRes.jobs ?? [];
     state.runs = runsRes.runs ?? [];
     state.burst = burstRes?.active ?? null;
-  } catch { /* activity card degrades to its own empty state */ }
+    // A burst started while paused plans and then starts nothing, so Burst…
+    // says so up front (projectBurst). Unknown mode leaves the last one.
+    state.pauseMode = pauseRes?.mode ?? state.pauseMode;
+  } catch { /* the runs list degrades to its own empty state */ }
+  if (forceWaiting || !state.waitingAt || Date.now() - state.waitingAt > WAITING_MS) {
+    try {
+      const out = await api('GET', `/api/v2/projects/${encodeURIComponent(state.id)}/branches`);
+      state.waiting = (out?.branches ?? []).length;
+      state.waitingAt = Date.now();
+    } catch {
+      // 503 without a branches engine, 502 on a git failure: the strip is
+      // simply not drawn — the Inbox owns the full, explained queue.
+    }
+  }
+  paint();
+}
+
+// A re-render rebuilds #v2-page, which would snatch an open ⋯ menu out from
+// under the reader every 8s. The poll's paint waits until the menu closes.
+let deferredPaint = false;
+function paint() {
+  if (menu.open) { deferredPaint = true; return; }
+  deferredPaint = false;
   render();
 }
 
@@ -112,11 +149,111 @@ async function onAction(act, btn) {
       toast(r.skipped === true
         ? `Not polled — ${r.reasons?.join(' · ') || 'nothing to do'}`
         : `${r.ready?.length ?? 0} ready · started ${r.started?.length ?? 0}`, '', 8000);
+    } else if (act === 'remove') {
+      if (await removeProject(p)) { location.hash = '#projects'; return; }
     }
   } catch (err) {
     toast(failureToast(err) ?? `${act} failed`, 'err');
   }
-  loadAndRender();
+  loadAndRender({ forceWaiting: act === 'poll' });
+}
+
+// Moved here from the Projects list with its confirms unchanged when that list
+// became a Browser (claude-scheduler-btv.20). True when the project is gone.
+async function removeProject(p) {
+  // eslint-disable-next-line no-alert
+  if (!window.confirm(`Stop tracking "${p.name}"?\n\n`
+    + 'The repo and its beads are left exactly as they are — this only stops LaunchBox looking at '
+    + 'them, and deletes the per-bead job rows (with their run history) it created for this project.')) return false;
+  try {
+    const out = await api('DELETE', `/api/projects/${p.id}`);
+    toast(`Stopped tracking "${p.name}"${out?.removedJobs ? ` · ${out.removedJobs} bead job row${out.removedJobs === 1 ? '' : 's'} dropped` : ''}`);
+    return true;
+  } catch (err) {
+    // 409 means a bead of this project is leased to a live run right now.
+    // Forcing abandons that lease, so the ids are named before asking again.
+    if (err.status !== 409) {
+      toast(failureToast(err) ?? 'could not stop tracking that project', 'err');
+      return false;
+    }
+    const held = err.data?.held ?? [];
+    // eslint-disable-next-line no-alert
+    if (!window.confirm(`${held.length || 'Some'} bead${held.length === 1 ? '' : 's'} from "${p.name}" `
+      + `${held.length === 1 ? 'is' : 'are'} still leased to a run: ${held.join(', ')}\n\n`
+      + `Removing now abandons ${held.length === 1 ? 'that lease' : 'those leases'} — the run keeps going, `
+      + 'but LaunchBox stops tracking the bead.\n\nRemove anyway?')) return false;
+    try {
+      await api('DELETE', `/api/projects/${p.id}`, { force: true });
+      toast(`Stopped tracking "${p.name}" — ${held.length} lease${held.length === 1 ? '' : 's'} abandoned`);
+      return true;
+    } catch (err2) {
+      toast(failureToast(err2) ?? 'could not stop tracking that project', 'err');
+      return false;
+    }
+  }
+}
+
+// ---------------- ⋯ menu ----------------
+// The mockup's popover (project-flavours.html Option 2): an iconbtn and a
+// .card.menu[role=menu]. Escape and an outside click close it and hand focus
+// back to ⋯, so a keyboard reader is never left focused on a hidden item.
+
+const menu = { open: false, btn: null, list: null, wrap: null };
+
+function onMenuKey(e) {
+  if (e.key === 'Escape') closeMenu();
+}
+function onMenuOutside(e) {
+  if (menu.wrap && !menu.wrap.contains(e.target)) closeMenu();
+}
+
+function openMenu() {
+  menu.open = true;
+  menu.list.hidden = false;
+  menu.btn.setAttribute('aria-expanded', 'true');
+  document.addEventListener('keydown', onMenuKey);
+  document.addEventListener('click', onMenuOutside);
+  menu.list.querySelector('[role=menuitem]')?.focus();
+}
+
+function closeMenu({ refocus = true } = {}) {
+  if (!menu.open) return;
+  menu.open = false;
+  document.removeEventListener('keydown', onMenuKey);
+  document.removeEventListener('click', onMenuOutside);
+  if (menu.list) menu.list.hidden = true;
+  menu.btn?.setAttribute('aria-expanded', 'false');
+  // A poll that landed while the menu was open paints now — BEFORE the
+  // refocus, because the paint rebuilds ⋯ and menu.btn then names the new one.
+  // Measured in a real browser: the other order left focus on a detached node.
+  if (deferredPaint) paint();
+  if (refocus) menu.btn?.focus();
+}
+
+function moreMenu(p) {
+  const btn = iconBtn({
+    label: 'More actions', tip: 'Poll now, dependency graph, remove',
+    'aria-haspopup': 'menu', 'aria-expanded': 'false',
+  });
+  btn.textContent = '⋯';
+  const item = (act, label, cls) => {
+    const b = el('button', { role: 'menuitem', class: cls, 'data-act': act, 'data-mutating': true }, label);
+    b.addEventListener('click', () => { closeMenu(); onAction(act, b); });
+    return b;
+  };
+  // The graph is a read, so it is a link and not data-mutating: it stays
+  // openable while the daemon refuses writes (claude-scheduler-vo4.5).
+  const graph = el('a', { role: 'menuitem', href: `#graph?id=${encodeURIComponent(p.id)}` }, 'Dependency graph');
+  graph.addEventListener('click', () => closeMenu({ refocus: false }));
+  const list = el('div', { class: 'card menu', role: 'menu', 'aria-label': 'More actions', hidden: true }, [
+    item('poll', 'Poll now'),
+    graph,
+    item('remove', 'Remove project…', 'danger'),
+  ]);
+  btn.addEventListener('click', () => (menu.open ? closeMenu() : openMenu()));
+  const wrap = el('span', { style: 'position:relative;display:inline-flex;' }, [btn, list]);
+  Object.assign(menu, { btn, list, wrap });
+  return wrap;
 }
 
 // ---------------- pieces ----------------
@@ -128,60 +265,108 @@ function chipEl(meta, style) {
   ]);
 }
 
-function fact(k, v, d) {
-  return el('div', { class: 'fact' }, [
-    el('div', { class: 'fact__k' }, k),
-    el('div', { class: 'fact__v mono' }, v),
-    d ? el('div', { class: 'fact__d' }, d) : null,
-  ]);
+function headerActions(p) {
+  const b = projectBurst(p, { pauseMode: state.pauseMode, burstLive: !!state.burst });
+  // Disabled for a business reason (pause, a live burst, not active), so it
+  // carries no data-mutating: the degraded-state sweep must not revive it.
+  const burst = el('button', {
+    class: 'btn btn--primary',
+    disabled: b.disabled,
+    'data-mutating': b.disabled ? null : true,
+    'data-tip': b.tip,
+  }, 'Burst…');
+  if (!b.disabled) burst.addEventListener('click', () => openBurstDialog({ projectId: p.id, onStarted: loadAndRender }));
+
+  const s = stateControl(p);
+  const ctl = el('button', { class: 'btn', 'data-mutating': true, 'data-tip': s.tip, 'data-act': s.act }, s.label);
+  ctl.addEventListener('click', () => onAction(s.act, ctl));
+
+  return [burst, ctl, moreMenu(p)];
 }
 
-function factsCard(p) {
-  const cfg = p.config ?? {};
+// "N waiting to merge" — only when there is something to merge (§5). The
+// review queue is the Inbox's half; this page only points at it.
+function waitingStrip(p) {
+  const n = state.waiting ?? 0;
+  if (!(n > 0)) return null;
+  return el('div', { class: 'banner banner--info', 'data-waiting': true, style: 'margin: -6px 0 14px;' }, el('span', {}, [
+    el('b', {}, `${n} branch${n === 1 ? '' : 'es'} waiting to merge`),
+    ' from this project. ',
+    el('a', { href: `#review?id=${encodeURIComponent(p.id)}` }, 'Review in Inbox →'),
+  ]));
+}
+
+function factCard(key, label, value, sub, { big = false, foot = null, mono = false } = {}) {
+  return el('section', { class: 'card', 'data-fact': key }, el('div', { style: 'padding: 12px 16px;' }, [
+    el('div', { class: 't-eyebrow' }, label),
+    el('div', {
+      class: mono ? 'mono' : null,
+      style: `font-size:${big ? 34 : 22}px;font-weight:600;font-variant-numeric:tabular-nums;margin:2px 0;`,
+    }, value),
+    sub ? el('div', { class: 't-meta' }, sub) : null,
+    foot,
+  ]));
+}
+
+// Three facts (§5): Ready (wider, larger), Running here, Permission mode. Auto
+// label, last poll, leases and min headroom were cut on 2026-09-26 (§7); the
+// label and timeout live in the Declared config summary instead.
+function factsRow(p) {
   const held = p.leases?.held ?? 0;
-  const pollSec = state.meta?.pollSec;
-  const bdVer = p.bdVersion || state.meta?.bd?.version;
-  return el('section', { class: 'card', style: 'margin-bottom: 16px;' },
-    el('div', { class: 'card__body', style: 'padding: 14px 18px;' },
-      el('div', { class: 'facts' }, [
-        // "of 23 open" is the mockup's second line here and is not rendered:
-        // no open-bead count exists anywhere in the adapter or the API.
-        fact('Ready beads', p.ready?.count == null ? '—' : String(p.ready.count),
-          p.ready?.count == null ? 'never successfully polled' : `as of ${fmtTime(p.ready.at) ?? 'an earlier poll'}`),
-        fact('Auto label', cfg.autoLabel || '—',
-          cfg.autoLabel ? 'required on every bead' : 'none declared, so no bead is eligible'),
-        fact('Last poll', fmtTime(p.lastPollAt) || 'never',
-          [pollSec ? `every ${pollSec}s` : null, bdVer ? `bd ${bdVer}` : null].filter(Boolean).join(' · ') || null),
-        fact('Leases held', String(held), held ? 'checked out to a run right now' : 'nothing claimed right now'),
-        fact('Permission mode', cfg.defaults?.permMode || '—', 'from .scheduler.json'),
-        fact('Min headroom', cfg.budget?.minHeadroomPct != null ? `${cfg.budget.minHeadroomPct}%` : '—',
-          'extra, on top of reserves'),
-      ])));
-}
-
-function beadRow(b, now) {
-  const pill = priorityPill(b.priority);
-  const meta = beadMeta(b);
-  return el('div', { class: 'row beadrow' }, [
-    el('span', { class: 'mono t-body' }, b.id),
-    el('div', { class: 'cell' }, [
-      el('div', { class: 'cell__l1' }, [
-        pill ? el('span', { class: `pill ${pill.cls}` }, pill.label) : null,
-        el('span', { class: 'row__n' }, b.title || '(no title)'),
-      ]),
-      el('div', { class: 'cell__l2' }, [
-        ...(b.labels ?? []).map((l) => el('span', { class: 'tag' }, l)),
-        meta.length ? el('span', { class: 'mono' }, meta.join(' · ')) : null,
-      ]),
-    ]),
-    el('span', { class: 't-meta mono' }, beadAge(b, now) ?? ''),
+  const mode = p.config?.defaults?.permMode;
+  const pollBtn = el('button', {
+    class: 'btn btn--ghost', style: 'margin-left:auto;padding:4px 10px;',
+    'data-mutating': true, 'data-tip': 'Re-read bd ready now',
+  }, '↻ Poll now');
+  pollBtn.addEventListener('click', () => onAction('poll', pollBtn));
+  const foot = el('div', {
+    class: 't-meta',
+    style: 'display:flex;align-items:center;gap:10px;margin-top:10px;padding-top:10px;border-top:1px solid var(--line-2);',
+  }, [el('span', {}, p.lastPollAt ? `polled ${relAgo(p.lastPollAt)}` : 'never polled'), pollBtn]);
+  return el('div', {
+    style: 'display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr) minmax(0,1fr);gap:14px;margin-bottom:16px;',
+  }, [
+    factCard('ready', 'Ready', p.ready?.count == null ? '—' : String(p.ready.count),
+      p.ready?.count == null ? 'never successfully polled' : null, { big: true, foot }),
+    factCard('running', 'Running here', String(held),
+      held ? `bead${held === 1 ? '' : 's'} checked out to a run right now` : 'no bead claimed right now'),
+    factCard('perm', 'Permission mode', mode || '—', permModeText(mode), { mono: true }),
   ]);
 }
 
-function readyCard(p) {
+// Up next and Recent runs share one grid, so short ids and titles start at the
+// same x in both lists (§5). The id column is fixed-width for the same reason.
+const LIST_COLS = '44px minmax(0,1fr) 104px 96px';
+const rowStyle = `grid-template-columns:${LIST_COLS};align-items:center;padding:10px 18px;`;
+const SID_STYLE = 'display:inline-block;width:72px;flex:none;font-weight:600;';
+
+function titleLine(id, title) {
+  return el('div', { class: 'cell__l1' }, [
+    el('span', { class: 'mono', style: SID_STYLE }, shortBeadId(id)),
+    el('span', { class: 'row__n' }, title || '(no title)'),
+  ]);
+}
+
+function beadRow(b) {
+  const pill = priorityPill(b.priority);
+  return el('div', { class: 'row', 'data-bead': b.id, style: rowStyle }, [
+    el('span', {}, pill ? el('span', { class: `pill ${pill.cls}` }, pill.label) : null),
+    el('div', { class: 'cell' }, [
+      titleLine(b.id, b.title),
+      // Type is neutral grey: red and yellow are reserved for run state and
+      // priority (launchbox.md §6).
+      el('div', { class: 'cell__l2', style: 'padding-left:80px;' },
+        b.type ? el('span', { class: 't-meta', 'data-type': true }, b.type) : null),
+    ]),
+    el('span', { class: 't-meta', style: 'text-align:right;white-space:nowrap;' }, unblocksText(b) ?? ''),
+    el('span', { class: 't-meta', style: 'text-align:right;white-space:nowrap;' },
+      b.createdAt ? `filed ${relAgo(b.createdAt)}` : ''),
+  ]);
+}
+
+function upNextCard(p) {
   const r = state.ready;
   const beads = claimOrder(r?.beads ?? []);
-  const now = Date.now();
 
   const body = [];
   if (r?.error) {
@@ -203,10 +388,7 @@ function readyCard(p) {
   }
 
   if (beads.length) {
-    body.push(el('div', { class: 'rows' }, [
-      el('div', { class: 'row row--head beadrow' }, [el('span', {}, 'Bead'), el('span', {}, 'Title'), el('span', {}, '')]),
-      ...beads.map((b) => beadRow(b, now)),
-    ]));
+    body.push(el('div', { class: 'rows' }, beads.map(beadRow)));
   } else if (!r?.error) {
     body.push(el('div', { class: 'card__body' }, el('div', { class: 'blank', style: 'border:0;background:transparent;padding:18px 8px;' }, [
       el('span', { class: 'blank__icon', html: SVG_BEAD }),
@@ -219,22 +401,14 @@ function readyCard(p) {
     ])));
   }
 
-  // The mockup's coverage line also breaks down what is NOT ready ("11 blocked
-  // by dependencies · 8 missing the label"). `bd ready` applies both filters
-  // server-side, so those beads never reach us to be counted — the half that
-  // survives is how a bead run actually behaves, which is true and worth
-  // saying on the page that lists them.
-  body.push(el('div', { class: 'card__body', style: 'border-top: 1px solid var(--line-2); padding: 11px 18px;' },
-    el('span', { class: 'coverage' }, [
-      el('span', {}, 'Beads run one at a time in a disposable worktree.'),
-      el('span', {}, '· a bead closes only on TASK-COMPLETE, otherwise it is handed back to open with the agent\'s note attached'),
-    ])));
-
   return el('section', { class: 'card', style: 'margin-bottom: 16px;' }, [
     el('div', { class: 'card__head' }, [
-      el('h2', {}, 'Ready to be claimed'),
-      el('span', { class: 'tab__n' }, String(beads.length)),
-      el('span', { class: 't-meta', style: 'margin-left:auto;' }, 'claim order: priority, then age'),
+      el('h2', {}, 'Up next'),
+      el('span', { class: 't-meta' }, String(beads.length)),
+      el('a', {
+        class: 't-meta', style: 'margin-left:auto;', href: `#graph?id=${encodeURIComponent(p.id)}`,
+        'data-tip': 'Every bead in this project and what blocks what',
+      }, 'graph →'),
     ]),
     ...body,
   ]);
@@ -255,64 +429,71 @@ function projectRuns(p) {
     .map((r) => ({ run: r, job: jobById.get(r.jobId) }));
 }
 
-function activityRow({ run, job }) {
+function runRow(p, { run, job }) {
+  // The dot and the status word both come from beadRunStateKey: a run that
+  // exited ok but never signalled TASK-COMPLETE reads "handed back" (off
+  // runs.beadOutcome; claude-scheduler-dc9), so "ok" here means the bead closed.
   const m = statusMeta(beadRunStateKey(run));
   const when = run.finishedAt ?? run.startedAt;
   const dur = run.startedAt && run.finishedAt
     ? `${Math.max(0, Math.round((new Date(run.finishedAt) - new Date(run.startedAt)) / 1000))}s`
     : null;
-  const bead = job.params?._beadId;
-  // The chip — not the subline — is where the bead's fate shows. A run that
-  // exited ok but never signalled TASK-COMPLETE now reads "handed back"
-  // (beadRunStateKey, off runs.beadOutcome; claude-scheduler-dc9), so an ok
-  // chip on this list means the bead actually closed.
-  //
-  // Still NOT rendered: the mockup's "closed with TASK-COMPLETE" / "returned to
-  // open with the agent's note attached" sublines. The field would now back the
-  // first half, but the note is written by `bd note` and never read back here,
-  // so the second would still be a guess.
-  return el('div', { class: 'row', style: 'grid-template-columns: 90px minmax(0,1fr) auto;' }, [
-    chipEl(m),
+  // lib/projects.js names a bead job "<project>: <bead title>"; the project is
+  // the page title already.
+  const prefix = `${p.name}: `;
+  const title = job.name?.startsWith(prefix) ? job.name.slice(prefix.length) : job.name;
+  const row = el('a', {
+    class: 'row row--link', 'data-run': run.id, href: `#runs?job=${encodeURIComponent(run.jobId)}`,
+    style: `${rowStyle}text-decoration:none;`, 'data-tip': 'Open the run log',
+  }, [
+    el('span', { class: `state state--${m.cls}`, 'aria-hidden': 'true', style: 'justify-content:center;' },
+      el('span', { class: `state__dot ${m.dot}`.trim() })),
     el('div', { class: 'cell' }, [
-      el('div', { class: 'cell__l1' }, el('span', { class: 'row__n' }, bead ? `bead ${bead} — ${job.name}` : job.name)),
-      el('div', { class: 'cell__l2' }, [
-        fmtDate(when) ?? '',
-        ' ',
-        el('span', { class: 'mono' }, fmtTime(when) ?? ''),
-        dur ? ' · ' : null,
-        dur ? el('span', { class: 'mono' }, dur) : null,
-        ' · ',
-        el('a', { href: `#runs?job=${encodeURIComponent(run.jobId)}` }, 'runs'),
-      ]),
+      titleLine(job.params?._beadId ?? '', title),
+      el('div', { class: 'cell__l2', 'data-line2': true, style: 'padding-left:80px;' }, [
+        m.label, dur ? ' · ' : null, dur ? el('span', { class: 'mono' }, dur) : null,
+      ].filter(Boolean)),
     ]),
-    el('span', {}, ''),
+    el('span', { class: 't-meta', style: 'text-align:right;white-space:nowrap;' },
+      when ? `${fmtDate(when) ?? ''} ${fmtHm(when) ?? ''}`.trim() : ''),
+    el('span', { class: 't-meta', style: 'text-align:right;' }, 'Log →'),
   ]);
+  row.addEventListener('click', (e) => {
+    e.preventDefault();
+    openLogDrawer(run, { jobName: job.name, jobExists: true, triggerEl: row });
+  });
+  return row;
 }
 
-function activityCard(p) {
+function runsCard(p) {
   const rows = projectRuns(p);
-  return el('section', { class: 'card' }, [
+  return el('section', { class: 'card', style: 'margin-bottom: 16px;' }, [
     el('div', { class: 'card__head' }, [
-      el('h2', {}, 'Recent scheduler activity here'),
-      el('a', { class: 't-meta', style: 'margin-left:auto;', href: '#runs' }, 'all runs'),
+      el('h2', {}, 'Recent runs'),
+      el('a', { class: 't-meta', style: 'margin-left:auto;', href: '#runs' }, 'all in Runs →'),
     ]),
     rows.length
-      ? el('div', { class: 'rows' }, rows.map(activityRow))
+      ? el('div', { class: 'rows' }, rows.map((x) => runRow(p, x)))
       : el('div', { class: 'card__body' }, el('p', { class: 't-meta', style: 'margin:0;' },
         'No bead of this project has been run yet. A run appears here once LaunchBox claims a bead '
         + 'and starts it in a worktree.')),
   ]);
 }
 
+// Collapsed by default (§5): the config is read when changing it, not at rest.
 function configCard(p) {
+  const cfg = p.config ?? {};
   const errors = p.configErrors ?? [];
-  return el('section', { class: 'card' }, [
-    el('div', { class: 'card__head' }, [
-      el('h2', {}, 'Declared config'),
-      el('span', { class: 't-meta mono', style: 'margin-left:auto;' }, '.scheduler.json · committed'),
-    ]),
-    el('div', { class: 'card__body' }, [
-      el('pre', { class: 'snippet' }, JSON.stringify(p.config ?? {}, null, 2)),
+  const bits = [
+    cfg.autoLabel ? ['auto label ', el('span', { class: 'mono' }, cfg.autoLabel)] : 'no auto label',
+    cfg.defaults?.timeoutMin ? `timeout ${cfg.defaults.timeoutMin} min` : null,
+    Array.isArray(cfg.gates) && cfg.gates.length ? `gates ${cfg.gates.join(', ')}` : null,
+  ].filter(Boolean);
+  return el('section', { class: 'card' }, el('details', {}, [
+    el('summary', { class: 't-meta', style: 'cursor:pointer;padding:12px 16px;' },
+      ['Declared config', ...bits.flatMap((b) => [' · ', b])]),
+    el('div', { style: 'padding: 0 16px 14px;' }, [
+      el('pre', { class: 'snippet' }, JSON.stringify(cfg, null, 2)),
       errors.length
         ? el('div', { class: 'banner', style: 'margin-top: 10px;' }, [
           svgNode(SVG_WARN),
@@ -323,7 +504,7 @@ function configCard(p) {
         'The repo declares what it allows; LaunchBox never exceeds it. Changing this file takes effect '
         + 'on the next poll — no re-activation needed.'),
     ]),
-  ]);
+  ]));
 }
 
 // ---------------- top-level render ----------------
@@ -349,6 +530,8 @@ function render() {
   // (claude-scheduler-btv.9) — Projects → project detail → Projects rendered
   // the DETAIL page under the Projects route, and the reverse going back.
   if (!mounted) return;
+  deferredPaint = false;
+  closeMenu({ refocus: false });
   clear(page);
 
   if (!state.id) {
@@ -366,51 +549,10 @@ function render() {
   }
 
   const chip = chipFor(p, burstProjectIds(state.burst));
-  const actions = projectActions(p).map((a) => {
-    const btn = el('button', {
-      class: a.primary ? 'btn btn--primary' : 'btn btn--ghost',
-      'data-mutating': true,
-      'data-tip': a.tip,
-      'data-act': a.act,
-    }, a.label);
-    btn.addEventListener('click', () => onAction(a.act, btn));
-    return btn;
-  });
-
-  // The dependency graph for this project (claude-scheduler-vo4.5). Read-only,
-  // so it is deliberately NOT data-mutating: the graph stays openable while the
-  // daemon is refusing writes, which is when "what is blocking what" is most
-  // worth reading.
-  actions.unshift(el('a', {
-    class: 'btn btn--ghost',
-    href: `#graph?id=${encodeURIComponent(p.id)}`,
-    'data-tip': 'Every bead in this project and what blocks what',
-  }, 'Dependency graph'));
-
-  // The review queue. Also a link rather than a data-mutating control: reading
-  // what is waiting is safe, and each action ON that page is gated there.
-  actions.unshift(el('a', {
-    class: 'btn btn--ghost',
-    href: `#review?id=${encodeURIComponent(p.id)}`,
-    'data-tip': 'Scheduler branches main has not absorbed yet',
-  }, 'Review queue'));
-
   const head = pageHead({
     title: p.name,
-    sub: el('span', {}, [
-      chipEl(chip, 'font-size:12.5px;'),
-      ' · ',
-      el('span', { class: 'mono' }, p.path),
-      ' · ',
-      // "activated by you on 26 Jul" in the mockup — the projects table has no
-      // per-transition stamp, and `updatedAt` moves on every poll, so the only
-      // honest date here is when the row was created.
-      `registered ${fmtDate(p.createdAt) ?? 'at an unknown date'}`,
-      ' · ',
-      readyText(p),
-      p.lastPollAt ? ` (polled ${relAgo(p.lastPollAt)})` : '',
-    ]),
-    actions,
+    sub: el('span', {}, [chipEl(chip, 'font-size:12.5px;'), ' · ', el('span', { class: 'mono' }, p.path)]),
+    actions: headerActions(p),
   });
   page.appendChild(el('div', { class: 't-meta', style: 'margin-bottom: 4px;' }, el('a', { href: '#projects' }, '← Projects')));
   page.appendChild(head);
@@ -426,12 +568,12 @@ function render() {
     page.appendChild(el('p', { class: 't-meta', style: 'margin: 0 0 12px;' }, w));
   }
 
-  page.appendChild(factsCard(p));
-  page.appendChild(readyCard(p));
-  page.appendChild(el('div', { class: 'ovgrid' }, [
-    el('div', {}, activityCard(p)),
-    el('div', {}, configCard(p)),
-  ]));
+  const waiting = waitingStrip(p);
+  if (waiting) page.appendChild(waiting);
+  page.appendChild(factsRow(p));
+  page.appendChild(upNextCard(p));
+  page.appendChild(runsCard(p));
+  page.appendChild(configCard(p));
 }
 
 function ensureRouteWatcher() {
@@ -454,7 +596,7 @@ export default function project(params) {
   if (switching) {
     // A different project: drop the previous one's data rather than showing it
     // under the new name for one tick.
-    Object.assign(state, { id, project: null, ready: null, jobs: [], runs: [], meta: null, failed: false });
+    Object.assign(state, { id, project: null, ready: null, jobs: [], runs: [], meta: null, failed: false, waiting: null, waitingAt: 0 });
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   }
 

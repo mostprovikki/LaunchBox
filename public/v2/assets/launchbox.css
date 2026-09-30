@@ -698,3 +698,9 @@ input.field--mono { font-family: var(--mono) !important; }
   .p2-row { grid-template-columns: minmax(0,1fr) auto; }
   .p2-row > .p2-act:empty { display:none; }
 }
+
+/* ---- ⋯ popover menu (claude-scheduler-btv.24) — docs/design/mockups/project-flavours.html lines 21-24 */
+.menu { position:absolute; right:0; top:calc(100% + 6px); min-width: 210px; padding: 6px; z-index: 5; }
+.menu button, .menu a { display:block; width:100%; text-align:left; padding: 7px 10px; background:none; border:0; color:inherit; font:inherit; text-decoration:none; border-radius:6px; cursor:pointer; }
+.menu button:hover, .menu a:hover { background: var(--hover, rgba(127,127,127,.12)); }
+.menu .danger { color: var(--bad, #f06a6a); }

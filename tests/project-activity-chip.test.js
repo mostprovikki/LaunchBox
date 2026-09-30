@@ -66,23 +66,26 @@ async function activityChip(beadOutcome, tag) {
   projectPage(new URLSearchParams('id=p1'));
   await tick();
   const page = document.getElementById('v2-page');
-  const row = [...page.querySelectorAll('.row')].find((r) => /wb-198/.test(r.textContent));
+  // Since claude-scheduler-btv.24 a run row is a status dot (colour + form)
+  // and the status WORD starting line 2 — launchbox.md §5 "Recent runs".
+  const row = page.querySelector('[data-run="r1"]');
   assert.ok(row, 'the bead run never rendered — the fixture, not the chip, is probably wrong');
   const chip = row.querySelector('.state');
-  assert.ok(chip, 'the activity row lost its state chip');
+  assert.ok(chip, 'the run row lost its state dot');
+  chip.word = row.querySelector('[data-line2]').firstChild.textContent;
   return chip;
 }
 
 test('a bead run that exited ok WITHOUT TASK-COMPLETE renders as "handed back", not as "ok"', async () => {
   const chip = await activityChip('handed-back', 'hb');
-  assert.equal(chip.textContent.trim(), 'handed back');
+  assert.equal(chip.word, 'handed back');
   assert.ok(chip.classList.contains('state--muted'), `expected the muted family, got: ${chip.className}`);
   assert.ok(chip.querySelector('.state__dot--square'), 'the mockup draws this dot square — colour is never the only channel');
 });
 
 test('a bead run that closed its bead still renders as "ok"', async () => {
   const chip = await activityChip('closed', 'closed');
-  assert.equal(chip.textContent.trim(), 'ok');
+  assert.equal(chip.word, 'ok');
   assert.ok(chip.classList.contains('state--ok'));
 });
 
@@ -91,6 +94,6 @@ test('a run row from before the outcome was persisted is NOT guessed at in eithe
   // job run. Reading it as "handed back" would accuse the scheduler of
   // returning beads it closed; the page falls back to the plain status.
   const chip = await activityChip(null, 'legacy');
-  assert.equal(chip.textContent.trim(), 'ok');
+  assert.equal(chip.word, 'ok');
   assert.ok(chip.classList.contains('state--ok'));
 });

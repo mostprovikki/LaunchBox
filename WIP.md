@@ -1711,3 +1711,19 @@ Pure decisions in `projects-logic.js` (`groupProjects`, `rowBurst`, `rowProblem`
 paused grouped as active, warn banner as row problem, Burst click also navigating, row Burst
 unscoped, paused showing a count. **Gates:** `npm test` 925/925; `qa:v2`, `qa:v2:interactions`
 (burst opener now /Burst all active/), `qa:v2:parity` clean. Open: none.
+
+## 2026-09-30 claude-scheduler-btv.24 — /v2 Project page as Workbench
+
+Project page rebuilt to Option 2 of `docs/design/mockups/project-flavours.html`: header = `Burst…`
+(the one primary, `openBurstDialog({ projectId })`, disabled with a reason when not active / 0 ready /
+paused / bursting) + one state control (Activate… / Resume / Pause) + ⋯ menu (Poll now, Dependency
+graph, Remove project… with the old list confirms incl. the 409 lease path). Three facts, waiting-
+to-merge strip off `/api/v2/projects/:id/branches` (re-read ≤ once a minute — it runs `bd show` per
+branch), Up next + Recent runs on one grid with short mono ids, collapsed Declared config. btv.20 was
+closed but unmerged, so it was merged into this branch first. `.menu` CSS in both launchbox.css.
+
+**Found in a real browser, not by jsdom:** a poll tick deferred while the menu is open repainted
+AFTER Escape's refocus, leaving focus on a detached ⋯. Test added red-first; fixed by painting
+before refocus. **Mutations** 10/10 red. **Gates:** `npm test` 950/950; `qa:v2`,
+`qa:v2:interactions`, `qa:v2:parity` clean. Open: Inbox route doesn't exist yet — "Review in
+Inbox →" points at `#review?id=` until the Inbox bead lands.
