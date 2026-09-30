@@ -494,3 +494,44 @@ test('jsdom: both dialogs are labelled modals with a named close control', async
     document.querySelector('.modalwrap').remove();
   }
 });
+
+test('jsdom: openBurstDialog({projectId}) preselects only that project; no projectId keeps all eligible', async () => {
+  // claude-scheduler-btv.20: each Projects row's "Burst…" opens the dialog
+  // scoped to that row. A third active project so "only that one" is
+  // distinguishable from "all eligible".
+  const three = {
+    ...PROJECTS,
+    projects: [...PROJECTS.projects,
+      { id: 'p3', name: 'trip-planner', state: 'active', busyStreak: 0, ready: { count: 1 }, config: {} }],
+  };
+  const checkedNames = () => [...document.querySelectorAll('.modalwrap input[type=checkbox]')]
+    .filter((c) => c.checked).map((c) => c.closest('label, .defrow, div').textContent);
+
+  mountDom();
+  let calls = mockFetch(burstRoutes({ '/api/projects': three }));
+  const { openBurstDialog } = await import(`../public/v2/pages/plan-dialogs.js?bu5=${Date.now()}`);
+  openBurstDialog({ projectId: 'p3' });
+  await settle(); await settle();
+  await flush(); await settle();
+  let plan = calls.filter((c) => c.path === '/api/bursts/plan').pop();
+  assert.deepEqual(plan?.body.projectIds, ['p3'], 'scoped to the row it was opened from');
+  assert.equal(checkedNames().length, 1);
+  assert.match(checkedNames()[0], /trip-planner/);
+
+  // An id that is not eligible (paused) must not be smuggled in.
+  mountDom();
+  calls = mockFetch(burstRoutes({ '/api/projects': three }));
+  openBurstDialog({ projectId: 'p2' });
+  await settle(); await settle();
+  await flush(); await settle();
+  assert.equal(calls.filter((c) => c.path === '/api/bursts/plan').length, 0, 'a paused project is never planned');
+  assert.equal(checkedNames().length, 0);
+
+  mountDom();
+  calls = mockFetch(burstRoutes({ '/api/projects': three }));
+  openBurstDialog({});
+  await settle(); await settle();
+  await flush(); await settle();
+  plan = calls.filter((c) => c.path === '/api/bursts/plan').pop();
+  assert.deepEqual(plan?.body.projectIds, ['p1', 'p3'], 'no projectId: every eligible project, as before');
+});

@@ -9,30 +9,29 @@
 // POST /api/projects/:id/poll, GET /api/bursts, POST /api/bursts/:id/cancel.
 // No new endpoint was needed for this page.
 //
-// THE ONE THING THIS PAGE MUST NOT GET WRONG: activation is the airlock.
-// Nothing here may flip a project to `active` as a side effect of anything
-// else — not registering, not discovering, not polling. There is exactly one
-// call site for `{ state: 'active' }` below, it is behind an explicit confirm
-// that spells out the consequence, and the server raises a Touch ID approval
-// on top of that. See server.js's PUT /api/projects/:id comment.
-import { api, failureToast, degradedReason, guardedSubmit } from '../api.js';
-import { $, el, clear, pageHead, iconBtn, toast, setDisabledReason, asOfEl } from '../ui.js';
+// Since claude-scheduler-btv.20 this is a Browser (docs/design/launchbox.md
+// §5): one action at rest per row, Burst…, and the row opens the Project page,
+// which owns Poll now / Pause / Activate / Remove.
+//
+// THE ONE THING THIS PAGE MUST NOT GET WRONG: activation is the airlock, and
+// this page has no call site for it at all. Nothing here may flip a project to
+// `active` — not registering, not discovering, not bursting. The only
+// `{ state: 'active' }` in /v2 is on the Project page, behind a confirm, and
+// the server raises a Touch ID approval on top of that.
+import { api, failureToast, degradedReason } from '../api.js';
+import { $, el, clear, pageHead, toast, setDisabledReason, asOfEl } from '../ui.js';
 import { onRender } from '../router.js';
 import {
-  fmtTime, fmtDate, projectActions, summaryBits, cardBanner,
-  burstSummary, burstProjectIds, chipFor, filterProjects, listSubline,
+  fmtTime, burstSummary, burstProjectIds, listSubline, groupProjects, rowBurst, rowProblem,
 } from './projects-logic.js';
 import { openBurstDialog } from './plan-dialogs.js';
 
 const POLL_MS = 5000;
 
-const SVG_SEARCH_SM = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7L10 5H5a2 2 0 0 0-2 2Z"/></svg>';
 const SVG_DISCOVER = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>';
 const SVG_BOLT = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h7l-1 8 10-12h-7z"/></svg>';
 const SVG_WARN = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></svg>';
-const SVG_CLOCK = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>';
 const SVG_FOLDER = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7L10 5H5a2 2 0 0 0-2 2Z"/></svg>';
-const SVG_TRASH = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>';
 
 // The audit disclosure is a constraint, not a nicety: a completed bead appends
 // a line to the repo's git-tracked .beads/interactions.jsonl and that cannot
@@ -44,7 +43,7 @@ const AUDIT_FALLBACK = 'When the scheduler closes a bead, bd appends one line to
   + '.beads/interactions.jsonl in that repo. That file is git-tracked and the append cannot be '
   + 'suppressed, so expect one modified file per completed bead. It is an audit trail, not damage.';
 
-const state = { data: null, burst: null, query: '', asOf: null, listHost: null };
+const state = { data: null, burst: null, pauseMode: 'off', asOf: null, adding: false };
 // True only while this page owns #v2-page. See render()'s guard.
 let mounted = false;
 let pollTimer = null;
@@ -73,100 +72,17 @@ async function loadAndRender() {
   } catch {
     // 503 when this process has no burst engine; leave whatever we had.
   }
+  try {
+    // A burst started while paused would plan and then start nothing, so the
+    // Burst buttons say so up front (rowBurst). Unknown mode leaves the last.
+    state.pauseMode = (await api('GET', '/api/pause'))?.mode ?? state.pauseMode;
+  } catch {
+    // leave whatever we had
+  }
   render();
 }
 
 // ---------------- actions ----------------
-
-// The airlock's confirm. Spelled out rather than "Are you sure?" because this
-// is the only click in /v2 that lets a repo's backlog start running itself.
-function confirmActivate(p) {
-  const label = p.config?.autoLabel;
-  // eslint-disable-next-line no-alert
-  return window.confirm(`Activate "${p.name}"?\n\n`
-    + `From now on LaunchBox will start ready beads from ${p.path} on its own, unattended — `
-    + `every bead that is open, unblocked and carries the ${label ? `"${label}"` : 'configured autoLabel'} `
-    + `label, with no further prompt, including while you are away from the machine.\n\n`
-    + `Registering and discovering a project run nothing; this is the step that does.\n\n`
-    + `Pause stops it again at any time.`);
-}
-
-async function activateProject(p, btn) {
-  if (!confirmActivate(p)) return;
-  let out = null;
-  const ok = await guardedSubmit(btn, async () => {
-    out = await api('PUT', `/api/projects/${p.id}`, { state: 'active' });
-  }, toast);
-  if (!ok) return;
-  // Activating something that still cannot contribute is legal and common (no
-  // autoLabel, bd missing). Say so now rather than leaving the reader to
-  // wonder later why an active project never does anything.
-  const why = [...(out?.reasons ?? []), ...(out?.warnings ?? [])];
-  toast(why.length ? `Activated, but nothing will run yet — ${why.join(' · ')}` : `"${p.name}" is active`, why.length ? '' : 'ok');
-}
-
-async function deleteProject(p) {
-  // eslint-disable-next-line no-alert
-  if (!window.confirm(`Stop tracking "${p.name}"?\n\n`
-    + 'The repo and its beads are left exactly as they are — this only stops LaunchBox looking at '
-    + 'them, and deletes the per-bead job rows (with their run history) it created for this project.')) return;
-  try {
-    const out = await api('DELETE', `/api/projects/${p.id}`);
-    toast(`Stopped tracking "${p.name}"${out?.removedJobs ? ` · ${out.removedJobs} bead job row${out.removedJobs === 1 ? '' : 's'} dropped` : ''}`);
-  } catch (err) {
-    // 409 means a bead of this project is leased to a live run right now.
-    // Forcing abandons that lease, so the ids are named before asking again.
-    if (err.status !== 409) {
-      toast(failureToast(err) ?? 'could not stop tracking that project', 'err');
-      return;
-    }
-    const held = err.data?.held ?? [];
-    // eslint-disable-next-line no-alert
-    if (!window.confirm(`${held.length || 'Some'} bead${held.length === 1 ? '' : 's'} from "${p.name}" `
-      + `${held.length === 1 ? 'is' : 'are'} still leased to a run: ${held.join(', ')}\n\n`
-      + `Removing now abandons ${held.length === 1 ? 'that lease' : 'those leases'} — the run keeps going, `
-      + 'but LaunchBox stops tracking the bead.\n\nRemove anyway?')) return;
-    try {
-      await api('DELETE', `/api/projects/${p.id}`, { force: true });
-      toast(`Stopped tracking "${p.name}" — ${held.length} lease${held.length === 1 ? '' : 's'} abandoned`);
-    } catch (err2) {
-      toast(failureToast(err2) ?? 'could not stop tracking that project', 'err');
-    }
-  }
-}
-
-// A poll can start runs on an ACTIVE project — that is what active means — but
-// it changes no state, so it is not a way around the airlock: a pending project
-// answers `skipped` with the reason. Reported verbatim rather than summarised
-// to "done", because "3 ready · started 0" with no reason is exactly the silent
-// nothing this tab exists to prevent.
-function pollSummary(r) {
-  if (r.skipped === true) return `Not polled — ${r.reasons?.join(' · ') || 'nothing to do'}`;
-  if (r.busy) return `Beads database busy${r.consecutive > 1 ? ` (${r.consecutive} polls in a row)` : ''} — will retry`;
-  if (!r.ok) return `Poll failed — ${r.reasons?.join(' · ') || 'unknown reason'}`;
-  const held = r.held ? ['nothing started: the schedule is paused'] : [];
-  const refused = (Array.isArray(r.skipped) ? r.skipped : []).map((s) => `${s.beadId}: ${s.reason}`);
-  return [`${r.ready?.length ?? 0} ready · started ${r.started?.length ?? 0}`,
-    ...held, ...refused, ...(r.reasons ?? []), ...(r.warnings ?? [])].join(' · ');
-}
-
-async function onAction(p, act, btn) {
-  try {
-    if (act === 'activate') {
-      await activateProject(p, btn);
-    } else if (act === 'pause') {
-      await api('PUT', `/api/projects/${p.id}`, { state: 'paused' });
-      toast(`"${p.name}" paused — nothing new starts from it`);
-    } else if (act === 'poll') {
-      toast(pollSummary(await api('POST', `/api/projects/${p.id}/poll`)), '', 8000);
-    } else if (act === 'delete') {
-      await deleteProject(p);
-    }
-  } catch (err) {
-    toast(failureToast(err) ?? `${act} failed`, 'err');
-  }
-  loadAndRender();
-}
 
 async function registerProject(input) {
   const path = input.value.trim();
@@ -214,83 +130,72 @@ async function cancelBurst(id) {
 
 // ---------------- pieces ----------------
 
-function chipEl(meta) {
-  return el('span', { class: `state state--${meta.cls}` }, [
-    el('span', { class: `state__dot ${meta.dot}`.trim() }),
-    meta.label,
-  ]);
+// One row per project (Option 2 of docs/design/mockups/projects-flavours.html):
+// name + one meta line, the ready count, and at most one action — Burst…. The
+// whole row opens the Project page, where Poll now / Pause / Remove now live.
+function burstCell(p, ctx) {
+  const b = rowBurst(p, ctx);
+  if (!b) return el('span', { class: 'p2-act' });
+  // Disabled for a business reason (pause, a live burst), so it carries no
+  // data-mutating: the degraded-state sweep must not revive it.
+  const btn = el('button', {
+    class: 'btn',
+    disabled: b.disabled,
+    'data-mutating': b.disabled ? null : true,
+    'data-tip': b.tip,
+  }, [svgNode(SVG_BOLT), 'Burst…']);
+  if (!b.disabled) btn.addEventListener('click', () => openBurstDialog({ projectId: p.id, onStarted: loadAndRender }));
+  return el('span', { class: 'p2-act' }, btn);
 }
 
-const BANNER_ICON = { busy: SVG_CLOCK, error: SVG_WARN, warn: SVG_WARN };
-
-function bannerEl(banner) {
-  return el('div', { class: 'banner' }, [
-    svgNode(BANNER_ICON[banner.kind] ?? SVG_WARN),
-    el('span', {}, [el('b', {}, banner.title), ' ', banner.body]),
-  ]);
+function readyCell(p) {
+  if (p.state === 'paused') return el('span', { class: 'p2-ready t-meta' }, 'not polled');
+  if (p.state === 'pending') return el('span', { class: 'p2-ready t-meta' }, 'not activated');
+  const count = p.ready?.count;
+  return el('span', { class: 'p2-ready' }, count == null
+    ? el('span', { class: 't-meta' }, 'ready unknown')
+    : [el('b', {}, String(count)), ' ', el('span', { class: 't-meta' }, 'ready')]);
 }
 
-function actionButtons(p) {
-  const nodes = [];
-  for (const a of projectActions(p)) {
-    const btn = el('button', {
-      class: a.primary ? 'btn btn--primary' : 'btn btn--ghost',
-      'data-mutating': true,
-      'data-tip': a.tip,
-      'data-act': a.act,
-    }, a.label);
-    btn.addEventListener('click', () => onAction(p, a.act, btn));
-    nodes.push(btn);
-  }
-  nodes.push(el('a', { class: 'btn btn--ghost', href: `#project?id=${encodeURIComponent(p.id)}` }, 'Open project'));
-  const del = iconBtn({
-    label: `Stop tracking ${p.name}`,
-    tip: 'Stop tracking this repo — the repo and its beads are left alone',
-    svgHtml: SVG_TRASH,
-    'data-mutating': true,
-  });
-  del.addEventListener('click', () => onAction(p, 'delete', del));
-  nodes.push(del);
-  return el('div', { class: 'pagehead__actions' }, nodes);
-}
-
-function projectCard(p, { burstIds, pollSec }) {
-  const banner = cardBanner(p);
-  const bodyParts = [];
-
-  if (p.state === 'pending') {
-    const registered = fmtDate(p.createdAt);
-    bodyParts.push(el('p', { class: 't-meta', style: 'margin: 0 0 10px;' },
-      // "Discovered on 29 Jul" in the mockup — but discovery and hand
-      // registration both just create the row, and nothing records which did
-      // it, so this says the half that is true.
-      `${registered ? `Registered on ${registered} ` : 'Registered '}with a committed .scheduler.json. `
-      + 'LaunchBox will not touch it until you activate it.'));
-  } else {
-    bodyParts.push(el('span', { class: 't-meta' }, summaryBits(p, { pollSec }).join(' · ')));
-  }
-
-  for (const r of p.reasons ?? []) {
-    // explain()'s sentences are already plain-language and non-duplicating;
-    // the banner above covers config/poll faults, so these are the remaining
-    // "why this contributes nothing" lines.
-    if (banner && banner.body.includes(r)) continue;
-    bodyParts.push(el('div', { class: 't-meta' }, r));
-  }
-  for (const w of p.warnings ?? []) bodyParts.push(el('div', { class: 't-meta' }, w));
-  if (banner) bodyParts.push(bannerEl(banner));
-
-  return el('section', { class: 'card', style: 'margin-bottom: 16px;', 'data-project-id': p.id }, [
-    el('div', { class: 'card__head' }, [
-      chipEl(chipFor(p, burstIds)),
-      el('h2', {}, el('a', { href: `#project?id=${encodeURIComponent(p.id)}`, style: 'color:inherit;' }, p.name)),
-      el('span', { class: 't-meta mono' }, p.path),
-      actionButtons(p),
+function projectRow(p, ctx) {
+  const href = `#project?id=${encodeURIComponent(p.id)}`;
+  const problem = rowProblem(p);
+  const meta = [
+    problem ? el('span', { class: 'p2-issue' }, problem) : null,
+    problem ? ' · ' : null,
+    el('span', { class: 'mono' }, p.path),
+    ctx.burstIds.has(p.id) ? ' · in burst' : null,
+  ];
+  const row = el('div', { class: 'p2-row', 'data-project-id': p.id, style: 'cursor:pointer;' }, [
+    el('span', { class: 'p2-row__name' }, [
+      el('a', { href, style: 'color:inherit;' }, el('b', {}, p.name)),
+      el('div', { class: 't-meta' }, meta),
     ]),
-    el('div', { class: 'card__body', style: p.state === 'pending' ? null : 'padding: 12px 18px;' }, bodyParts),
+    readyCell(p),
+    burstCell(p, ctx),
   ]);
+  // The name is the real link (keyboard, middle-click); the rest of the row is
+  // a pointer convenience. The Burst button handles its own click.
+  row.addEventListener('click', (e) => {
+    if (e.target.closest('a, button')) return;
+    location.hash = href;
+  });
+  return row;
 }
 
+function projectGroups(projects) {
+  const ctx = {
+    burstIds: burstProjectIds(state.burst),
+    burstLive: !!state.burst,
+    pauseMode: state.pauseMode,
+  };
+  const nodes = [];
+  for (const g of groupProjects(projects)) {
+    nodes.push(el('div', { class: 'p2-group t-eyebrow' }, g.label));
+    nodes.push(el('section', { class: 'card p2-list' }, g.projects.map((p) => projectRow(p, ctx))));
+  }
+  return nodes;
+}
 function burstStrip() {
   const b = burstSummary(state.burst);
   if (!b) return null;
@@ -317,7 +222,14 @@ function burstStrip() {
   ]);
 }
 
-function toolbar() {
+// Register + Discover sit behind one footer link (launchbox.md §7, 2026-09-26):
+// adding a project is rare, reading the list is the job.
+function addSection() {
+  if (!state.adding) {
+    const link = el('a', { href: '#projects' }, 'Add a project…');
+    link.addEventListener('click', (e) => { e.preventDefault(); state.adding = true; render(); });
+    return el('div', { class: 'p2-foot t-meta' }, [link, ' — register a repo by path, or discover in project roots']);
+  }
   const input = el('input', {
     type: 'text', id: 'projects-path',
     placeholder: 'Register a repo by path — it needs a committed .scheduler.json',
@@ -325,20 +237,19 @@ function toolbar() {
   const register = el('button', { class: 'btn', 'data-mutating': true }, 'Register');
   register.addEventListener('click', () => registerProject(input));
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') registerProject(input); });
-  return el('div', { class: 'toolbar' }, [
-    el('label', { class: 'search', style: 'max-width: 480px;' }, [svgNode(SVG_FOLDER), input]),
-    register,
+  const discoverBtn = el('button', { class: 'btn', 'data-mutating': true }, [svgNode(SVG_DISCOVER), 'Discover in project roots']);
+  discoverBtn.addEventListener('click', discoverProjects);
+  setDisabledReason(discoverBtn, degradedReason());
+  return el('div', { class: 'p2-foot' }, [
+    el('div', { class: 'toolbar' }, [
+      el('label', { class: 'search', style: 'max-width: 480px;' }, [svgNode(SVG_FOLDER), input]),
+      register,
+      discoverBtn,
+    ]),
+    el('p', { class: 't-meta', style: 'margin: 6px 0 0;' },
+      'Registering and discovering run nothing; activation is a separate click on the project\'s page.'),
   ]);
 }
-
-function filterBar() {
-  const search = el('input', { type: 'text', id: 'projects-search', placeholder: 'Filter by name or path…', value: state.query });
-  search.addEventListener('input', () => { state.query = search.value; renderList(); });
-  return el('div', { class: 'toolbar' }, [
-    el('label', { class: 'search', style: 'max-width: 360px;' }, [svgNode(SVG_SEARCH_SM), search]),
-  ]);
-}
-
 function emptyCard(data) {
   const roots = data?.roots ?? [];
   return el('section', { class: 'card' }, el('div', { class: 'card__body' }, el('div', { class: 'blank', style: 'border:0;background:transparent;padding:24px 8px;' }, [
@@ -358,19 +269,6 @@ function emptyCard(data) {
   ])));
 }
 
-function noMatchCard(total) {
-  const clearBtn = el('button', { class: 'btn' }, 'Clear the filter');
-  clearBtn.addEventListener('click', () => { state.query = ''; render(); });
-  return el('section', { class: 'card' }, el('div', { class: 'card__body' }, el('div', { class: 'blank', style: 'border:0;background:transparent;padding:22px 8px;' }, [
-    el('span', { class: 'blank__icon', html: SVG_DISCOVER }),
-    el('div', {}, [
-      el('h4', {}, `No project matches "${state.query}"`),
-      el('p', {}, `Names and paths of all ${total} registered projects were checked.`),
-      el('div', { class: 'blank__act' }, [clearBtn]),
-    ]),
-  ])));
-}
-
 // The whole-tab failure banner. `bd` missing breaks every project at once, so
 // it is reported once for the tab rather than repeated as a per-row poll
 // failure on every card.
@@ -383,21 +281,6 @@ function bdBanner(data) {
       ` ${data.bd.error} — no project can be polled until this is fixed.`,
     ]),
   ]);
-}
-
-function renderList() {
-  const host = state.listHost;
-  if (!host) return;
-  clear(host);
-  const projects = state.data?.projects ?? [];
-  const filtered = filterProjects(projects, state.query);
-  if (!filtered.length) {
-    host.appendChild(noMatchCard(projects.length));
-    return;
-  }
-  const burstIds = burstProjectIds(state.burst);
-  const pollSec = state.data?.pollSec ?? null;
-  for (const p of filtered) host.appendChild(projectCard(p, { burstIds, pollSec }));
 }
 
 // ---------------- top-level render ----------------
@@ -432,34 +315,27 @@ function render() {
   // the DETAIL page under the Projects route, and the reverse going back.
   if (!mounted) return;
 
-  const prevSearch = $('#projects-search');
-  const hadFocus = !!prevSearch && document.activeElement === prevSearch;
-  const selStart = hadFocus ? prevSearch.selectionStart : null;
-
   clear(page);
-  state.listHost = null;
 
   const data = state.data;
   const projects = data?.projects ?? [];
 
-  // D2 (claude-scheduler-btv.12) owns the burst planner dialog. Until it
-  // lands the button is present and honestly dead rather than absent —
-  // the same treatment jobs.js gives "Plan burn-down…".
-  // Disabled ONLY while a burst is live — that is a business fact, not a
-  // connectivity one, so it deliberately carries no data-mutating attribute:
-  // the central degraded-state sweep must not revive it when the daemon comes
-  // back while a burst is still running.
+  // "Burst all active…" keeps the all-projects scope of the planner; each
+  // row's Burst… scopes it to one. Disabled only for business reasons (a live
+  // burst, a global pause), so it carries no data-mutating while disabled: the
+  // degraded-state sweep must not revive it.
+  const all = state.burst
+    ? { disabled: true, tip: 'A burst is already running — cancel it first' }
+    : state.pauseMode && state.pauseMode !== 'off'
+      ? { disabled: true, tip: `The schedule is paused (${state.pauseMode}). Set pause to Off to burst.` }
+      : { disabled: false, tip: 'Spend a fixed slice of your limit on every active project\'s ready beads, then stop' };
   const burstBtn = el('button', {
     class: 'btn',
-    disabled: !!state.burst,
-    'data-mutating': state.burst ? null : true,
-    'data-tip': state.burst
-      ? 'A burst is already running — cancel it first'
-      : 'Spend a fixed slice of your limit on ready beads, then stop',
-  }, [svgNode(SVG_BOLT), 'Start a burst…']);
-  if (!state.burst) burstBtn.addEventListener('click', () => openBurstDialog({ onStarted: loadAndRender }));
-  const discoverBtn = el('button', { class: 'btn', 'data-mutating': true }, [svgNode(SVG_DISCOVER), 'Discover in project roots']);
-  discoverBtn.addEventListener('click', discoverProjects);
+    disabled: all.disabled,
+    'data-mutating': all.disabled ? null : true,
+    'data-tip': all.tip,
+  }, [svgNode(SVG_BOLT), 'Burst all active…']);
+  if (!all.disabled) burstBtn.addEventListener('click', () => openBurstDialog({ onStarted: loadAndRender }));
 
   page.appendChild(pageHead({
     title: 'Projects',
@@ -467,7 +343,7 @@ function render() {
     // this card reading "Loading…" directly above "Could not read your
     // projects", which contradicts itself.
     sub: data ? listSubline(data).join(' · ') : 'Not loaded',
-    actions: [burstBtn, discoverBtn],
+    actions: [burstBtn],
   }));
 
   if (!data) {
@@ -478,46 +354,19 @@ function render() {
   const bd = bdBanner(data);
   if (bd) page.appendChild(bd);
 
-  page.appendChild(toolbar());
-
   const strip = burstStrip();
   if (strip) page.appendChild(strip);
 
-  page.appendChild(el('p', { class: 't-meta', style: 'margin: 0 0 14px;' }, [
-    'An ', el('b', {}, 'active'), ' project lets LaunchBox claim ready beads, run them in disposable '
-      + 'worktrees, and write results back to that repo\'s tracker. Registering and configuring can be '
-      + 'automated; ', el('b', {}, 'activation is always your click'), ' and asks for Touch ID.',
-  ]));
+  if (!projects.length) page.appendChild(emptyCard(data));
+  else for (const n of projectGroups(projects)) page.appendChild(n);
 
-  if (!projects.length) {
-    page.appendChild(emptyCard(data));
-  } else {
-    if (projects.length > 4) page.appendChild(filterBar());
-    const listHost = el('div', { id: 'projects-list-host' });
-    page.appendChild(listHost);
-    state.listHost = listHost;
-    renderList();
-  }
+  page.appendChild(addSection());
 
   page.appendChild(el('p', { class: 'pagefoot' }, [
     data.auditNote || AUDIT_FALLBACK,
     state.asOf ? ' · ' : null,
     state.asOf ? asOfEl(state.asOf) : null,
   ]));
-
-  // The delete iconbtn and every action button carry data-mutating, so
-  // main.js's central sweep covers them on render. The burst-planner button
-  // is disabled for a reason of its own and must NOT be revived by that
-  // sweep, which is why it carries no data-mutating attribute.
-  setDisabledReason(discoverBtn, degradedReason());
-
-  if (hadFocus) {
-    const s = $('#projects-search');
-    if (s) {
-      s.focus();
-      if (selStart != null) s.setSelectionRange(selStart, selStart);
-    }
-  }
 }
 
 function ensureRouteWatcher() {
