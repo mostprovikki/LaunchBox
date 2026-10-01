@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  parseSessionFile, readConversation, discoverSessionFiles, parseTs,
+  parseSessionFile, readConversation, discoverSessionFiles, parseTs, readSessionImage,
   looksLikeRealPrompt, processImageAnnotations, cleanPrompt, decodeProjectDir,
   INTERACTIVE_ENTRYPOINTS, liveSubagentCount, subagentFinished,
   capTurnsForClient,
@@ -481,6 +481,46 @@ test('an image-only user turn becomes a note, and a pluralised one', async () =>
   });
   const turns = await readConversation(fixture([img(1), img(3)]).file);
   assert.deepEqual(turns.map((t) => t.note), ['[1 pasted image]', '[3 pasted images]']);
+});
+
+// claude-scheduler-56m: pasted images are shown in the v2 transcript. Each user
+// turn names its images by row uuid + index among that row's inline images, and
+// readSessionImage() resolves that ref back to the stored bytes — nothing is
+// written anywhere; the base64 already lives in the session file.
+const UUID_A = '3852901b-397e-4f95-a9e1-b31f783e5d16';
+const UUID_B = 'ed7cd694-372c-4fee-8db1-4541f6a4788d';
+const imgBlock = (data, media_type = 'image/jpeg') => ({ type: 'image', source: { type: 'base64', media_type, data } });
+
+test('a user turn carries refs to its inline images — with text too, which used to drop them', async () => {
+  const { file } = fixture([
+    { type: 'user', uuid: UUID_A, timestamp: 't', message: { content: [{ type: 'text', text: 'what is wrong here?' }, imgBlock('AAA'), imgBlock('BBB')] } },
+    { type: 'user', uuid: UUID_B, timestamp: 't', message: { content: [imgBlock('CCC')] } },
+  ]);
+  const turns = await readConversation(file);
+  assert.equal(turns[0].text, 'what is wrong here?');
+  assert.deepEqual(turns[0].images, [{ uuid: UUID_A, i: 0 }, { uuid: UUID_A, i: 1 }]);
+  assert.equal(turns[1].note, '[1 pasted image]', 'the note stays as the fallback text');
+  assert.deepEqual(turns[1].images, [{ uuid: UUID_B, i: 0 }]);
+});
+
+test('a row without a uuid gets no image refs — there would be nothing to resolve them by', async () => {
+  const { file } = fixture([{ type: 'user', timestamp: 't', message: { content: [imgBlock('AAA')] } }]);
+  const [turn] = await readConversation(file);
+  assert.equal(turn.note, '[1 pasted image]');
+  assert.equal('images' in turn, false);
+});
+
+test('readSessionImage resolves uuid + index to the stored bytes, and null for anything else', async () => {
+  const { file } = fixture([
+    { type: 'user', uuid: UUID_A, timestamp: 't', message: { content: [{ type: 'text', text: 'x' }, imgBlock('AAA'), imgBlock('BBB', 'image/png')] } },
+    { type: 'assistant', uuid: UUID_B, timestamp: 't', message: { content: [imgBlock('ZZZ')] } },
+  ]);
+  assert.deepEqual(await readSessionImage(file, UUID_A, 1), { mediaType: 'image/png', data: 'BBB' });
+  assert.deepEqual(await readSessionImage(file, UUID_A, 0), { mediaType: 'image/jpeg', data: 'AAA' });
+  assert.equal(await readSessionImage(file, UUID_A, 2), null, 'out of range');
+  assert.equal(await readSessionImage(file, UUID_B, 0), null, 'only user rows — the refs only ever name those');
+  assert.equal(await readSessionImage(file, 'no-such-uuid', 0), null);
+  assert.equal(await readSessionImage('/nope/gone.jsonl', UUID_A, 0), null);
 });
 
 test('an unreadable transcript is empty, never an exception', async () => {

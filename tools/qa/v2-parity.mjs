@@ -37,6 +37,14 @@ export const ACCEPTED = Object.freeze([
       + 'is lost; the call is simply not made from the browser.',
   },
   {
+    endpoint: '/api/sessions/:id/image/:id/:id',
+    side: 'v2-only',
+    status: 'additive by design',
+    why: 'claude-scheduler-56m. Pasted images in the v2 session transcript, addressed by row uuid '
+      + '+ index and decoded from the session file on demand. The existing UI never showed '
+      + 'transcript images, so there is nothing for it to lose at cutover.',
+  },
+  {
     endpoint: '/api/v2/overview',
     side: 'v2-only',
     status: 'additive by design',

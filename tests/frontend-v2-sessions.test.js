@@ -529,6 +529,59 @@ test('jsdom: the outcome fact states the marker was seen, never what the schedul
   assert.match(page.textContent, /snapshot of the file as it was read, not a live tail/);
 });
 
+// claude-scheduler-56m: pasted images render inside the user's bubble. <img src>
+// cannot carry the bearer token, so each image is fetched with it and shown
+// from a blob: URL; a failed fetch leaves a text label, never a broken image.
+test('jsdom: pasted images render in the user bubble, fetched with the token; a failed one says so', async () => {
+  mountDom();
+  localStorage.setItem('cs.token', 'a'.repeat(64));
+  const U = '3852901b-397e-4f95-a9e1-b31f783e5d16';
+  const V = 'ed7cd694-372c-4fee-8db1-4541f6a4788d';
+  const turns = [
+    { role: 'user', text: 'why is this card cut off?', images: [{ uuid: U, i: 0 }, { uuid: U, i: 1 }], t: '2026-08-01T23:12:00' },
+    { role: 'user', note: '[1 pasted image]', images: [{ uuid: V, i: 0 }], t: '2026-08-01T23:13:00' },
+    { role: 'assistant', text: 'The grid track.', t: '2026-08-01T23:14:00' },
+  ];
+  mockFetch(transcriptRoutes({ [`/api/sessions/${SESSION.id}/conversation`]: { session: SESSION, turns } }));
+  const jsonFetch = global.fetch;
+  const imageCalls = [];
+  global.fetch = async (path, opts = {}) => {
+    const m = /\/image\/([^/]+)\/(\d+)$/.exec(path);
+    if (!m) return jsonFetch(path, opts);
+    imageCalls.push({ path, auth: opts.headers?.Authorization });
+    if (m[1] === U && m[2] === '1') return { ok: false, status: 404, text: async () => '{}' };
+    return { ok: true, status: 200, blob: async () => new window.Blob(['png'], { type: 'image/png' }) };
+  };
+  let made = 0;
+  window.URL.createObjectURL = () => `blob:http://localhost/img-${++made}`;
+  window.URL.revokeObjectURL = () => {};
+  global.URL.createObjectURL = window.URL.createObjectURL;
+  global.URL.revokeObjectURL = window.URL.revokeObjectURL;
+
+  const { default: session } = await import(`../public/v2/pages/session.js?img=${Date.now()}`);
+  session(new URLSearchParams(`id=${SESSION.id}`));
+  for (let k = 0; k < 8; k++) await settle();
+
+  const users = [...document.querySelectorAll('#v2-page .msg--user')];
+  assert.equal(users.length, 2);
+  assert.match(users[0].textContent, /why is this card cut off\?/, 'the text still renders');
+  const imgs0 = [...users[0].querySelectorAll('img')];
+  assert.equal(imgs0.length, 1, 'the image that loaded is an <img>');
+  assert.match(imgs0[0].getAttribute('src'), /^blob:/);
+  assert.match(imgs0[0].getAttribute('alt'), /Pasted image 1 of 2/);
+  assert.match(users[0].textContent, /Image 2 of 2 is not available/, 'the failed one leaves a label');
+  const imgs1 = [...users[1].querySelectorAll('img')];
+  assert.equal(imgs1.length, 1);
+  assert.ok(!/\[1 pasted image\]/.test(users[1].textContent), 'the note gives way to the image itself');
+
+  assert.deepEqual(imageCalls.map((c) => c.path).sort(), [
+    `/api/sessions/${SESSION.id}/image/${U}/0`,
+    `/api/sessions/${SESSION.id}/image/${U}/1`,
+    `/api/sessions/${SESSION.id}/image/${V}/0`,
+  ].sort());
+  for (const c of imageCalls) assert.equal(c.auth, `Bearer ${'a'.repeat(64)}`, 'every image fetch carries the token');
+});
+
 test('jsdom: a transcript whose file cannot be read still shows the indexed summary', async () => {
   mountDom();
   mockFetch(transcriptRoutes({ [`/api/sessions/${SESSION.id}/conversation`]: 404 }));

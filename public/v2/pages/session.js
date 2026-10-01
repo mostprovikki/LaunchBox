@@ -15,7 +15,7 @@
 // bead or handed it back is not persisted anywhere (claude-scheduler-dc9), so
 // the mockup's "bead wb-142 closed by the scheduler after the marker was seen"
 // is not rendered. See sessions-logic.js's header for the full list.
-import { api, failureToast } from '../api.js';
+import { api, apiBlobUrl, failureToast } from '../api.js';
 import { $, el, clear, pageHead, toast } from '../ui.js';
 import { onRender } from '../router.js';
 import {
@@ -209,6 +209,41 @@ function proseNodes(text) {
     .map((p) => el('p', {}, p));
 }
 
+// ---------------- pasted images (claude-scheduler-56m) ----------------
+// Each user turn may name inline images by row uuid + index. They are fetched
+// with the token into blob: URLs, cached per session for re-renders, and
+// revoked when the page moves to another session. Nothing is written to disk:
+// the server decodes the base64 already stored in the session file.
+const imageUrls = new Map(); // `${uuid}/${i}` -> Promise<string|null>
+
+function forgetImages() {
+  for (const p of imageUrls.values()) p.then((u) => u && URL.revokeObjectURL(u));
+  imageUrls.clear();
+}
+
+function imageUrl(ref) {
+  const key = `${ref.uuid}/${ref.i}`;
+  if (!imageUrls.has(key)) {
+    const path = `/api/sessions/${encodeURIComponent(state.id)}/image/${encodeURIComponent(ref.uuid)}/${ref.i}`;
+    imageUrls.set(key, apiBlobUrl(path).catch(() => null));
+  }
+  return imageUrls.get(key);
+}
+
+function turnImages(images) {
+  const wrap = el('div', { class: 'msg__imgs' });
+  images.forEach((ref, n) => {
+    const label = `Pasted image ${n + 1} of ${images.length}`;
+    const slot = el('div', { class: 'msg__img-slot t-meta' }, `Loading image ${n + 1} of ${images.length}…`);
+    wrap.appendChild(slot);
+    imageUrl(ref).then((url) => {
+      if (url) slot.replaceWith(el('img', { class: 'msg__img', src: url, alt: label, loading: 'lazy' }));
+      else slot.textContent = `Image ${n + 1} of ${images.length} is not available`;
+    });
+  });
+  return wrap;
+}
+
 function messageBlock(who, isUser, children) {
   return el('div', { class: `msg${isUser ? ' msg--user' : ''}` }, [
     el('span', { class: 'msg__who' }, who),
@@ -228,7 +263,13 @@ function renderTurns(turns) {
   for (const turn of turns) {
     if (turn.role === 'user') {
       closeAssistant();
-      const body = turn.text ? proseNodes(turn.text) : [el('p', { class: 't-meta' }, turn.note ?? '(empty turn)')];
+      const hasImages = Array.isArray(turn.images) && turn.images.length > 0;
+      // An image-only turn's "[N pasted images]" note is only a stand-in for the
+      // images themselves, so it goes when they can be shown.
+      const body = turn.text ? proseNodes(turn.text)
+        : hasImages ? []
+          : [el('p', { class: 't-meta' }, turn.note ?? '(empty turn)')];
+      if (hasImages) body.push(turnImages(turn.images));
       out.push(messageBlock('You', true, body));
       continue;
     }
@@ -433,6 +474,7 @@ export default function session(params) {
   ensureRouteWatcher();
   const id = params.get('id');
   if (id !== state.id) {
+    forgetImages();
     Object.assign(state, { id, session: null, turns: null, jobs: [], failed: false, armed: false });
   }
   // The shell first: reading a transcript is a file parse that can take a
