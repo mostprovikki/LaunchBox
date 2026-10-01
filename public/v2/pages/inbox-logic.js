@@ -5,8 +5,9 @@
 // Input is GET /api/v2/inbox (lib/inbox.js): `waiting` rows are unmerged
 // scheduler branches (lib/branches.js list() + projectId/projectName);
 // `handedBack` rows are beads whose latest run came back handed-back or
-// stranded. Neither carries the bead title yet, so a waiting item is titled by
-// its tip commit and a handed-back one by its short id.
+// stranded. Both carry `title` from the bead's job row (btv.26); it is null
+// for a bead the scheduler never minted a job for, and only then does a
+// waiting item fall back to its tip commit and a handed-back one to its short id.
 import { statusMeta } from '../state-vocab.js';
 
 const pad2 = (n) => String(n).padStart(2, '0');
