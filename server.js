@@ -643,7 +643,7 @@ export function createApp({
 
   // lib/runner.js's overlap guard (createRunner's start()) inserts a
   // zero-duration `skipped` run the instant a job fires while its own
-  // previous run is still active — correct (WIP.md's pinned "already-running
+  // previous run is still active — correct (the pinned "already-running
   // wins, no skipReason" behaviour, see tests/api.test.js's soft-pause test —
   // do not re-judge that here). But that stub's createdAt is *later* than the
   // real run's, so a plain "most recent by createdAt" reports the job's state

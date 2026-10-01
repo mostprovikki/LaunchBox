@@ -66,10 +66,11 @@ left as-is and corrected here instead. Two of its rules do not hold in this repo
   `~/.claude/projects/<slug>/memory/` is where cross-session lessons live, and it is
   indexed by `MEMORY.md`. Keep writing there. `bd remember` is repo-scoped and is not a
   substitute for it.
-- **`WIP.md` is not a TODO list to be replaced.** It is this project's narrative record —
-  what was tried, what was measured, what was wrong and why. Beads now holds the *open
-  work items* and is the source of truth for status; WIP.md keeps the reasoning that a
-  bead title cannot carry. Expect to update both: the bead for state, WIP.md for evidence.
+- **`WIP.md` holds only work in progress** (owner, 2026-10-01). While a bead is being
+  worked, its reasoning — what was tried, measured, wrong and why — may live there. When
+  the bead closes, the evidence goes in the bead's close note (tests, mutations, commit
+  range, live check) and the WIP.md entry is deleted. Finished history is git's job, not
+  this file's; cross-session lessons go to the memory directory.
 
 ## Build & Test
 
