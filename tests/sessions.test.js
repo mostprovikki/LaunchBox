@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   parseSessionFile, readConversation, discoverSessionFiles, parseTs, readSessionImage,
@@ -14,7 +13,7 @@ import {
 // ~/.claude — a test that did would leak whatever the human happens to have
 // typed into Claude Code into CI output.
 function fixture(rows, { dir = '-Users-me-proj', id = 'sess-1', raw = null } = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'cs-sessions-'));
+  const root = tmpDir('cs-sessions-');
   mkdirSync(join(root, dir), { recursive: true });
   const file = join(root, dir, `${id}.jsonl`);
   writeFileSync(file, raw ?? rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
@@ -343,7 +342,7 @@ test('entrypoint is normalised so the allowlist gate is reachable', async () => 
 });
 
 test('discovery is depth-1 only, which excludes subagent transcripts structurally', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'cs-disc-'));
+  const root = tmpDir('cs-disc-');
   mkdirSync(join(root, '-p-one', 'abc', 'subagents'), { recursive: true });
   mkdirSync(join(root, '-p-two'), { recursive: true });
   writeFileSync(join(root, '-p-one', 'abc.jsonl'), '');
@@ -531,7 +530,7 @@ test('an unreadable transcript is empty, never an exception', async () => {
 
 import { openDb, createJob, insertRun, updateRun, cleanupAll } from '../lib/db.js';
 import { createSessionIndex } from '../lib/sessions.js';
-import { tmpData, validJob, sleep } from './helpers.js';
+import { tmpData, tmpDir, validJob, sleep } from './helpers.js';
 import { ensureDirs } from '../lib/paths.js';
 import { statSync, utimesSync, readFileSync } from 'node:fs';
 
@@ -543,7 +542,7 @@ function bootIndex({ activeWindowS = 60, nowRef = { v: Date.now() } } = {}) {
   const dir = tmpData();
   ensureDirs();
   const db = openDb(join(dir, 'test.db'));
-  const root = mkdtempSync(join(tmpdir(), 'cs-root-'));
+  const root = tmpDir('cs-root-');
   const index = createSessionIndex({ db, root, activeWindowS, now: () => nowRef.v });
   const write = (id, rows, { project = '-Users-me-proj' } = {}) => {
     mkdirSync(join(root, project), { recursive: true });
@@ -888,7 +887,7 @@ const REC = {
 };
 
 function fanoutFixture(agents, { dir = '-Users-me-proj', id = 'sess-1' } = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'cs-fanout-'));
+  const root = tmpDir('cs-fanout-');
   const sub = join(root, dir, id, 'subagents');
   mkdirSync(sub, { recursive: true });
   for (const [name, spec] of Object.entries(agents)) {

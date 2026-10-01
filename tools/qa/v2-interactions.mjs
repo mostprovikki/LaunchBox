@@ -60,9 +60,15 @@ function parseArgs(argv) {
   return o;
 }
 
-async function bootSandbox() {
+// Every temp dir this run makes, removed in main()'s finally unless --keep —
+// including a boot that dies half-way, which never returns a sandbox to tear down.
+const made = [];
+
+// Fills `sb` as it goes, so a boot that throws still leaves main() the server to kill.
+async function bootSandbox(sb) {
   await assertPortFree(PORT); // before any sandbox is built, so a refusal leaves nothing behind
   const dataDir = await mkdtemp(join(tmpdir(), 'cs-qa-int-'));
+  made.push(dataDir);
   await mkdir(join(dataDir, 'bin'), { recursive: true });
   const helper = join(dataDir, 'bin', 'LaunchBox');
   await writeFile(helper, [
@@ -77,12 +83,14 @@ async function bootSandbox() {
   const { ensureDirs } = await import(`file://${join(REPO, 'lib/paths.js')}`);
   ensureDirs();
   const sessionsRoot = await buildFixtureSessions(log);
+  made.push(sessionsRoot);
 
   const server = spawn(process.execPath, [join(REPO, 'server.js')], {
     cwd: REPO,
     env: { ...process.env, CS_DATA: dataDir, CS_PORT: String(PORT), CS_NO_NOTIFY: '1', CS_SESSIONS_ROOT: sessionsRoot },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  sb.server = server;
   let serverLog = '';
   server.stdout.on('data', (d) => { serverLog += d; });
   server.stderr.on('data', (d) => { serverLog += d; });
@@ -92,7 +100,7 @@ async function bootSandbox() {
   // Its OWN sandbox, not any 200: the old probe attached to a concurrent run's server.
   await waitForOwnSandbox({ child: server, dataDir, port: PORT });
   const token = (await readFile(join(dataDir, 'token'), 'utf8')).trim();
-  return { server, dataDir, sessionsRoot, baseUrl, token };
+  return Object.assign(sb, { dataDir, sessionsRoot, baseUrl, token });
 }
 
 // Named fixtures, never list[0]: a gate that grabs whatever exists silently
@@ -113,6 +121,7 @@ async function seed(api) {
   }
   try {
     const fixtureRoot = await buildFixtureRepos(log);
+    made.push(fixtureRoot);
     ids.fixtureRoot = fixtureRoot;
     await api.put('/api/settings', { projectRoots: fixtureRoot });
     await api.post('/api/projects/discover', {});
@@ -136,7 +145,8 @@ async function main() {
   const findings = [];
 
   try {
-    sandbox = await bootSandbox();
+    sandbox = {};
+    await bootSandbox(sandbox);
     const { baseUrl, token } = sandbox;
     const api = new Api(baseUrl, token);
     log('· seeding named fixtures');
@@ -473,10 +483,9 @@ async function main() {
         try { sandbox.server.kill('SIGTERM'); } catch { /* already gone */ }
         await sleep(600);
         try { sandbox.server.kill('SIGKILL'); } catch { /* already gone */ }
-        await rm(sandbox.sessionsRoot, { recursive: true, force: true }).catch(() => {});
-        await rm(sandbox.dataDir, { recursive: true, force: true }).catch(() => {});
         log('· sandbox torn down');
       }
+      for (const d of made) await rm(d, { recursive: true, force: true }).catch(() => {});
     } else log('· --keep: sandbox left running');
   }
 }

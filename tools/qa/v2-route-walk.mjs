@@ -228,9 +228,15 @@ const THRESHOLDS = {
   strandedW: STRANDED_MIN_W, strandedH: STRANDED_MIN_H,
 };
 
-async function bootSandbox() {
+// Every temp dir this run makes, removed in main()'s finally unless --keep —
+// including a boot that dies half-way, which never returns a sandbox to tear down.
+const made = [];
+
+// Fills `sb` as it goes, so a boot that throws still leaves main() the server to kill.
+async function bootSandbox(sb) {
   await assertPortFree(PORT); // before any sandbox is built, so a refusal leaves nothing behind
   const dataDir = await mkdtemp(join(tmpdir(), 'cs-qa-v2-'));
+  made.push(dataDir);
   await mkdir(join(dataDir, 'bin'), { recursive: true });
   // Sandbox-only approval stub. Lives in the throwaway CS_DATA and is deleted
   // with it; it must never be copied into a real install — the real helper's
@@ -250,6 +256,7 @@ async function bootSandbox() {
 
   log('· planting session fixtures');
   const sessionsRoot = await buildFixtureSessions(log);
+  made.push(sessionsRoot);
 
   log('· booting an isolated daemon on ' + PORT);
   const server = spawn(process.execPath, [join(REPO, 'server.js')], {
@@ -257,6 +264,7 @@ async function bootSandbox() {
     env: { ...process.env, CS_DATA: dataDir, CS_PORT: String(PORT), CS_NO_NOTIFY: '1', CS_SESSIONS_ROOT: sessionsRoot },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  sb.server = server;
   let serverLog = '';
   server.stdout.on('data', (d) => { serverLog += d; });
   server.stderr.on('data', (d) => { serverLog += d; });
@@ -266,7 +274,7 @@ async function bootSandbox() {
   // Its OWN sandbox, not any 200: the old probe attached to a concurrent run's server.
   await waitForOwnSandbox({ child: server, dataDir, port: PORT });
   const token = (await readFile(join(dataDir, 'token'), 'utf8')).trim();
-  return { server, dataDir, sessionsRoot, baseUrl, token };
+  return Object.assign(sb, { dataDir, sessionsRoot, baseUrl, token });
 }
 
 // Enough real content that a route renders its populated state rather than its
@@ -276,6 +284,7 @@ async function seedForWalk(api) {
   const ids = {};
   try {
     const fixtureRoot = await buildFixtureRepos(log);
+    made.push(fixtureRoot);
     ids.fixtureRoot = fixtureRoot;
     await api.put('/api/settings', { projectRoots: fixtureRoot });
     await api.post('/api/projects/discover', {});
@@ -328,7 +337,8 @@ async function main() {
     let baseUrl = opts.url;
     let api = null;
     if (!baseUrl) {
-      sandbox = await bootSandbox();
+      sandbox = {};
+      await bootSandbox(sandbox);
       baseUrl = sandbox.baseUrl;
       api = new Api(baseUrl, sandbox.token);
     } else {
@@ -421,10 +431,9 @@ async function main() {
         try { sandbox.server.kill('SIGTERM'); } catch { /* already gone */ }
         await sleep(600);
         try { sandbox.server.kill('SIGKILL'); } catch { /* already gone */ }
-        await rm(sandbox.sessionsRoot, { recursive: true, force: true }).catch(() => {});
-        await rm(sandbox.dataDir, { recursive: true, force: true }).catch(() => {});
         log('· sandbox torn down');
       }
+      for (const d of made) await rm(d, { recursive: true, force: true }).catch(() => {});
     } else {
       log('· --keep: sandbox left running');
     }

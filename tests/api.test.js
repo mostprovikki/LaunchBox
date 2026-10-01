@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { request as httpRequest } from 'node:http';
-import { tmpData, jobPayload, fakeSpawn, fakeBd, bdReadyRow, sleep, extensions } from './helpers.js';
+import { tmpData, tmpDir, jobPayload, fakeSpawn, fakeBd, bdReadyRow, sleep, extensions } from './helpers.js';
 import { ensureDirs } from '../lib/paths.js';
 import { ensureToken } from '../lib/token.js';
-import { readFileSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import {
   openDb, listRuns, getSetting, setSetting, recordRunUsage,
@@ -1056,7 +1056,7 @@ async function bootWithProjects({ handlers = {}, fsx = null } = {}) {
 // statSync — deliberately, since "does this path really exist" is the question it
 // is answering — so that one route needs a real directory.
 function repoDir(config) {
-  const dir = mkdtempSync(join(tmpdir(), 'cs-proj-'));
+  const dir = tmpDir('cs-proj-');
   if (config !== null) {
     writeFileSync(join(dir, '.scheduler.json'), typeof config === 'string' ? config : JSON.stringify(config));
   }
@@ -1083,7 +1083,7 @@ async function bootWithSessions({ activeWindowS = 60 } = {}) {
   const spawnFn = fakeSpawn();
   const runner = createRunner({ db, extensions, spawnFn, notifyFn: () => {} });
   const scheduler = createScheduler({ db, runner });
-  const root = mkdtempSync(join(tmpdir(), 'cs-sess-root-'));
+  const root = tmpDir('cs-sess-root-');
   const sessions = createSessionIndex({ db, root, activeWindowS });
   const osaCalls = [];
   currentToken = ensureToken();
@@ -1284,7 +1284,7 @@ test('sessions: traversal — a crafted row pointing outside the index root is r
   // rather than happening to 404 for an unrelated reason (e.g. "no images in
   // this file") — the assertion below must fail for the right reason.
   const secretPng = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
-  const outside = mkdtempSync(join(tmpdir(), 'cs-outside-'));
+  const outside = tmpDir('cs-outside-');
   const secret = join(outside, 'secret.jsonl');
   writeFileSync(secret, JSON.stringify({
     type: 'user', uuid: '3852901b-397e-4f95-a9e1-b31f783e5d16', timestamp: '2026-07-26T10:00:00.000Z', cwd: '/Users/me/proj',
