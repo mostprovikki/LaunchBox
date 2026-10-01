@@ -1,9 +1,9 @@
 # /v2 — frozen contract (btv.4 / A2)
 
-This is a reference, not an essay. `public/v2/` owns its own modules — **never
-import from `public/*.js`**; at cutover the old UI goes away and an import
-would take /v2 with it. Copy semantics, cite the origin in a comment (every
-file here does).
+This is a reference, not an essay. `public/v2/` is the only UI: the old one
+(`public/*.js`, `public/index.html`) was deleted at cutover on 2026-10-01
+(claude-scheduler-axg). Comments here that cite `public/app.js` and friends are
+provenance; the files are in git history.
 
 Frozen by this task; changing any of it requires re-opening btv.4, not a
 drive-by edit in a wave-2/3 bead.

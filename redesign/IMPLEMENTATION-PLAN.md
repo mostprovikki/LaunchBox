@@ -12,7 +12,7 @@ Sonnet 5**.
   `/api/v2/*` variant and leave the old one serving the old UI until cutover.
 - Nothing the current UI calls is ever modified. `npm test` green is part of every merge bar.
 
-Ground truth: current UI is `public/index.html` + vanilla ES modules (~5k lines), hash
+Ground truth (2026-08, before cutover; the old UI was deleted 2026-10-01): current UI is `public/index.html` + vanilla ES modules (~5k lines), hash
 routing, served by `server.js`. `/v2` is built the same way — no framework, no build step —
 under `public/v2/`, sharing the daemon's auth/token flow. The mockups in this folder are the
 spec; REVIEW.md's nine applied recommendations must be **preserved**, not re-invented.

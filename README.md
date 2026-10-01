@@ -109,7 +109,7 @@ activated.
 
 ```bash
 npm run screenshots -- --label v2      # explicit folder name
-npm run screenshots -- --only history  # just the matching shots
+npm run screenshots -- --only runs     # just the matching shots
 npm run screenshots -- --headful       # watch it drive a real window
 npm run screenshots -- --keep          # leave the sandbox up to poke at
 ```
