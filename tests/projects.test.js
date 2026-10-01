@@ -89,6 +89,27 @@ test('gates: optional, must be a non-empty string when present', () => {
   assert.match(parseProjectConfig({ ...base, gates: 42 }).errors.join('\n'), /gates must be a non-empty string/);
 });
 
+test('linkFromMain: optional list of repo-relative paths; absolute, "..", blank and non-array are refused', () => {
+  const base = { autoLabel: 'unattended' };
+  assert.deepEqual(parseProjectConfig(base).config.linkFromMain, [], 'absent → []');
+  const ok = parseProjectConfig({ ...base, linkFromMain: ['.venv', 'shared/.model-cache', './x/'] });
+  assert.equal(ok.ok, true, ok.errors.join('\n'));
+  assert.deepEqual(ok.config.linkFromMain, ['.venv', 'shared/.model-cache', 'x'], 'normalised, no trailing slash');
+  for (const bad of ['.venv', { a: 1 }, 7, null]) {
+    const r = parseProjectConfig({ ...base, linkFromMain: bad });
+    if (bad === null) { assert.equal(r.ok, true, 'null reads as absent'); continue; }
+    assert.equal(r.ok, false, `${JSON.stringify(bad)} must be refused`);
+    assert.match(r.errors.join('\n'), /^\.scheduler\.json: linkFromMain must be an array/m);
+    assert.deepEqual(r.config.linkFromMain, []);
+  }
+  for (const bad of ['', '  ', '/abs/path', '../sibling', 'a/../../b', 'a/..', '.', 42]) {
+    const r = parseProjectConfig({ ...base, linkFromMain: ['.venv', bad] });
+    assert.equal(r.ok, false, `${JSON.stringify(bad)} must be refused`);
+    assert.match(r.errors.join('\n'), /^\.scheduler\.json: linkFromMain\[1\]/m);
+    assert.deepEqual(r.config.linkFromMain, ['.venv'], 'only the valid entries survive');
+  }
+});
+
 // --- rejected declarations must not launder clean on re-parse -----------
 
 const REJECTED_DECLS = [

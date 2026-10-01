@@ -95,7 +95,9 @@ If the repo has `.beads/` but no `.scheduler.json`, write this and say so:
 }
 ```
 
-Set `gates` to the repo's real test command, or remove the key if there is none. Offer
+Set `gates` to the repo's real test command, or remove the key if there is none. If the tests need gitignored assets (a `.venv`, downloaded models), add
+`"linkFromMain": [".venv", ...]` so per-bead worktrees get them as symlinks from main; the
+ignore pattern must match a symlink (`.venv`, not `.venv/`). Offer
 registration with LaunchBox; do not register or activate unless asked. Activation is the
 owner's click in the UI.
 
