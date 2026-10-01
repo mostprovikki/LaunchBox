@@ -63,6 +63,11 @@ export default {
     if (p.permMode === 'acceptEdits') args.push('--permission-mode', 'acceptEdits');
     if (p.permMode === 'auto') args.push('--dangerously-skip-permissions');
     args.push(...splitArgs(p.extraArgs));
+    // A bead run's QA instance slot (lib/projects.js, claude-scheduler-9u2): its
+    // qa:v2 sandboxes read it to bind that instance's ports, not the primary's.
+    if (Number.isInteger(p._qaInstance)) {
+      return { cmd: setting('claudePath', 'claude'), args, env: { CS_INSTANCE: String(p._qaInstance) } };
+    }
     return { cmd: setting('claudePath', 'claude'), args };
   },
 

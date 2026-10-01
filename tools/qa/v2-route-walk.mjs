@@ -20,7 +20,7 @@
 //
 //  1. The bead says "against http://127.0.0.1:43400/v2" — the OWNER'S daemon.
 //     This boots its OWN instance on 43410 (the allocated QA slot in
-//     ~/.claude/ports.json) with a throwaway CS_DATA instead. 43400 is a
+//     ~/.claude/ports.json; a worktree run's +50+10k block — sandbox-port.mjs) with a throwaway CS_DATA instead. 43400 is a
 //     foreground process the owner runs, it holds their real jobs, and a gate
 //     that needs it running is a gate that cannot run in CI or on a clean
 //     checkout. `--url` still allows pointing at a live instance deliberately.
@@ -36,6 +36,7 @@ import { fileURLToPath } from 'node:url';
 
 import { launchBrowser, sleep } from '../screenshots/cdp.mjs';
 import { Api, buildFixtureRepos, buildFixtureSessions, waitFor } from '../screenshots/seed.mjs';
+import { qaPort, assertPortFree, waitForOwnSandbox } from './sandbox-port.mjs';
 import {
   V2_ROUTES, resolveHash, isWalkable, evaluateRoute, summarise,
   AA_NORMAL, AA_LARGE, LARGE_PX, LARGE_BOLD_PX, LARGE_BOLD_WEIGHT,
@@ -45,7 +46,7 @@ import {
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '../..');
-const PORT = 43410;
+const PORT = qaPort('route-walk', { repo: REPO }); // tools/qa/sandbox-port.mjs: 43410-12, or a worktree's +50+10k block
 
 const log = (m) => process.stdout.write(m + '\n');
 
@@ -228,6 +229,7 @@ const THRESHOLDS = {
 };
 
 async function bootSandbox() {
+  await assertPortFree(PORT); // before any sandbox is built, so a refusal leaves nothing behind
   const dataDir = await mkdtemp(join(tmpdir(), 'cs-qa-v2-'));
   await mkdir(join(dataDir, 'bin'), { recursive: true });
   // Sandbox-only approval stub. Lives in the throwaway CS_DATA and is deleted
@@ -261,7 +263,8 @@ async function bootSandbox() {
   server.on('exit', (c) => { if (c) log(`  server exited ${c}:\n${serverLog.slice(-1200)}`); });
 
   const baseUrl = `http://127.0.0.1:${PORT}`;
-  await waitFor(async () => { try { return (await fetch(`${baseUrl}/`)).ok; } catch { return false; } }, 30_000, 'the server to listen');
+  // Its OWN sandbox, not any 200: the old probe attached to a concurrent run's server.
+  await waitForOwnSandbox({ child: server, dataDir, port: PORT });
   const token = (await readFile(join(dataDir, 'token'), 'utf8')).trim();
   return { server, dataDir, sessionsRoot, baseUrl, token };
 }

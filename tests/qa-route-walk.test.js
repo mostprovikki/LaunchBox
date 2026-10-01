@@ -240,7 +240,10 @@ test('the driver never points the walk at the owner\'s daemon by default', () =>
   // gate that needs it running cannot run on a clean checkout, and one that
   // writes to it is worse.
   const src = read('tools/qa/v2-route-walk.mjs');
-  assert.match(src, /const PORT = 43410;/, 'the walk uses the allocated QA slot');
+  // Allocated (tools/qa/sandbox-port.mjs, claude-scheduler-9u2): 43410, or a worktree run's block.
+  assert.match(src, /const PORT = qaPort\('route-walk'/, 'the walk uses the allocated QA slot');
+  assert.match(src, /await assertPortFree\(PORT\)/, 'a busy port is a refusal');
+  assert.match(src, /waitForOwnSandbox\(\{ child: server, dataDir/, 'readiness is ITS sandbox, not any 200');
   const stripped = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
   assert.ok(!/43400/.test(stripped), 'the driver must not reference the owner\'s port outside comments');
   // …and it isolates its data.

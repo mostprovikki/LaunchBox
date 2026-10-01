@@ -7,7 +7,8 @@
 //   npm run screenshots -- --headful    # watch it drive a real window
 //   npm run screenshots -- --keep       # leave the sandbox up for poking at
 //
-// It boots its OWN scheduler on a free port against a throwaway CS_DATA, so it
+// It boots its OWN scheduler on its allocated QA port (43412, or a worktree's
+// +50+10k block — tools/qa/sandbox-port.mjs) against a throwaway CS_DATA, so it
 // never touches ~/.claude-scheduler. `claudePath` is pre-seeded to a fake
 // binary, which means the usage probe returns fixed percentages (screenshots
 // stay comparable between runs) and no real `claude` can be invoked even by
@@ -16,7 +17,6 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile, chmod } from 'node:fs/promises';
-import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,6 +24,7 @@ import { fileURLToPath } from 'node:url';
 import { launchBrowser, sleep } from './cdp.mjs';
 import { Api, buildFixtureRepos, buildFixtureSessions, seed, waitFor } from './seed.mjs';
 import { shots } from './shots.mjs';
+import { qaPort, assertPortFree, waitForOwnSandbox } from '../qa/sandbox-port.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '../..');
@@ -94,15 +95,6 @@ function parseArgs(argv) {
   return opts;
 }
 
-function freePort() {
-  return new Promise((res, rej) => {
-    const s = net.createServer();
-    s.unref();
-    s.on('error', rej);
-    s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => res(port)); });
-  });
-}
-
 async function nextLabel() {
   await mkdir(OUT_ROOT, { recursive: true });
   const existing = await readdir(OUT_ROOT, { withFileTypes: true });
@@ -123,13 +115,18 @@ async function main() {
     return 0;
   }
 
+  // Allocated, not OS-picked: freePort() closed its probe socket before the
+  // server bound, so another process could take the port in between. Checked
+  // before the output folder or sandbox exists, so a refusal leaves nothing behind.
+  const port = qaPort('screenshots', { repo: REPO });
+  await assertPortFree(port);
+
   const label = opts.label ?? (await nextLabel());
   const outDir = join(OUT_ROOT, label);
   if (existsSync(outDir) && !opts.label) throw new Error(`${outDir} exists — pass --label`);
   await mkdir(outDir, { recursive: true });
 
   const dataDir = await mkdtemp(join(tmpdir(), 'cs-shots-data-'));
-  const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   // Filled in after the daemon boots and writes its token file.
   let api = new Api(baseUrl);
@@ -217,9 +214,8 @@ async function main() {
     // Probes `/`, not /api/settings: every /api route now answers 401 without the
     // capability token, and `.ok` would therefore never become true — the harness
     // would time out against a perfectly healthy daemon.
-    await waitFor(async () => {
-      try { return (await fetch(`${baseUrl}/`)).ok; } catch { return false; }
-    }, 30_000, 'the server to listen');
+    // Its OWN sandbox, not any 200 (claude-scheduler-9u2).
+    await waitForOwnSandbox({ child: server, dataDir, port });
 
     // The daemon creates this on first boot; read it rather than generating one,
     // so the harness uses the same key the running instance expects.

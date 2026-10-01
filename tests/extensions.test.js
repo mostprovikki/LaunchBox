@@ -56,3 +56,14 @@ test('validateFields: required, defaults, select options, number ranges, unknown
   r = validateFields([{ key: 'w', type: 'wat' }], { w: 1 });
   assert.ok(r.errors.some((e) => e.includes('unknown field type')));
 });
+
+// claude-scheduler-9u2: a bead run's QA slot reaches the agent's processes as
+// CS_INSTANCE, so its qa:v2 sandboxes bind that instance's ports.
+test('claude command exports _qaInstance as CS_INSTANCE, and only when set', async () => {
+  const claude = (await loadExtensions()).get('claude');
+  const setting = (k, d) => d;
+  const base = { prompt: 'x', model: 'default', permMode: 'default' };
+  assert.deepEqual(claude.command({ params: { ...base, _qaInstance: 2 } }, { setting }).env, { CS_INSTANCE: '2' });
+  assert.deepEqual(claude.command({ params: { ...base, _qaInstance: 0 } }, { setting }).env, { CS_INSTANCE: '0' });
+  assert.equal(claude.command({ params: base }, { setting }).env, undefined, 'a manual job gets no slot');
+});
