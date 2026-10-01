@@ -191,3 +191,49 @@ test('with no branches engine the route is 501, never a silently short count', a
   t.after(() => server.close());
   assert.equal((await req(base(), '/api/v2/inbox')).status, 501);
 });
+
+// --- titles (claude-scheduler-btv.26) ------------------------------------
+// The Inbox titled handed-back rows by short id ("9zq.4") and waiting rows by
+// the tip subject. The title comes from the bead's job row — written on every
+// run from the beads graph — so a 15s poll costs no bd call per row.
+
+function titledJob(db, project, beadId, { title, name } = {}) {
+  return createJob(db, {
+    name: name ?? `${project.name}: ${title ?? beadId}`, type: 'claude', cwd: project.path, schedule: '@manual',
+    params: { prompt: 'x', _beadId: beadId, _projectId: project.id, ...(title === undefined ? {} : { _beadTitle: title }) },
+  });
+}
+
+test('titles: a handed-back row carries the bead title from its job row', async (t) => {
+  const { db, server, base } = await boot();
+  t.after(() => server.close());
+  const p = register(db, 'repo', '/r/repo');
+  beadRun(db, titledJob(db, p, 'rp-1', { title: 'Fix the: colon title', name: 'repo: truncated…' }), { outcome: 'handed-back' });
+  const [row] = (await req(base(), '/api/v2/inbox')).body.handedBack;
+  assert.equal(row.title, 'Fix the: colon title', '_beadTitle wins over the (truncatable) job name');
+});
+
+test('titles: a job row minted before _beadTitle falls back to its name, minus the project prefix', async (t) => {
+  const { db, server, base } = await boot();
+  t.after(() => server.close());
+  const p = register(db, 'repo', '/r/repo');
+  beadRun(db, titledJob(db, p, 'rp-1', { name: 'repo: Old bead title' }), { outcome: 'handed-back' });
+  beadRun(db, titledJob(db, p, 'rp-2', { name: 'renamed: something' }), { outcome: 'stranded' });
+  const rows = (await req(base(), '/api/v2/inbox')).body.handedBack;
+  const by = Object.fromEntries(rows.map((r) => [r.beadId, r.title]));
+  assert.equal(by['rp-1'], 'Old bead title');
+  assert.equal(by['rp-2'], null, 'a name that does not carry the project prefix is not a title — the UI falls back');
+});
+
+test('titles: a waiting row carries the title of its bead; a branch with no job row has none', async (t) => {
+  const p0 = { path: '/r/repo' };
+  const branches = fakeBranches({ [p0.path]: ['scheduler/repo-1a2b--rp-1', 'scheduler/repo-1a2b--rp-9'] });
+  const { db, server, base } = await boot({ branches });
+  t.after(() => server.close());
+  const p = register(db, 'repo', p0.path);
+  titledJob(db, p, 'rp-1', { title: 'Waiting bead title' });
+  const rows = (await req(base(), '/api/v2/inbox')).body.waiting;
+  const by = Object.fromEntries(rows.map((r) => [r.beadId, r.title]));
+  assert.equal(by['rp-1'], 'Waiting bead title');
+  assert.equal(by['rp-9'], null);
+});

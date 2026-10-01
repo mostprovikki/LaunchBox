@@ -607,6 +607,8 @@ test('the job carries _beadId/_projectId and is disabled so cron never arms it',
   const [job] = listJobs(db);
   assert.equal(job.params._beadId, 'sp-1');
   assert.equal(job.params._projectId, project.id);
+  // btv.26: the Inbox titles rows from this, untruncated, with no bd call per poll.
+  assert.equal(job.params._beadTitle, 'a ready bead');
   assert.equal(job.enabled, false, 'the poller launches it directly; the scheduler must not');
   assert.equal(job.type, 'claude');
   assert.equal(runner.starts[0].trigger, 'beads');
