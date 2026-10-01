@@ -64,17 +64,23 @@ test('once job fires once and auto-disables', async () => {
 
 test('multi-schedule: both once-entries fire, job disables after the last', async () => {
   const { db, starts, scheduler } = setup();
+  // Leads widened 2026-10-01 (claude-scheduler-c9n): at 1000ms the first entry
+  // could die on arrival under full-suite load — never armed (no-catch-up), so
+  // the only armed entry fired as the "last" one and disabled the job, failing
+  // the `enabled === true` check below. Arming is asserted outright so a dead
+  // lead reports as itself, not as a scheduler bug.
+  const first = new Date(Date.now() + 2000).toISOString();
+  const second = new Date(Date.now() + 4500).toISOString();
   const job = createJob(db, jobPayload({
-    schedule: [
-      { type: 'once', at: new Date(Date.now() + 1000).toISOString() },
-      { type: 'once', at: new Date(Date.now() + 2500).toISOString() },
-    ],
+    schedule: [{ type: 'once', at: first }, { type: 'once', at: second }],
   }));
   scheduler.start();
-  await waitFor(() => starts.length >= 1);
+  assert.equal(scheduler.nextFire(job.id), first, 'first once-entry not armed: fixture lead died on arrival');
+  assert.ok(await waitFor(() => starts.length >= 1), 'first once-entry never fired');
   assert.equal(starts.length, 1);
   assert.equal(getJob(db, job.id).enabled, true); // second entry still pending
-  await waitFor(() => starts.length >= 2);
+  assert.equal(scheduler.nextFire(job.id), second, 'second once-entry not armed after the first fired');
+  assert.ok(await waitFor(() => starts.length >= 2), 'second once-entry never fired');
   assert.equal(starts.length, 2);
   assert.equal(getJob(db, job.id).enabled, false); // all entries done
   assert.equal(scheduler.nextFire(job.id), null);
