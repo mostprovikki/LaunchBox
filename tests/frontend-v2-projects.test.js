@@ -732,7 +732,10 @@ test('every /v2 page paints a shell before its first load, not after it', () => 
     // a false positive on a page that had just been made MORE correct.
     const inlined = entry.replace(/\b([a-z]\w*)\(\)/g, (whole, name) => {
       const helper = new RegExp(`function ${name}\\(\\)\\s*\\{[\\s\\S]*?\\n\\}`).exec(src)?.[0];
-      return helper && /pageHead\(/.test(helper) ? 'pageHead()' : whole;
+      // A Monitor has no pagehead (docs/design/launchbox.md §5, btv.21): a
+      // helper that clears #v2-page and paints into it is the same shell.
+      const paints = helper && (/pageHead\(/.test(helper) || /clear\(page\);[\s\S]*?appendChild\(/.test(helper));
+      return paints ? 'pageHead()' : whole;
     });
     const headAt = inlined.search(/pageHead\(/);
     const loadAt = inlined.search(/load(AndRender)?\(\)/);

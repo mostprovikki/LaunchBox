@@ -1719,3 +1719,25 @@ three new endpoints declared; `qa:v2:interactions` clean.
 - Measured in headless Chrome on a seeded sandbox: keys/Enter/L real input OK; Hold on a real fixture bead → `bd` DEFERRED to +7d, row gone, badge 5→4; Hold on an unknown bead → 502 toast, row stays. Found + fixed there: long Branch value overlapped its label (base `.defrow__v` nowrap). Contrast: 0/106 text nodes below AA both themes; injected control went red.
 - ui.js `toast()` now rebuilds a host from another document (each jsdom test's) — the failed-Hold toast test was blind without it.
 - 17 tests, 10 mutations all red. Open: btv.26 (API carries no bead title, so hand-backs are titled by short id), c9n (scheduler.test.js multi-schedule flake, seen again).
+
+
+## 2026-09-30 — claude-scheduler-btv.25 — /v2 Overview spend rollup + daemon-side last visit
+
+`GET /api/v2/overview` gains `spend: { asOf, sinceVisit: { pct, from }, last7: { pct, byProject } }`,
+summed from `run_usage.deltaPct.seven_day` joined to `jobs.params._projectId` (`spendRollup`,
+lib/db.js); negative/missing deltas count 0, project-less runs count in `last7.pct` only.
+`POST /api/v2/visits` applies `nextVisit()` (server.js): a POST >30 min after `lastVisitAt` makes it
+`prevVisitAt`; inside the gap only `lastVisitAt` slides. `sinceVisit.pct` is null until a 2nd visit.
+
+**Mutations** (tests/v2-overview-spend.test.js): drop neg-clamp, drop 7-day window, leak project-less
+row into byProject, break grouping, drop 30-min rule, zero sinceVisit.pct, exempt route from the
+token gate — all 7 red, reverted. **Gates:** `npm test` 922/922. **Open:** no UI consumes `spend`
+or posts visits yet — that is btv.21.
+
+## 2026-09-30 — claude-scheduler-btv.21 — /v2 Overview as Monitor: status light + four cards
+- overview.js/overview-logic.js rewritten to launchbox.md §5 / overview-flavours.html Option 2: light + one-liner, red fault banner (Fix in Settings), needs-you hero (/api/v2/inbox, only action Open Inbox), headroom left, running count, spend (sinceVisit/last7 + names-only share bar). §7 cuts gone. POST /api/v2/visits once per mount, before the first read.
+- Fault source: live `automation.projects[].reasons` "claude is not spawnable"; a runner "daemon fault" skip adds the path only within the runner's 5-min fault memory (else a 48h-old skip would keep the banner up after a fix).
+- Merged btv.22 + btv.25 branches in (unmerged prerequisites; the page needs their endpoints). Merge btv.21 brings both.
+- Gates touched: shell-before-load source gate now also accepts a helper that clear(page)s and paints (Monitor has no pagehead) — mutation (drop entry render()) still red; parity declares /api/usage/refresh (cut §7), /api/v2/inbox, /api/v2/visits.
+- Measured: 18 page/logic tests, 7 page tests red on old page; 15 mutations all red. npm test 928/928; qa:v2, qa:v2:interactions, qa:v2:parity clean. Live CDP on a sandbox daemon: 0 buttons, 46px hero, no overflow, both themes, fault state.
+- Open: the old .ovgrid/.meters3/.nextrow CSS still serves redesign/ mockups — left in place.
