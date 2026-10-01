@@ -18,7 +18,7 @@ import { tmpdir } from 'node:os';
 import { mkdtempSync, mkdirSync, cpSync, symlinkSync, writeFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { tmpData, extensions } from './helpers.js';
+import { tmpData, removeOnExit, extensions } from './helpers.js';
 
 const TESTS_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = dirname(TESTS_DIR);
@@ -43,6 +43,7 @@ function findNodeModules(startDir) {
 function makeDottedCopy() {
   const dottedParent = join(tmpdir(), '.cs-f4y-dotted');
   mkdirSync(dottedParent, { recursive: true });
+  removeOnExit(dottedParent);
   const appDir = mkdtempSync(join(dottedParent, 'app-'));
   cpSync(join(REPO_ROOT, 'lib'), join(appDir, 'lib'), { recursive: true });
   cpSync(join(REPO_ROOT, 'public'), join(appDir, 'public'), { recursive: true });

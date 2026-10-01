@@ -126,6 +126,12 @@ async function main() {
   if (existsSync(outDir) && !opts.label) throw new Error(`${outDir} exists — pass --label`);
   await mkdir(outDir, { recursive: true });
 
+  // Checked before the sandbox exists, so a refusal leaves no temp dir behind.
+  const fixture = join(REPO, 'tests/fixtures/get-usage-response.json');
+  if (!existsSync(fixture)) {
+    throw new Error(`usage fixture missing: ${fixture} — the fake claude reads it for the meters`);
+  }
+
   const dataDir = await mkdtemp(join(tmpdir(), 'cs-shots-data-'));
   const baseUrl = `http://127.0.0.1:${port}`;
   // Filled in after the daemon boots and writes its token file.
@@ -162,11 +168,6 @@ async function main() {
   const fakeClaude = join(dataDir, 'fake-claude.mjs');
   await writeFile(fakeClaude, FAKE_CLAUDE);
   await chmod(fakeClaude, 0o755);
-
-  const fixture = join(REPO, 'tests/fixtures/get-usage-response.json');
-  if (!existsSync(fixture)) {
-    throw new Error(`usage fixture missing: ${fixture} — the fake claude reads it for the meters`);
-  }
 
   process.env.CS_DATA = dataDir;
   const { openDb, setSetting } = await import(`file://${join(REPO, 'lib/db.js')}`);

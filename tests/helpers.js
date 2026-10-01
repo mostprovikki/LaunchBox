@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -8,9 +8,23 @@ import { validateJob } from '../lib/validate.js';
 // Real extensions (claude, command) loaded once for all tests.
 export const extensions = await loadExtensions();
 
+// Every temp path a test makes is removed when its file's process exits —
+// node --test runs each file in its own process, and the leak gate
+// (tools/check-tmp-leaks.mjs) fails npm test on anything left in TMPDIR.
+const made = [];
+process.on('exit', () => {
+  for (const p of made) rmSync(p, { recursive: true, force: true });
+});
+export function removeOnExit(path) { made.push(path); return path; }
+
+// Fresh mkdtemp dir under tmpdir(), removed on exit.
+export function tmpDir(prefix = 'cs-test-') {
+  return removeOnExit(mkdtempSync(join(tmpdir(), prefix)));
+}
+
 // Point CS_DATA at a fresh tmpdir; call before importing/using paths-dependent code.
 export function tmpData() {
-  const dir = mkdtempSync(join(tmpdir(), 'cs-test-'));
+  const dir = tmpDir('cs-test-');
   process.env.CS_DATA = dir;
   process.env.CS_NO_NOTIFY = '1';
   return dir;

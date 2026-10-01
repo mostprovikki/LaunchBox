@@ -14,11 +14,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join, dirname } from 'node:path';
-import { tmpdir, homedir } from 'node:os';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { JSDOM } from 'jsdom';
-import { tmpData, fakeSpawn, extensions } from './helpers.js';
+import { tmpData, tmpDir, fakeSpawn, extensions } from './helpers.js';
 import { ensureDirs } from '../lib/paths.js';
 import { ensureToken } from '../lib/token.js';
 import { openDb } from '../lib/db.js';
@@ -50,7 +50,7 @@ async function bootWithSessions() {
   const db = openDb(join(dir, 'test.db'));
   const runner = createRunner({ db, extensions, spawnFn: fakeSpawn(), notifyFn: () => {} });
   const scheduler = createScheduler({ db, runner });
-  const root = mkdtempSync(join(tmpdir(), 'cs-nc5-root-'));
+  const root = tmpDir('cs-nc5-root-');
   const sessions = createSessionIndex({ db, root, activeWindowS: 60 });
   currentToken = ensureToken();
   const app = createApp({
