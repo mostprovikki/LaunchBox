@@ -2,7 +2,7 @@
 // hands `send` the FULL absolute path, and send's dotfiles:'ignore' rule
 // checks every segment of whatever path it is given. So the moment the
 // checkout itself sits under a dot-directory (measured: .claude/worktrees/),
-// every plain sendFile call 404s — /, /v1 and /v2 all "contain a dotfile" as
+// every plain sendFile call 404s — / and /v2 both "contain a dotfile" as
 // far as `send` is concerned, even though `public/index.html` plainly is not
 // one. Passing { root: ROOT } (or an equivalent relative path) makes `send`
 // check dotfiles only in the path *relative to root*, which is the only part
@@ -97,8 +97,9 @@ test('GET / returns 200 with the real bytes when the checkout sits under a dot-d
   const res = await fetch(base() + '/');
   assert.equal(res.status, 200, 'GET / must not 404 just because an ancestor directory starts with a dot');
   const body = await res.text();
-  assert.match(body, /<title>Scheduler<\/title>/, 'must be the real old-UI markup, not an error/fallback page');
-  assert.match(body, /id="usage-chip"/);
+  // `/` is v2 since the cutover (claude-scheduler-axg.4).
+  assert.match(body, /<title>LaunchBox<\/title>/, 'must be the real v2 markup, not an error/fallback page');
+  assert.match(body, /data-theme="dark"/);
 });
 
 test('GET /v2 returns 200 with the real bytes when the checkout sits under a dot-directory', async (t) => {
@@ -110,16 +111,6 @@ test('GET /v2 returns 200 with the real bytes when the checkout sits under a dot
   const body = await res.text();
   assert.match(body, /data-theme="dark"/);
   assert.match(body, /<title>LaunchBox<\/title>/);
-});
-
-test('/v1 also survives a dotted checkout (third sendFile call site)', async (t) => {
-  const { server, base } = await bootDotted();
-  t.after(() => server.close());
-
-  const res = await fetch(base() + '/v1');
-  assert.equal(res.status, 200);
-  const body = await res.text();
-  assert.match(body, /<title>Scheduler<\/title>/);
 });
 
 test('a real subresource referenced by /v2 resolves to actual bytes, not a 404, under a dotted checkout', async (t) => {

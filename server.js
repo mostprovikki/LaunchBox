@@ -489,28 +489,24 @@ export function createApp({
     res.sendFile(join('public', 'v2', 'index.html'), { root: ROOT });
   });
 
-  // ------------------------------------------------- the cutover flag (E3)
-  // claude-scheduler-btv.15. `v2Default` decides which UI the ROOT path
-  // serves. It ships OFF, and flipping it is the owner's click — the same
-  // airlock principle the project activation uses: an agent may prepare the
-  // mechanism, only a human may throw it.
+  // ------------------------------------------------------ the cutover (axg)
+  // `/` is v2, unconditionally: the v2Default flag and its Touch ID switch
+  // went with the old UI (claude-scheduler-axg.4). A stale `v2Default` row in
+  // an old DB is simply never read. `/v1` links must fail loudly rather than
+  // 404 or half-load a page whose files are being deleted, so it answers 410
+  // with a pointer to `/`.
   //
-  //   off (default)  /  → the existing UI      /v1 → the existing UI   /v2 → v2
-  //   on             /  → v2                   /v1 → the existing UI   /v2 → v2
-  //
-  // `/v1` answers the existing UI in BOTH states, so a link written today
-  // keeps working after the flip and there is always a way back without
-  // touching the setting — which is what "kept at /v1 for one release" means.
-  const v2IsDefault = () => String(getSetting(db, 'v2Default', '0')) === '1';
-  const sendExistingUi = (res) => res.sendFile(join('public', 'index.html'), { root: ROOT });
-
-  app.get('/v1', (req, res) => sendExistingUi(res));
-
   // Ahead of express.static, which would otherwise serve public/index.html for
-  // `/` before this could choose. Only the literal root is matched.
+  // `/` first. Only the literal root is matched.
   app.get('/', (req, res) => {
-    if (v2IsDefault()) return res.sendFile(join('public', 'v2', 'index.html'), { root: ROOT });
-    return sendExistingUi(res);
+    res.sendFile(join('public', 'v2', 'index.html'), { root: ROOT });
+  });
+
+  app.get('/v1', (req, res) => {
+    res.status(410).type('html').send(
+      '<!doctype html><meta charset="utf-8"><title>Gone</title>'
+      + '<p>The old scheduler UI has been retired. LaunchBox is at <a href="/">/</a>.</p>',
+    );
   });
 
   // `public/` is the one unauthenticated surface, and express.static does no
@@ -2119,9 +2115,6 @@ export function createApp({
       // releases in 9 months with a breaking change, so which binary we talk to
       // is a setting, not a lookup.
       projectRoots: getSetting(db, 'projectRoots', ''),
-      // Which UI `/` serves (cutover phase A). Read through the same helper
-      // the root route uses, so the two cannot disagree.
-      uiDefault: v2IsDefault() ? 'v2' : 'v1',
       beadsPollSec: beadsPollSec(),
       bdPath: bdPathSetting(),
       worktreeRoot: getSetting(db, 'worktreeRoot', ''),
@@ -2308,28 +2301,6 @@ export function createApp({
     }
     awake?.refresh();
     res.json({ ok: true });
-  });
-
-  // The cutover switch (docs/plans/2026-10-01-v2-cutover.md, phase A). E3 built
-  // `v2Default` and the root-path choice but left nothing that could write it;
-  // this is the one writer, and it is Touch ID-gated so no token holder — an
-  // agent included — can throw it alone. Validate -> authorize -> write.
-  // No on-screen control by design: the flip serves no ranked job, so the
-  // control is `claude-scheduler ui [v1|v2]`. `/v1` stays the way back.
-  app.put('/api/ui-default', async (req, res) => {
-    const ui = req.body?.ui;
-    if (ui !== 'v1' && ui !== 'v2') {
-      return res.status(400).json({ errors: ['ui must be "v1" (the existing UI) or "v2" (the new LaunchBox UI)'] });
-    }
-    if (!await approve(req, res, {
-      action: 'settings.uiDefault',
-      detail: ui === 'v2'
-        ? 'open the new LaunchBox UI by default (the existing UI stays at /v1)'
-        : 'open the existing UI by default instead of the new LaunchBox UI',
-      grace: false,
-    })) return;
-    setSetting(db, 'v2Default', ui === 'v2' ? '1' : '0');
-    res.json({ ui });
   });
 
   app.post('/api/cleanup', async (req, res) => {

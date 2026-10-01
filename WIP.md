@@ -1847,3 +1847,13 @@ axg.8 (human) decides the orphaned session-image route. Unrelated flake filed: i
 - New tests/v2-cutover.test.js fetches the icon href from served /v2 and asserts path under /v2/assets/ + 200 image/svg+xml; red first ("got /favicon.svg").
 - tests/qa-route-walk.test.js favicon gate pinned the old v2 href; now checks each UI's own icon path + file.
 - npm test 991/991; qa:v2 clean 11 routes × 2 themes.
+
+## claude-scheduler-axg.4 — Cutover C2: / serves v2 unconditionally; /v1 answers 410
+- 2026-10-01. `/` sends public/v2/index.html, no setting read; `/v1` → 410 HTML pointing at `/`.
+  Gone: v2Default read, PUT /api/ui-default, `uiDefault` in GET /api/settings, `claude-scheduler ui`.
+- Branch fast-forwarded onto axg.3 (C1, closed but unmerged) first — it rewrote v2-cutover.test.js.
+- 3 new v2-cutover tests seen red before the change (incl. stale `v2Default=0` row still → v2).
+- Outside Touches, forced: dotted-root.test.js (`/` now asserts v2; /v1 200 test dropped) and
+  v2-shell.test.js ("GET / still serves the old UI" deleted) — both pinned the removed behaviour.
+- npm test 992/992; qa:v2 11×2 clean; qa:v2:interactions clean (had to wait out another
+  session's QA sandbox holding fixed port 43410).
