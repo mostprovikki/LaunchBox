@@ -1,9 +1,9 @@
 // /v2 keep-awake appbar control (claude-scheduler-btv.16).
 //
 // The owner decided on 2026-09-23 that the keep-awake capability is NOT being
-// dropped in the redesign, so /v2 grew the control the existing UI has at
-// public/index.html:23-33. These tests pin the three things that can silently
-// rot: the label maths (which is the only place "auto is selected" and "auto is
+// dropped in the redesign, so /v2 grew the control the old UI's appbar had
+// (that UI was deleted in claude-scheduler-axg.6). These tests pin the three
+// things that can silently rot: the label maths (which is the only place "auto is selected" and "auto is
 // currently holding" are told apart), the write path (every mode the old menu
 // offers must actually reach PUT /api/awake with the right body), and the
 // contracts the appbar is already under — data-mutating, a tooltip on a

@@ -35,7 +35,7 @@ test('ordinal: teens are always -th regardless of last digit', () => {
   assert.equal(ordinal(21), '21st');
 });
 
-test('scheduleDescribe: recognises the common cron shapes public/app.js also special-cases', () => {
+test('scheduleDescribe: recognises the common cron shapes the old UI also special-cased', () => {
   assert.equal(scheduleDescribe({ type: 'cron', expr: '15 2 * * *' }), 'daily 02:15');
   assert.equal(scheduleDescribe({ type: 'cron', expr: '0 6 * * 1-5' }), 'weekdays 06:00');
   assert.equal(scheduleDescribe({ type: 'cron', expr: '0 */6 * * *' }), 'every 6h');

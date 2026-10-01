@@ -3,7 +3,7 @@
 // checks every segment of whatever path it is given. So the moment the
 // checkout itself sits under a dot-directory (measured: .claude/worktrees/),
 // every plain sendFile call 404s — / and /v2 both "contain a dotfile" as
-// far as `send` is concerned, even though `public/index.html` plainly is not
+// far as `send` is concerned, even though `public/v2/index.html` plainly is not
 // one. Passing { root: ROOT } (or an equivalent relative path) makes `send`
 // check dotfiles only in the path *relative to root*, which is the only part
 // a request can influence.
