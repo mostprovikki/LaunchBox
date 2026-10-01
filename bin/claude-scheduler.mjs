@@ -64,36 +64,7 @@ if (cmd === 'token') {
   if (process.platform === 'darwin') execFile('open', [url], () => {});
   else if (process.platform === 'win32') execFile('cmd', ['/c', 'start', '', url], () => {});
   else execFile('xdg-open', [url], () => {});
-} else if (cmd === 'ui') {
-  // The cutover switch (docs/plans/2026-10-01-v2-cutover.md, phase A): which UI
-  // `/` opens. Goes through the daemon's Touch ID-gated route, never the DB, so
-  // the owner's approval is the only way it changes. No argument = report.
-  const want = process.argv[3];
-  const USAGE = 'usage: claude-scheduler ui [v1|v2]   (no argument prints the current default)';
-  if (want !== undefined && want !== 'v1' && want !== 'v2') { console.error(USAGE); process.exit(2); }
-  const base = `http://127.0.0.1:${port()}`;
-  const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
-  let res;
-  try {
-    res = want === undefined
-      ? await fetch(`${base}/api/settings`, { headers })
-      : await fetch(`${base}/api/ui-default`, { method: 'PUT', headers, body: JSON.stringify({ ui: want }) });
-  } catch {
-    console.error(`No scheduler answering on port ${port()}. Start it, then try again.`);
-    process.exit(1);
-  }
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const why = body.code ?? body.error ?? (body.errors ?? []).join('; ') ?? `HTTP ${res.status}`;
-    console.error(`Not switched: ${why}`);
-    process.exit(1);
-  }
-  if (want === undefined) {
-    console.log(`${body.uiDefault}  (/ opens ${body.uiDefault === 'v2' ? 'the new LaunchBox UI' : 'the existing UI'}; /v1 and /v2 always work)`);
-  } else {
-    console.log(`/ now opens ${body.ui}${body.ui === 'v2' ? ' — the existing UI stays at /v1' : ''}`);
-  }
 } else {
-  console.error('usage: claude-scheduler [open|url|token|ui [v1|v2]]');
+  console.error('usage: claude-scheduler [open|url|token]');
   process.exit(2);
 }
