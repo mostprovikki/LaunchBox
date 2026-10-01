@@ -5,13 +5,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { qaPort, assertPortFree, waitForOwnSandbox } from '../tools/qa/sandbox-port.mjs';
 
-const primary = () => { const d = mkdtempSync(join(tmpdir(), 'qa-prim-')); mkdirSync(join(d, '.git')); return d; };
-const linked = () => { const d = mkdtempSync(join(tmpdir(), 'qa-wt-')); writeFileSync(join(d, '.git'), 'gitdir: /x\n'); return d; };
+// Every temp dir goes through tmp() and is removed after the file runs.
+const made = [];
+const tmp = (p) => { const d = mkdtempSync(join(tmpdir(), p)); made.push(d); return d; };
+test.after(() => { for (const d of made) rmSync(d, { recursive: true, force: true }); });
+
+const primary = () => { const d = tmp('qa-prim-'); mkdirSync(join(d, '.git')); return d; };
+const linked = () => { const d = tmp('qa-wt-'); writeFileSync(join(d, '.git'), 'gitdir: /x\n'); return d; };
 
 test('primary checkout uses the QA slots 43410-43412, one per tool', () => {
   const repo = primary();
@@ -70,7 +75,7 @@ const freePort = () => new Promise((res) => {
 
 test('waitForOwnSandbox resolves once its own child wrote the port file and answers', async () => {
   const port = await freePort();
-  const dataDir = mkdtempSync(join(tmpdir(), 'qa-own-'));
+  const dataDir = tmp('qa-own-');
   const child = fakeServer({ port, dataDir });
   try {
     await waitForOwnSandbox({ child, dataDir, port, timeoutMs: 10_000 });
@@ -80,8 +85,8 @@ test('waitForOwnSandbox resolves once its own child wrote the port file and answ
 test('a 200 from a server that is not ours is NOT readiness', async () => {
   // Someone else answers on the port; our sandbox dir never gets a port file.
   const port = await freePort();
-  const otherDir = mkdtempSync(join(tmpdir(), 'qa-other-'));
-  const ourDir = mkdtempSync(join(tmpdir(), 'qa-ours-'));
+  const otherDir = tmp('qa-other-');
+  const ourDir = tmp('qa-ours-');
   const other = fakeServer({ port, dataDir: otherDir });
   const ours = spawn(process.execPath, ['-e', 'setInterval(()=>{}, 1000)'], { stdio: 'ignore' });
   try {
@@ -91,7 +96,7 @@ test('a 200 from a server that is not ours is NOT readiness', async () => {
 });
 
 test('our child exiting (e.g. EADDRINUSE) rejects at once, not at the timeout', async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'qa-exit-'));
+  const dataDir = tmp('qa-exit-');
   const child = spawn(process.execPath, ['-e', 'process.exit(1)'], { stdio: 'ignore' });
   const t0 = Date.now();
   await assert.rejects(waitForOwnSandbox({ child, dataDir, port: 1, timeoutMs: 20_000 }), /exited/);

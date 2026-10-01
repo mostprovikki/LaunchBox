@@ -11,5 +11,4 @@ memory directory. Scheduled runs never append here; their record is the bead not
 
 ## In progress
 
-_Nothing recorded._ The `/v2` cutover is running under the scheduler: epic
-`claude-scheduler-axg`, plan `docs/plans/2026-10-01-v2-cutover.md`.
+_Nothing recorded._
