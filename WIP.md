@@ -1820,3 +1820,24 @@ under a symlink fell through to `worktree add` → "already exists". Now also ma
 `join(realpath(root), name)`; the returned `path` stays the configured form so remove()/snapshot()
 agree. Real-git test through a symlinked root: red with the exact "already exists" error before
 the fix; mutation (drop the realpath alternative) → RED. npm test 1000/1000.
+
+## 1xy + cutover plan + axg.1 (2026-10-01)
+
+**1xy.** Project strip "Review in Inbox →" pointed at #review (per-project queue). Retargeted to
+#inbox per identity §5 + mockup. That orphaned Review from Project (frontend-v2-review.test.js
+caught it), so "Review queue" went back into the ⋯ menu, where §7 had put it and btv.24 had
+dropped it. Live CDP on trip-planner: strip → Inbox, menu → Review queue.
+
+**What I had wrong.** I told the owner cutover was the next milestone. It had already happened:
+the owner set `v2Default='1'` by hand on 2026-09-24, from a command a session handed them.
+No repo source records it. `claude-scheduler ui` printing `v2` is how I found out.
+
+**axg.1, the switch.** `PUT /api/ui-default` (validate → Touch ID → write), `uiDefault` in GET
+/api/settings, `claude-scheduler ui [v1|v2]`. The airlock test now pins exactly one writer
+(server.js), placed after `await approve(`. Mutations, each RED: drop the Touch ID gate, drop
+validation, write before approve, GET always reports v1, CLI hides a refusal. npm test
+1006/1006; qa:v2, interactions and parity clean. Live, read-only: `ui` → v2; `ui v3` → usage, exit 2.
+
+**Plan:** docs/plans/2026-10-01-v2-cutover.md. Epic axg: go-bead axg.2 (human), then
+C1 favicon → C2 routing/410 → C4 parity+screenshots → C3 delete old UI → C5 docs.
+axg.8 (human) decides the orphaned session-image route. Unrelated flake filed: ioy.
