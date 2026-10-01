@@ -32,8 +32,8 @@
 import { api, failureToast } from '../api.js';
 import { $, el, clear, pageHead, toast } from '../ui.js';
 
-// Written out in full rather than composed from `branchesPath(id)` — the parity
-// gate (tools/qa/v2-parity.mjs) reads each UI's surface out of its source by
+// Written out in full rather than composed from `branchesPath(id)` — the
+// (since retired) parity gate read each UI's surface out of its source by
 // matching string literals that START with /api/, so a path built by
 // concatenating a helper's return value is a call it cannot see. An endpoint
 // invisible to the parity gate is an undeclared difference nobody is told about.
