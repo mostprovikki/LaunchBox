@@ -37,7 +37,7 @@ import {
   DEFAULT_POLL_SEC as BEADS_DEFAULT_POLL_SEC, POLL_FLOOR_SEC as BEADS_POLL_FLOOR_SEC,
 } from './lib/projects.js';
 import { startUninstall } from './lib/uninstall.js';
-import { parseSessionFile, createSessionIndex } from './lib/sessions.js';
+import { createSessionIndex, readSessionImage, ROW_UUID_RE } from './lib/sessions.js';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 // Ceiling on one confirmed burn-down plan. A plan is a preview a human read: at
@@ -1365,36 +1365,32 @@ export function createApp({
     }
   });
 
-  // Decoded on demand from promptList[p].images[i] — never externalised to a
-  // sidecar dir (M5 §5.6). promptList is deliberately not cached in the
-  // sessions table (lib/db.js's upsertSession comment), so this re-parses the
-  // file rather than reading it off the row.
-  app.get('/api/sessions/:id/image/:p/:i', async (req, res) => {
+  // Pasted images in transcripts (claude-scheduler-56m). Addressed the way
+  // readConversation() names them — row uuid + index — and decoded on demand
+  // from the session file: never externalised to a sidecar dir (M5 §5.6).
+  // Served only as one of four image types, whatever the file claims: a row
+  // whose media_type says text/html must not turn this route into a page.
+  const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+  app.get('/api/sessions/:id/image/:uuid/:i', async (req, res) => {
     if (!needSessions(res)) return;
+    const { uuid } = req.params;
+    const i = Number(req.params.i);
+    if (!ROW_UUID_RE.test(uuid) || !Number.isInteger(i) || i < 0) {
+      return res.status(400).json({ error: 'uuid must be a row uuid and i a non-negative integer' });
+    }
     const row = sessions.get(req.params.id);
     if (!row) return res.status(404).json({ error: 'not found' });
     const file = resolvedSessionFile(sessions, row);
     if (!file) return res.status(404).json({ error: 'not found' });
-    const p = Number(req.params.p);
-    const i = Number(req.params.i);
-    if (!Number.isInteger(p) || p < 0 || !Number.isInteger(i) || i < 0) {
-      return res.status(400).json({ error: 'p and i must be non-negative integers' });
-    }
-    let meta;
-    try {
-      meta = await parseSessionFile(file);
-    } catch (err) {
-      return res.status(500).json({ error: err?.message ?? String(err) });
-    }
-    const image = meta?.promptList?.[p]?.images?.[i];
+    const image = await readSessionImage(file, uuid, i);
     if (!image?.data) return res.status(404).json({ error: 'not found' });
+    if (!IMAGE_TYPES.has(image.mediaType)) return res.status(415).json({ error: 'not an image type this route serves' });
     let buf;
-    try {
-      buf = Buffer.from(image.data, 'base64');
-    } catch {
-      return res.status(500).json({ error: 'could not decode image data' });
-    }
-    res.set('Content-Type', image.mediaType || 'image/png');
+    try { buf = Buffer.from(image.data, 'base64'); } catch { return res.status(500).json({ error: 'could not decode image data' }); }
+    res.set('Content-Type', image.mediaType);
+    res.set('X-Content-Type-Options', 'nosniff');
+    // Private: an auth-gated read of the owner's transcript, never shared-cacheable.
+    res.set('Cache-Control', 'private, max-age=3600');
     res.send(buf);
   });
 

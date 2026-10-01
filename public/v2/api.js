@@ -114,6 +114,16 @@ export async function api(method, path, body) {
   return data;
 }
 
+// An auth-gated binary read shown in an <img> (claude-scheduler-56m: pasted
+// images in transcripts). <img src> cannot carry the bearer header, so the bytes
+// are fetched with it and handed back as a blob: URL the caller must revoke.
+// Throws on any failure; the caller shows a label instead of a broken image.
+export async function apiBlobUrl(path) {
+  const res = await fetch(path, { headers: authHeaders(), signal: AbortSignal.timeout(30_000) });
+  if (!res.ok) throw Object.assign(new Error(`api error ${res.status}`), { status: res.status });
+  return URL.createObjectURL(await res.blob());
+}
+
 // Toast copy for a failure, or `null` for the two states that already get a
 // persistent banner instead (piling a toast on top of the banner is noise).
 export function failureToast(err) {

@@ -1117,7 +1117,7 @@ test('sessions: every route answers 501 with no index wired', async (t) => {
     ['POST', '/api/sessions/abc/rename', { name: 'x' }],
     ['DELETE', '/api/sessions/abc', null],
     ['POST', '/api/sessions/abc/resume', null],
-    ['GET', '/api/sessions/abc/image/0/0', null],
+    ['GET', '/api/sessions/abc/image/3852901b-397e-4f95-a9e1-b31f783e5d16/0', null],
   ]) {
     const r = await req(base(), method, path, body);
     assert.equal(r.status, 501, `${method} ${path}`);
@@ -1233,28 +1233,44 @@ test('sessions: resume shells out via the claude extension\'s own action, and re
   assert.equal(r.status, 404);
 });
 
-test('sessions: image decodes promptList[p].images[i], and refuses an out-of-range index', async (t) => {
+// claude-scheduler-56m: images are addressed the way transcript turns name
+// them — row uuid + index — and served only as an image type, whatever the
+// session file claims, so a crafted row cannot make this route answer HTML.
+const IMG_UUID = '3852901b-397e-4f95-a9e1-b31f783e5d16';
+test('sessions: image serves the uuid-addressed inline image, and refuses anything else', async (t) => {
   const s = await bootWithSessions();
   t.after(() => s.close());
   const png1x1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+  const html = Buffer.from('<script>alert(1)</script>').toString('base64');
   s.write('ours', [{
-    type: 'user', timestamp: '2026-07-26T10:00:00.000Z', cwd: '/Users/me/proj',
-    message: { content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: png1x1 } }] },
+    type: 'user', uuid: IMG_UUID, timestamp: '2026-07-26T10:00:00.000Z', cwd: '/Users/me/proj',
+    message: { content: [
+      { type: 'text', text: 'look at this' },
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: png1x1 } },
+      { type: 'image', source: { type: 'base64', media_type: 'text/html', data: html } },
+    ] },
   }]);
   await s.sessions.scan();
 
-  let r = await fetch(s.base() + '/api/sessions/ours/image/0/0', {
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${currentToken}` },
-  });
+  // The conversation names the image the way the route addresses it.
+  const convo = await req(s.base(), 'GET', '/api/sessions/ours/conversation');
+  assert.deepEqual(convo.body.turns[0].images, [{ uuid: IMG_UUID, i: 0 }, { uuid: IMG_UUID, i: 1 }]);
+
+  const r = await fetch(`${s.base()}/api/sessions/ours/image/${IMG_UUID}/0`, { headers: { Authorization: `Bearer ${currentToken}` } });
   assert.equal(r.status, 200);
   assert.equal(r.headers.get('content-type'), 'image/png');
-  const buf = Buffer.from(await r.arrayBuffer());
-  assert.equal(buf.toString('base64'), png1x1);
+  assert.equal(r.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(Buffer.from(await r.arrayBuffer()).toString('base64'), png1x1);
 
-  assert.equal((await req(s.base(), 'GET', '/api/sessions/ours/image/0/9')).status, 404, 'out-of-range image index');
-  assert.equal((await req(s.base(), 'GET', '/api/sessions/ours/image/9/0')).status, 404, 'out-of-range prompt index');
-  assert.equal((await req(s.base(), 'GET', '/api/sessions/ours/image/-1/0')).status, 400, 'not a valid index at all');
-  assert.equal((await req(s.base(), 'GET', '/api/sessions/nope/image/0/0')).status, 404);
+  const bad = await fetch(`${s.base()}/api/sessions/ours/image/${IMG_UUID}/1`, { headers: { Authorization: `Bearer ${currentToken}` } });
+  assert.equal(bad.status, 415, 'a stored text/html "image" is refused, not served');
+  assert.ok(!(await bad.text()).includes('<script>'), 'and its bytes never come back');
+
+  assert.equal((await req(s.base(), 'GET', `/api/sessions/ours/image/${IMG_UUID}/9`)).status, 404, 'out-of-range image index');
+  assert.equal((await req(s.base(), 'GET', '/api/sessions/ours/image/00000000-0000-4000-8000-000000000000/0')).status, 404, 'no such row');
+  assert.equal((await req(s.base(), 'GET', '/api/sessions/ours/image/not-a-uuid/0')).status, 400);
+  assert.equal((await req(s.base(), 'GET', `/api/sessions/ours/image/${IMG_UUID}/-1`)).status, 400);
+  assert.equal((await req(s.base(), 'GET', `/api/sessions/nope/image/${IMG_UUID}/0`)).status, 404);
 });
 
 test('sessions: traversal — a crafted row pointing outside the index root is refused, not served', async (t) => {
@@ -1273,7 +1289,7 @@ test('sessions: traversal — a crafted row pointing outside the index root is r
   const outside = mkdtempSync(join(tmpdir(), 'cs-outside-'));
   const secret = join(outside, 'secret.jsonl');
   writeFileSync(secret, JSON.stringify({
-    type: 'user', timestamp: '2026-07-26T10:00:00.000Z', cwd: '/Users/me/proj',
+    type: 'user', uuid: '3852901b-397e-4f95-a9e1-b31f783e5d16', timestamp: '2026-07-26T10:00:00.000Z', cwd: '/Users/me/proj',
     message: { content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: secretPng } }] },
   }) + '\n');
   upsertSession(s.db, {
@@ -1285,7 +1301,7 @@ test('sessions: traversal — a crafted row pointing outside the index root is r
   });
 
   assert.equal((await req(s.base(), 'GET', '/api/sessions/escaped/conversation')).status, 404);
-  const imgRes = await req(s.base(), 'GET', '/api/sessions/escaped/image/0/0');
+  const imgRes = await req(s.base(), 'GET', '/api/sessions/escaped/image/3852901b-397e-4f95-a9e1-b31f783e5d16/0');
   assert.equal(imgRes.status, 404);
   assert.notEqual(imgRes.raw, secretPng, 'the secret bytes must never come back, whatever the status code');
   // The row itself is still listable (it is a legitimate cache entry) — only
