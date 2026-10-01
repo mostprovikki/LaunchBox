@@ -533,3 +533,22 @@ test('remove() after linking leaves the main checkout\'s assets intact', async (
     mainIntact(r.main);
   } finally { r.cleanup(); }
 });
+
+// claude-scheduler-0ok: git worktree list reports realpaths, so a worktreeRoot
+// reached through a symlink (macOS: /var -> /private/var, /tmp -> /private/tmp)
+// never matched — reuse fell through to `worktree add`, which failed "already exists".
+test('ensure reuses a worktree when worktreeRoot is reached through a symlink', async () => {
+  const r = assetRepo();
+  try {
+    symlinkSync(r.base, join(r.base, 'via-link'));
+    const root = join(r.base, 'via-link', 'wt');
+    const wt = createWorktrees();
+    const first = await wt.ensure(r.project, { root, beadId: 'sp-1' });
+    assert.equal(first.created, true);
+    const again = await wt.ensure(r.project, { root, beadId: 'sp-1' });
+    assert.equal(again.created, false, 'the second poll must reuse, not re-add');
+    assert.equal(again.path, first.path, 'the path handed back is the configured one, so remove()/snapshot() agree');
+    const removed = await wt.remove(r.project, { root, beadId: 'sp-1' });
+    assert.equal(removed.removed, true, 'remove() through the same symlinked root still reaps it');
+  } finally { r.cleanup(); }
+});
