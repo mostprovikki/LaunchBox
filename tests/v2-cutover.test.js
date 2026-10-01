@@ -23,7 +23,7 @@ async function boot() {
   const app = createApp({ db, runner, scheduler, extensions, awake, token: ensureToken() });
   const server = app.listen(0, '127.0.0.1');
   await new Promise((r) => server.once('listening', r));
-  return { server, base: `http://127.0.0.1:${server.address().port}` };
+  return { server, db, base: `http://127.0.0.1:${server.address().port}` };
 }
 
 test('v2 favicon is served from v2 assets', async (t) => {
@@ -40,4 +40,41 @@ test('v2 favicon is served from v2 assets', async (t) => {
   const res = await fetch(url, { redirect: 'manual' });
   assert.equal(res.status, 200);
   assert.match(res.headers.get('content-type') || '', /^image\/svg\+xml/);
+});
+
+// C2 (claude-scheduler-axg.4): the switch is gone. `/` is v2 with no setting
+// consulted, and an old `/v1` link fails loudly instead of serving a page
+// that is about to be deleted.
+test('/v1 answers 410 Gone and points at /', async (t) => {
+  const { server, base } = await boot();
+  t.after(() => server.close());
+
+  const res = await fetch(base + '/v1', { redirect: 'manual' });
+  assert.equal(res.status, 410);
+  const body = await res.text();
+  assert.match(body, /href="\/"/, '410 body must link to /');
+  assert.doesNotMatch(body, /<title>Scheduler<\/title>/, 'must not be the old UI');
+});
+
+test('/ serves v2 even with a stale v2Default=0 left in settings', async (t) => {
+  const { server, base, db } = await boot();
+  t.after(() => server.close());
+  // A DB written before C2 may still carry the flag OFF; it must not matter.
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('v2Default', '0')").run();
+
+  const res = await fetch(base + '/', { redirect: 'manual' });
+  assert.equal(res.status, 200);
+  const body = await res.text();
+  assert.match(body, /<title>LaunchBox<\/title>/);
+});
+
+test('the ui-default switch and uiDefault setting are gone', async (t) => {
+  const { server, base } = await boot();
+  t.after(() => server.close());
+  const headers = { Authorization: `Bearer ${ensureToken()}`, 'Content-Type': 'application/json' };
+
+  const put = await fetch(base + '/api/ui-default', { method: 'PUT', headers, body: JSON.stringify({ ui: 'v1' }) });
+  assert.equal(put.status, 404);
+  const settings = await (await fetch(base + '/api/settings', { headers })).json();
+  assert.equal('uiDefault' in settings, false);
 });

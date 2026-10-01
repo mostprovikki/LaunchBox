@@ -111,17 +111,6 @@ test('GET /v2/assets/system.css is served as css', async (t) => {
   assert.match(res.headers.get('content-type') || '', /text\/css/);
 });
 
-test('GET / still serves the old UI, untouched', async (t) => {
-  const { server, base } = await boot();
-  t.after(() => server.close());
-
-  const res = await fetch(base() + '/');
-  assert.equal(res.status, 200);
-  const body = await res.text();
-  assert.match(body, /<title>Scheduler<\/title>/, 'old UI title must still be served at /');
-  assert.match(body, /id="usage-chip"/, 'old UI markup must still be intact at /');
-});
-
 test('/v2 is not behind the /api bearer-token gate, but /api itself still is', async (t) => {
   const { server, base } = await boot();
   t.after(() => server.close());
