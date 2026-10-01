@@ -8,7 +8,7 @@
 // Since claude-scheduler-btv.24 this is a Workbench (docs/design/launchbox.md
 // §5; Option 2 of docs/design/mockups/project-flavours.html): Burst… is the
 // primary, activate/pause the one state control, and Poll now / Dependency
-// graph / Remove project… sit in a ⋯ menu.
+// graph / Review queue / Remove project… sit in a ⋯ menu.
 //
 // Endpoints reused unchanged: GET /api/projects, GET /api/projects/:id/ready,
 // POST /api/projects/:id/poll, PUT/DELETE /api/projects/:id, GET /api/jobs,
@@ -232,7 +232,7 @@ function closeMenu({ refocus = true } = {}) {
 
 function moreMenu(p) {
   const btn = iconBtn({
-    label: 'More actions', tip: 'Poll now, dependency graph, remove',
+    label: 'More actions', tip: 'Poll now, review queue, dependency graph, remove',
     'aria-haspopup': 'menu', 'aria-expanded': 'false',
   });
   btn.textContent = '⋯';
@@ -245,8 +245,13 @@ function moreMenu(p) {
   // openable while the daemon refuses writes (claude-scheduler-vo4.5).
   const graph = el('a', { role: 'menuitem', href: `#graph?id=${encodeURIComponent(p.id)}` }, 'Dependency graph');
   graph.addEventListener('click', () => closeMenu({ refocus: false }));
+  // §7: "Review queue" left the header for this menu (claude-scheduler-1xy). A
+  // link, like the graph: navigating is a read; merging asks for Touch ID there.
+  const review = el('a', { role: 'menuitem', href: `#review?id=${encodeURIComponent(p.id)}` }, 'Review queue');
+  review.addEventListener('click', () => closeMenu({ refocus: false }));
   const list = el('div', { class: 'card menu', role: 'menu', 'aria-label': 'More actions', hidden: true }, [
     item('poll', 'Poll now'),
+    review,
     graph,
     item('remove', 'Remove project…', 'danger'),
   ]);
@@ -284,15 +289,16 @@ function headerActions(p) {
   return [burst, ctl, moreMenu(p)];
 }
 
-// "N waiting to merge" — only when there is something to merge (§5). The
-// review queue is the Inbox's half; this page only points at it.
+// "N waiting to merge" — only when there is something to merge (§5). Merging
+// is the Inbox's job, so the strip points there; this project's own queue is
+// in the ⋯ menu (claude-scheduler-1xy).
 function waitingStrip(p) {
   const n = state.waiting ?? 0;
   if (!(n > 0)) return null;
   return el('div', { class: 'banner banner--info', 'data-waiting': true, style: 'margin: -6px 0 14px;' }, el('span', {}, [
     el('b', {}, `${n} branch${n === 1 ? '' : 'es'} waiting to merge`),
     ' from this project. ',
-    el('a', { href: `#review?id=${encodeURIComponent(p.id)}` }, 'Review in Inbox →'),
+    el('a', { href: '#inbox' }, 'Review in Inbox →'),
   ]));
 }
 

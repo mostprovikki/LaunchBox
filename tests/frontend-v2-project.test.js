@@ -152,10 +152,13 @@ test('Project header: Burst… is the one primary, Poll now/Graph/Remove live in
   assert.deepEqual(atRest, ['Burst…', 'Pause', 'More actions'], 'header at rest: Burst, the state control, ⋯');
   assert.ok(menu().hidden, 'the menu is closed at rest');
   const items = [...menu().querySelectorAll('[role=menuitem]')].map((n) => n.textContent.trim());
-  assert.deepEqual(items, ['Poll now', 'Dependency graph', 'Remove project…']);
-  assert.equal(menu().querySelector('a[role=menuitem]').getAttribute('href'), '#graph?id=p1');
-  // The retired header buttons are gone from the page head entirely.
-  assert.ok(!/Review queue/.test(document.querySelector('.pagehead').textContent));
+  // claude-scheduler-1xy: §7 moved "Review queue" off the header INTO this menu;
+  // btv.24 dropped it, leaving the per-project Review route unreachable from here.
+  assert.deepEqual(items, ['Poll now', 'Review queue', 'Dependency graph', 'Remove project…']);
+  const links = Object.fromEntries([...menu().querySelectorAll('a[role=menuitem]')].map((a) => [a.textContent.trim(), a.getAttribute('href')]));
+  assert.deepEqual(links, { 'Review queue': '#review?id=p1', 'Dependency graph': '#graph?id=p1' });
+  // The retired header button is gone from the header at rest (it lives in the menu now).
+  assert.ok(!outsideMenu(head()).some((b) => /Review queue/.test(b.textContent)));
 });
 
 test('Burst… opens the burst dialog scoped to this project', async () => {
@@ -296,7 +299,9 @@ test('"N waiting to merge → Review in Inbox" appears only when N > 0', async (
   assert.match(strip.textContent, /2 branches waiting to merge/);
   const link = strip.querySelector('a');
   assert.match(link.textContent, /Review in Inbox →/);
-  assert.equal(link.getAttribute('href'), '#review?id=p1');
+  // claude-scheduler-1xy: the label says Inbox, so the link goes there (§5, mockup
+  // project-flavours.html Option 2). It pointed at #review and this line pinned that.
+  assert.equal(link.getAttribute('href'), '#inbox');
 });
 
 test('Up next rows: priority badge, short mono id, title, grey type, unblocks only when > 0, filed … ago', async () => {
