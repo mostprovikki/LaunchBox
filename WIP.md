@@ -1778,3 +1778,45 @@ Inbox →" points at `#review?id=` until the Inbox bead lands.
 - Real-git tests; 12 mutations each went red (incl. caller not threading config.linkFromMain).
 - Found: `ensure()` matches `git worktree list` paths exactly, so a root under a symlinked dir (macOS `/var`→`/private/var`) never reuses. Prod root is under `~`, so latent only.
 - Open: `~/.claude/docs/beads-task-tracking.md` .scheduler.json section not updated (outside worktree).
+
+## c9n — flaky multi-schedule once test (2026-10-01)
+
+**Cause.** `tests/scheduler.test.js` "multi-schedule: both once-entries fire" failed `enabled === true`
+after the first fire. Mechanism: the 1000ms lead died on arrival under full-suite load (no-catch-up →
+never armed), so the only armed entry fired as the "last" one and disabled the job. Test also
+ignored `waitFor`'s return (it returns false on timeout, never throws).
+
+**Fix.** Leads 2000/4500ms; assert `nextFire === first` right after start (a dead lead now reports
+as itself), assert `nextFire === second` after the first fire, `assert.ok(await waitFor(...))`.
+
+**Mutations** (lib/scheduler.js, restored by anchor, no diff left): arm only the first once-entry →
+RED; always disable on a once fire → RED.
+
+**Gates:** 5 consecutive full `npm test` runs, 915/915 each (~29s).
+
+## btv.26 — Inbox rows carry bead titles (2026-10-01)
+
+**Design.** No bd call per poll: `materialise()` (lib/projects.js) now writes `params._beadTitle`
+on every run; `lib/inbox.js` reads all bead job rows in one query per poll and titles both
+`waiting` and `handedBack` rows. Rows minted before `_beadTitle` fall back to the job name minus
+`"<project name>: "` — only when that prefix still matches (a renamed project's name is not a
+title); otherwise `title: null` and inbox-logic.js keeps its tip-subject / short-id fallback.
+
+**Mutations** (each RED, sources restored byte-identical): drop `_beadTitle` from materialise;
+handed-back `title: null`; waiting rows untitled; strip any `x: ` prefix instead of the project's;
+let the job name beat `_beadTitle`.
+
+**Live, production data** (daemon restarted, PID started 15:57): /api/v2/inbox count 8, all 8
+titled via the name fallback (4 trip-planner waiting, 4 system_migration handed back). CDP on
+/v2/#inbox: every `.ibx-item` shows the title; long titles wrap; detail head = title, Bead row = short id.
+
+**Gates:** npm test 999/999; qa:v2 clean (11 routes × 2 themes, 0 skipped); qa:v2:interactions
+clean; qa:v2:parity clean.
+
+## 0ok — ensure() reuse under a symlinked worktreeRoot (2026-10-01)
+
+`git worktree list` reports realpaths; ensure() compared `join(root, name)` literally, so a root
+under a symlink fell through to `worktree add` → "already exists". Now also matches
+`join(realpath(root), name)`; the returned `path` stays the configured form so remove()/snapshot()
+agree. Real-git test through a symlinked root: red with the exact "already exists" error before
+the fix; mutation (drop the realpath alternative) → RED. npm test 1000/1000.
