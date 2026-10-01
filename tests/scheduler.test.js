@@ -221,3 +221,61 @@ test('paused suppresses fires; disabled jobs not scheduled; reload picks up chan
   scheduler.stop();
   assert.ok(starts.length >= 1);
 });
+
+// A timer can wake a hair before its due time (Node schedules from a cached loop
+// clock). croner's one-shot Date mode then skipped the fire — `now < at` — and
+// re-armed from a *second* clock read that had ticked past `at`, found no next
+// run and armed nothing: the entry was silently lost (ioy, measured 6/192 loaded
+// runs). Drive that wake by hand: capture the scheduler's timers, read the clock
+// 1ms early once, on time after.
+async function earlyWake(arm) {
+  const RealDate = Date;
+  const realSetTimeout = globalThis.setTimeout;
+  const timers = [];
+  globalThis.setTimeout = (fn, ms, ...args) => {
+    const t = realSetTimeout(() => {}, 2 ** 31 - 1);
+    t.unref();
+    timers.push({ fn: () => fn(...args), ms });
+    return t;
+  };
+  try {
+    const at = await arm(); // returns the fire time (ms); timers armed by now
+    const reads = [at - 1];
+    globalThis.Date = class extends RealDate {
+      constructor(...a) { if (a.length) super(...a); else super(reads.length ? reads.shift() : at); }
+      static now() { return reads.length ? reads.shift() : at; }
+    };
+    // Run every captured timer, including any re-armed while running these.
+    for (let i = 0; i < timers.length && i < 50; i++) timers[i].fn();
+  } finally {
+    globalThis.Date = RealDate;
+    globalThis.setTimeout = realSetTimeout;
+  }
+}
+
+test('a once-entry whose timer wakes early still fires (ioy)', async () => {
+  const { db, starts, scheduler } = setup();
+  await earlyWake(() => {
+    const at = Date.now() + 60_000;
+    createJob(db, jobPayload({ schedule: { type: 'once', at: new Date(at).toISOString() } }));
+    scheduler.start();
+    return at;
+  });
+  scheduler.stop();
+  assert.equal(starts.length, 1);
+  assert.equal(starts[0].trigger, 'once');
+});
+
+test('an afterReset entry whose timer wakes early still fires (ioy)', async () => {
+  const resetsAt = new Date(Date.now() + 60_000).toISOString();
+  const usage = fakeUsage({ five_hour: { percent: 40, resetsAt } });
+  const { db, starts, scheduler } = setup({ usage });
+  await earlyWake(() => {
+    const job = createJob(db, jobPayload({ schedule: RESET_ENTRY }));
+    scheduler.start();
+    return new Date(afterResetFireAt(RESET_ENTRY, resetsAt, job.id)).getTime();
+  });
+  scheduler.stop();
+  assert.equal(starts.length, 1);
+  assert.equal(starts[0].trigger, 'schedule');
+});
