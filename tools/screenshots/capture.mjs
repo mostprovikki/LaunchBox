@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Capture the whole UI to a versioned screenshot folder.
+// Capture the v2 UI to a versioned screenshot folder.
 //
 //   npm run screenshots                 # -> working_prototype_screenshots/v1, v2, …
 //   npm run screenshots -- --label v2   # explicit folder name
@@ -245,7 +245,7 @@ async function main() {
     await page.goto(`${baseUrl}/#token=${token}`);
     await sleep(600);
 
-    const ctx = { api, baseUrl, ids: {}, liveRunId: null, drainRunId: null };
+    const ctx = { api, baseUrl, ids: {} };
 
     const runPhase = async (phase) => {
       for (const shot of wanted.filter((s) => s.phase === phase)) {
@@ -284,9 +284,6 @@ async function main() {
       await sleep(1000);
       log('· main shots');
       await runPhase('main');
-
-      log('· global-state shots (pause modes — these stop live work)');
-      await runPhase('global');
     } else {
       log('· skipping seed (no non-empty-phase shots selected)');
     }
@@ -311,7 +308,7 @@ async function main() {
   const failed = results.filter((r) => !r.ok);
   log(`\n${results.length - failed.length}/${results.length} shots captured → ${outDir}`);
   if (failed.length) {
-    log(`\n${failed.length} failed — most likely selectors that moved in the overhaul:`);
+    log(`\n${failed.length} failed — most likely a selector that moved:`);
     for (const f of failed) log(`  ${f.file}: ${f.error}`);
     log(`\nFix them in tools/screenshots/shots.mjs (every selector lives there).`);
     return 1;
@@ -338,8 +335,8 @@ Viewport ${VIEWPORT.width}×${VIEWPORT.height} at DPR ${VIEWPORT.scale}, so PNGs
 ${VIEWPORT.width * VIEWPORT.scale}px wide. *(fullpage)* shots are taller than the viewport;
 the sticky header appears mid-image in those, which is a capture artifact, not a layout bug.
 
-**Dark theme only** — the app has no light mode (single hardcoded palette in
-\`public/style.css\`, no \`prefers-color-scheme\` query, no theme toggle).
+Each populated route is captured twice, in the dark and the light theme
+(\`data-theme\` set on \`<html>\`, as the qa:v2 route walk does).
 
 ## How this was produced
 
@@ -348,7 +345,7 @@ never touched. \`claudePath\` is pre-seeded to a fake binary, so the usage meter
 values (5h 37%, weekly 64%, Fable 90%) and **no real \`claude\` can run** — a capture spends
 no API quota. Only \`command\`-type jobs are ever executed; the three \`claude\` jobs are
 created disabled and never fired. No project is ever activated, which is why the burst
-dialog shows its "No activated projects" state.
+is never offered a project to run.
 
 The Sessions tab is seeded separately via \`CS_SESSIONS_ROOT\` pointed at four planted
 \`.jsonl\` transcripts (never \`~/.claude/projects\`): a parallel-tool-call session, an
@@ -360,7 +357,7 @@ firing a claude job past its concurrency cap.
 
 ## Contents
 
-${group('empty', 'Zero states')}${group('main', 'Populated UI')}${group('global', 'Global pause states')}${
+${group('empty', 'Zero states')}${group('main', 'Populated UI')}${
   bad.length
     ? `## Failed shots\n\n${bad.map((b) => `- \`${b.file}\` — ${b.error}`).join('\n')}\n`
     : ''
