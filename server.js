@@ -2119,6 +2119,9 @@ export function createApp({
       // releases in 9 months with a breaking change, so which binary we talk to
       // is a setting, not a lookup.
       projectRoots: getSetting(db, 'projectRoots', ''),
+      // Which UI `/` serves (cutover phase A). Read through the same helper
+      // the root route uses, so the two cannot disagree.
+      uiDefault: v2IsDefault() ? 'v2' : 'v1',
       beadsPollSec: beadsPollSec(),
       bdPath: bdPathSetting(),
       worktreeRoot: getSetting(db, 'worktreeRoot', ''),
@@ -2305,6 +2308,28 @@ export function createApp({
     }
     awake?.refresh();
     res.json({ ok: true });
+  });
+
+  // The cutover switch (docs/plans/2026-10-01-v2-cutover.md, phase A). E3 built
+  // `v2Default` and the root-path choice but left nothing that could write it;
+  // this is the one writer, and it is Touch ID-gated so no token holder — an
+  // agent included — can throw it alone. Validate -> authorize -> write.
+  // No on-screen control by design: the flip serves no ranked job, so the
+  // control is `claude-scheduler ui [v1|v2]`. `/v1` stays the way back.
+  app.put('/api/ui-default', async (req, res) => {
+    const ui = req.body?.ui;
+    if (ui !== 'v1' && ui !== 'v2') {
+      return res.status(400).json({ errors: ['ui must be "v1" (the existing UI) or "v2" (the new LaunchBox UI)'] });
+    }
+    if (!await approve(req, res, {
+      action: 'settings.uiDefault',
+      detail: ui === 'v2'
+        ? 'open the new LaunchBox UI by default (the existing UI stays at /v1)'
+        : 'open the existing UI by default instead of the new LaunchBox UI',
+      grace: false,
+    })) return;
+    setSetting(db, 'v2Default', ui === 'v2' ? '1' : '0');
+    res.json({ ui });
   });
 
   app.post('/api/cleanup', async (req, res) => {

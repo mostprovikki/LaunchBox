@@ -19,6 +19,8 @@ import { createRunner } from '../lib/runner.js';
 import { createScheduler } from '../lib/scheduler.js';
 import { createApp } from '../server.js';
 import { request as httpRequest } from 'node:http';
+import { EventEmitter } from 'node:events';
+import { execFile } from 'node:child_process';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (rel) => readFileSync(join(ROOT, rel), 'utf8');
@@ -26,16 +28,37 @@ const read = (rel) => readFileSync(join(ROOT, rel), 'utf8');
 // A minimal boot, the same shape tests/api.test.js uses: a real listening
 // server, because the thing under test is which FILE a path serves — which
 // express.static and route ordering decide, not any function we could call.
-async function boot() {
+async function boot({ approval } = {}) {
   const dir = tmpData();
   ensureDirs();
   const db = openDb(join(dir, 'test.db'));
   const runner = createRunner({ db, extensions, spawnFn: () => {}, notifyFn: () => {} });
   const scheduler = createScheduler({ db, runner });
-  const app = createApp({ db, runner, scheduler, extensions, awake: null, token: ensureToken() });
+  const token = ensureToken();
+  const app = createApp({ db, runner, scheduler, extensions, awake: null, token, ...(approval ? { approval } : {}) });
   const server = app.listen(0, '127.0.0.1');
   await new Promise((r) => server.once('listening', r));
-  return { db, server, port: server.address().port };
+  return { db, server, token, port: server.address().port };
+}
+
+// One entry per system dialog the owner would have been shown.
+function recordingApprover(answer) {
+  const asked = [];
+  return {
+    asked,
+    available: () => ({ ok: true, degraded: false, platform: 'darwin' }),
+    request: async (spec) => { asked.push(spec); return answer; },
+    events: new EventEmitter(),
+  };
+}
+
+async function api(port, token, method, path, body) {
+  const res = await fetch(`http://127.0.0.1:${port}${path}`, {
+    method,
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  return { status: res.status, body: await res.json().catch(() => null) };
 }
 
 function get(port, path) {
@@ -52,33 +75,38 @@ function get(port, path) {
 
 // ---------------------------------------------------------- the flag
 
-test('the cutover flag ships OFF, and nothing in the repo turns it on', () => {
+test('the cutover flag ships OFF, and only the Touch ID-gated route can turn it on', () => {
   const src = read('server.js');
   assert.match(src, /getSetting\(db, 'v2Default', '0'\)/, 'the default must be off');
-  // The only place the value is READ. A second reader could disagree with this
-  // one about what "on" means.
-  assert.equal((src.match(/'v2Default'/g) ?? []).length, 1);
-  // …and nothing anywhere WRITES it. The flip is a human action against a
-  // running instance, not something the repo can do to itself — the same rule
-  // as "an agent may prepare, but never activate".
+  // One reader and one writer, both spelled literally so this scan can see them.
+  // (A constant would make the writer regex below pass vacuously.)
+  assert.equal((src.match(/'v2Default'/g) ?? []).length, 2, 'exactly one read and one write of v2Default');
+  // The one writer is the cutover route, and Touch ID comes BEFORE the write:
+  // an agent may prepare the switch, only the owner may throw it (2026-10-01
+  // cutover plan, phase A). Before that plan nothing wrote it at all.
+  const route = src.slice(src.indexOf("app.put('/api/ui-default'"));
+  assert.ok(route.length < src.length, 'the PUT /api/ui-default route exists');
+  const body = route.slice(0, route.indexOf('\n  });'));
+  const ask = body.indexOf('await approve(');
+  const write = body.search(/setSetting\(db, 'v2Default'/);
+  assert.ok(ask > 0 && write > ask, 'approve() must run before the setting is written');
   const writers = [];
   const walk = (dir) => {
     for (const name of readdirSync(dir)) {
       // `tests/` is excluded on purpose: this very file flips the setting in a
-      // throwaway DB to test the flipped state, which is how the flipped state
-      // gets tested at all. What must never write it is PRODUCTION code —
-      // server.js, lib/, bin/, tools/, public/ — because the flip is the
-      // owner's click against a running instance.
+      // throwaway DB to test the flipped state. What must never write it outside
+      // the gated route is PRODUCTION code — lib/, bin/, tools/, public/.
       if (['node_modules', '.git', '.beads', 'tests', 'redesign', 'working_prototype_screenshots'].includes(name)) continue;
       const p = join(dir, name);
       if (statSync(p).isDirectory()) { walk(p); continue; }
       if (!/\.(js|mjs)$/.test(name)) continue;
       const s2 = readFileSync(p, 'utf8');
-      if (/setSetting\([^)]*v2Default/.test(s2)) writers.push(p);
+      const n = (s2.match(/setSetting\([^)]*v2Default/g) ?? []).length;
+      if (n) writers.push(`${p.slice(ROOT.length + 1)}×${n}`);
     }
   };
   walk(ROOT);
-  assert.deepEqual(writers, [], `these files set v2Default: ${writers.join(', ')}`);
+  assert.deepEqual(writers, ['server.js×1'], `v2Default writers: ${writers.join(', ')}`);
 });
 
 test('with the flag OFF (the default), / serves the existing UI and /v2 serves v2', async (t) => {
@@ -108,6 +136,97 @@ test('/v1 serves the existing UI in BOTH states, so a link written today survive
   assert.match(after.raw, /<title>Scheduler<\/title>/, 'and /v1 is still the way back');
   const v2 = await get(port, '/v2');
   assert.match(v2.raw, /<title>LaunchBox<\/title>/, '/v2 keeps working either way');
+});
+
+// ------------------------------------------- the switch (cutover phase A)
+// docs/plans/2026-10-01-v2-cutover.md: PUT /api/ui-default, validate -> Touch ID
+// -> write, and `claude-scheduler ui [v1|v2]` as the only control (the design
+// gate refused an on-screen toggle: the flip serves no ranked job).
+
+const OK = { ok: true };
+const DENIED = { ok: false, code: 'approval_denied' };
+
+test('ui-default: a bad value is refused before Touch ID is asked, and nothing is written', async (t) => {
+  const approval = recordingApprover(OK);
+  const { db, server, token, port } = await boot({ approval });
+  t.after(() => server.close());
+  for (const body of [{ ui: 'v3' }, {}, { ui: 2 }, { ui: 'V2' }]) {
+    const r = await api(port, token, 'PUT', '/api/ui-default', body);
+    assert.equal(r.status, 400, JSON.stringify(body));
+  }
+  assert.equal(approval.asked.length, 0, 'validate comes before authorize');
+  assert.match((await get(port, '/')).raw, /<title>Scheduler<\/title>/);
+});
+
+test('ui-default: a denied Touch ID leaves / on the existing UI', async (t) => {
+  const approval = recordingApprover(DENIED);
+  const { server, token, port } = await boot({ approval });
+  t.after(() => server.close());
+  const r = await api(port, token, 'PUT', '/api/ui-default', { ui: 'v2' });
+  assert.equal(r.status, 403);
+  assert.equal(r.body.code, 'approval_denied');
+  assert.equal(approval.asked.length, 1);
+  assert.equal(approval.asked[0].action, 'settings.uiDefault');
+  assert.match(approval.asked[0].detail, /open the new LaunchBox UI/);
+  assert.match((await get(port, '/')).raw, /<title>Scheduler<\/title>/, 'denied = unchanged');
+});
+
+test('ui-default: approved, v2 makes / the new UI and v1 switches back; GET /api/settings reports it', async (t) => {
+  const approval = recordingApprover(OK);
+  const { server, token, port } = await boot({ approval });
+  t.after(() => server.close());
+  assert.equal((await api(port, token, 'GET', '/api/settings')).body.uiDefault, 'v1', 'ships OFF');
+  const on = await api(port, token, 'PUT', '/api/ui-default', { ui: 'v2' });
+  assert.equal(on.status, 200);
+  assert.deepEqual(on.body, { ui: 'v2' });
+  assert.match((await get(port, '/')).raw, /<title>LaunchBox<\/title>/);
+  assert.equal((await api(port, token, 'GET', '/api/settings')).body.uiDefault, 'v2');
+  const off = await api(port, token, 'PUT', '/api/ui-default', { ui: 'v1' });
+  assert.deepEqual(off.body, { ui: 'v1' });
+  assert.match((await get(port, '/')).raw, /<title>Scheduler<\/title>/, 'and back');
+});
+
+test('ui-default: no bearer token, no switch — and no Touch ID sheet either', async (t) => {
+  const approval = recordingApprover(OK);
+  const { server, port } = await boot({ approval });
+  t.after(() => server.close());
+  assert.equal((await api(port, '', 'PUT', '/api/ui-default', { ui: 'v2' })).status, 401);
+  assert.equal(approval.asked.length, 0);
+});
+
+function cli(port, ...args) {
+  return new Promise((resolve) => {
+    execFile(process.execPath, [join(ROOT, 'bin', 'claude-scheduler.mjs'), ...args],
+      { env: { ...process.env, CS_PORT: String(port) }, timeout: 15000 },
+      (err, stdout, stderr) => resolve({ code: err ? (err.code ?? 1) : 0, stdout, stderr }));
+  });
+}
+
+test('CLI: `ui` prints the default, `ui v2` switches it through the gated route, junk is a usage error', async (t) => {
+  const approval = recordingApprover(OK);
+  const { server, port } = await boot({ approval });
+  t.after(() => server.close());
+  const show = await cli(port, 'ui');
+  assert.equal(show.code, 0, show.stderr);
+  assert.match(show.stdout, /^v1\b/);
+  const flip = await cli(port, 'ui', 'v2');
+  assert.equal(flip.code, 0, flip.stderr);
+  assert.match(flip.stdout, /now opens v2/);
+  assert.equal(approval.asked.length, 1, 'the CLI goes through Touch ID, not around it');
+  assert.match((await get(port, '/')).raw, /<title>LaunchBox<\/title>/);
+  const bad = await cli(port, 'ui', 'v9');
+  assert.equal(bad.code, 2);
+  assert.match(bad.stderr, /usage: claude-scheduler ui \[v1\|v2\]/);
+});
+
+test('CLI: a denied Touch ID is reported as a failure, not a switch', async (t) => {
+  const approval = recordingApprover(DENIED);
+  const { server, port } = await boot({ approval });
+  t.after(() => server.close());
+  const r = await cli(port, 'ui', 'v2');
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /not switched/i);
+  assert.match((await get(port, '/')).raw, /<title>Scheduler<\/title>/);
 });
 
 // --------------------------------------------------------- the parity gate

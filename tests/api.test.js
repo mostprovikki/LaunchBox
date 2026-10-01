@@ -456,6 +456,8 @@ test('schedule preview + settings round-trip (per-extension)', async (t) => {
     // Display-only severity thresholds, as a validated pair. Not the guard's
     // reserves below: these colour a meter, those decide whether a run fires.
     usageWarnPct: 75,
+    // Which UI `/` serves; ships OFF (cutover plan 2026-10-01, phase A).
+    uiDefault: 'v1',
     usageCritPct: 85,
     awakeResetLeadMin: 20,
     // Task sources (M4a). All four ship empty/unpinned: no roots means discovery
