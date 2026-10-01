@@ -200,10 +200,12 @@ test('the allow-lists are EMPTY, and nothing common slips through them', () => {
 test('both UIs declare a favicon, so /favicon.ico is never requested', () => {
   // The fix behind the empty allow-list, pinned so a later edit to either head
   // cannot quietly reintroduce the 404 the walk would then fail on.
-  for (const f of ['public/index.html', 'public/v2/index.html']) {
-    assert.match(read(f), /<link rel="icon" href="\/favicon\.svg"/, `${f} does not declare an icon`);
+  // v2 carries its own copy under /v2/assets/ so it survives the old UI's removal (axg.3).
+  for (const [f, icon] of [['public/index.html', 'public/favicon.svg'], ['public/v2/index.html', 'public/v2/assets/favicon.svg']]) {
+    const href = '/' + icon.replace(/^public\//, '');
+    assert.ok(read(f).includes(`<link rel="icon" href="${href}"`), `${f} does not declare ${href}`);
+    assert.match(read(icon), /^<svg /, `${icon} must exist`);
   }
-  assert.match(read('public/favicon.svg'), /^<svg /, 'the icon file itself must exist');
 });
 
 // ------------------------------------------------------------- route list
