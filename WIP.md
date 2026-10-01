@@ -1841,3 +1841,9 @@ validation, write before approve, GET always reports v1, CLI hides a refusal. np
 **Plan:** docs/plans/2026-10-01-v2-cutover.md. Epic axg: go-bead axg.2 (human), then
 C1 favicon → C2 routing/410 → C4 parity+screenshots → C3 delete old UI → C5 docs.
 axg.8 (human) decides the orphaned session-image route. Unrelated flake filed: ioy.
+
+## claude-scheduler-axg.3 — Cutover C1: move favicon into public/v2/assets
+- 2026-10-01. Copied public/favicon.svg → public/v2/assets/favicon.svg; v2 index links /v2/assets/favicon.svg. Old public/favicon.svg untouched (old UI uses it until C3).
+- New tests/v2-cutover.test.js fetches the icon href from served /v2 and asserts path under /v2/assets/ + 200 image/svg+xml; red first ("got /favicon.svg").
+- tests/qa-route-walk.test.js favicon gate pinned the old v2 href; now checks each UI's own icon path + file.
+- npm test 991/991; qa:v2 clean 11 routes × 2 themes.
