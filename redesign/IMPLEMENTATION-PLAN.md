@@ -83,6 +83,8 @@ filing: `bd ready` offers only A1; `bd dep tree claude-scheduler-btv.15` shows t
 - `…btv.15` **E3** Parity review + cutover prep: side-by-side vs old UI, `/ → /v2` behind a
   flag (default OFF), old UI at `/v1` for one release. **The cutover click is the owner's.**
   Blocked by E1 + E2.
+  → **Superseded 2026-10-01** by `docs/plans/2026-10-01-v2-cutover.md`: the owner flipped
+  `v2Default` on 2026-09-24; retiring the old UI is planned there.
 
 ## Dispatch schedule (all Sonnet 5 — for approval at each wave)
 
