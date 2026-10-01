@@ -33,7 +33,7 @@ export const ACCEPTED = Object.freeze([
     status: 'covered differently',
     why: 'The existing UI reads GET /api/budget for its budget-state line. /v2 gets the same '
       + 'facts through GET /api/v2/overview (which calls policy.explain() server-side) for the '
-      + 'Overview meters, and edits the reserve/warn/critical values on Settings. No capability '
+      + 'Overview status light, and edits the reserve/warn/critical values on Settings. No capability '
       + 'is lost; the call is simply not made from the browser.',
   },
   {
@@ -88,6 +88,28 @@ export const ACCEPTED = Object.freeze([
     why: 'review queue for scheduled work (spec 2026-09-24-scheduler-skills-design). The existing '
       + 'UI has no notion of scheduler branches; merge and discard are Touch ID-gated and '
       + 'fast-forward only.',
+  },
+  {
+    endpoint: '/api/usage/refresh',
+    side: 'old-only',
+    status: 'removed by design',
+    why: 'btv.21. docs/design/launchbox.md §7 cut the Overview\'s headroom meters and refresh '
+      + 'buttons (owner, 2026-09-26): the Monitor shows one headroom fact with the usage poll\'s own '
+      + 'as-of time, and the poll refreshes on its own. Restore if the owner tunes reserves daily.',
+  },
+  {
+    endpoint: '/api/v2/inbox',
+    side: 'v2-only',
+    status: 'additive by design',
+    why: 'btv.22. The one needs-me count (waiting to merge + handed back, all projects) the '
+      + 'Overview needs-you card reads; the existing UI has no Inbox.',
+  },
+  {
+    endpoint: '/api/v2/visits',
+    side: 'v2-only',
+    status: 'additive by design',
+    why: 'btv.25. The Overview stamps a visit once per load so its spend card can say "since last '
+      + 'visit"; the existing UI has no such card.',
   },
   {
     endpoint: '/api/v2/plan-candidates',
