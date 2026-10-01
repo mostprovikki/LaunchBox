@@ -35,7 +35,7 @@ git commit -m "<type>(<scope>): <bead title> (<bead id>)"
 
 Do not commit `.beads/`; the scheduler owns bead writes here.
 
-## 5. One evidence note, then WIP.md
+## 5. One evidence note
 
 ```bash
 bd -C <primary> update <id> --append-notes "run: gates passed — branch scheduler/<name>
@@ -45,8 +45,8 @@ open: <anything left, or none>"
 ```
 
 First line is fixed-form (`run: gates passed|gates failed|no gates — branch <name>`); the
-review queue reads it. If the repo has `WIP.md`, append a dated `## <bead id> — <title>` entry
-of 3–8 lines: what changed, what was measured, what is open.
+review queue reads it. This note IS the run's record. Do not append to `WIP.md`: where a repo
+has one, it holds only work in progress, and a finished bead's evidence lives here, on the bead.
 
 ## 6. Marker
 

@@ -5,8 +5,7 @@
 // GET/PUT settings shapes are server.js's (search "Settings:" — the comment
 // above its app.get for the settings route), captured from a running
 // instance, not hand-built (see this repo's memory:
-// extract-shared-vocabulary-before-fanning-out and WIP.md's "shape-invention"
-// note on B1's fixtures).
+// extract-shared-vocabulary-before-fanning-out).
 
 // `softGraceMs` is stored/sent in milliseconds but the mockup (and every
 // human) thinks in seconds — the one field on this page with a unit
