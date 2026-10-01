@@ -1771,3 +1771,10 @@ AFTER Escape's refocus, leaving focus on a detached ⋯. Test added red-first; f
 before refocus. **Mutations** 10/10 red. **Gates:** `npm test` 950/950; `qa:v2`,
 `qa:v2:interactions`, `qa:v2:parity` clean. Open: Inbox route doesn't exist yet — "Review in
 Inbox →" points at `#review?id=` until the Inbox bead lands.
+
+## 2026-10-01 claude-scheduler-3wl — linkFromMain: link gitignored assets into per-bead worktrees
+- `.scheduler.json` `linkFromMain: string[]` (repo-relative; abs/`..`/blank/non-array refused). `worktree.ensure()` symlinks each `<wt>/<p> → <main>/<p>` on create and reuse.
+- Source checks (missing, is-symlink) run BEFORE `worktree add`; ignore check runs on the LINK in the worktree, because measured: `.venv/` ignores main's real dir but not a symlink (`git check-ignore` exit 1, `status` shows `?? .venv`) — so snapshot()'s `add -A` would commit it. Unignored link is unlinked and the run refused.
+- Real-git tests; 12 mutations each went red (incl. caller not threading config.linkFromMain).
+- Found: `ensure()` matches `git worktree list` paths exactly, so a root under a symlinked dir (macOS `/var`→`/private/var`) never reuses. Prod root is under `~`, so latent only.
+- Open: `~/.claude/docs/beads-task-tracking.md` .scheduler.json section not updated (outside worktree).
