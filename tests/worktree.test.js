@@ -297,6 +297,21 @@ test('if the worktree cannot be prepared the bead is abandoned, not run in the c
   assert.equal(getLease(db, project.id, 'sp-1').state, 'released');
 });
 
+test('the project\'s linkFromMain reaches ensure(): a missing asset abandons the bead, not runs it bare', async () => {
+  const db = openDb(join(tmpData(), 'test.db'));
+  const project = createProject(db, {
+    name: 'repo', path: '/repo', state: 'active', beadsDir: '/repo/.beads',
+    config: { autoLabel: 'unattended', maxConcurrent: 1, linkFromMain: ['.venv'], defaults: { timeoutMin: 30, model: 'default', notify: 'failure' } },
+  });
+  const { projects, starts } = pollerSetup({ db, project });
+  const abandoned = [];
+  projects.events.on('abandoned', (e) => abandoned.push(e));
+  const r = await projects.pollProject(project.id);
+  assert.equal(r.started.length, 0);
+  assert.equal(starts.length, 0);
+  assert.match(abandoned[0]?.reason ?? '', /missing in main checkout: \/repo\/\.venv/);
+});
+
 test('with no worktreeRoot configured the work falls back to the project path', async () => {
   const { projects, project, starts } = pollerSetup({ worktreeRoot: null });
   await projects.pollProject(project.id);
@@ -413,3 +428,108 @@ for (const [label, gitOverrides, reasonPattern] of [
       'a failed snapshot must not block the reap');
   });
 }
+
+// --- linkFromMain: gitignored assets linked from the main checkout ----------
+// Real git + real fs: whether a symlink is ignored is git's call (a dir-only
+// `.venv/` pattern does NOT match a symlink), and a fake would only agree with me.
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, lstatSync, readlinkSync, symlinkSync, existsSync, rmSync, realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+
+const g = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], { cwd, encoding: 'utf8' });
+function assetRepo(ignore = '.venv\nshared/.model-cache\n') {
+  // realpath: git worktree list reports /private/var, and ensure() matches paths exactly.
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'cs-link-')));
+  const main = join(base, 'main');
+  mkdirSync(main);
+  g(main, 'init', '-q', '-b', 'main');
+  writeFileSync(join(main, '.gitignore'), ignore);
+  mkdirSync(join(main, 'shared'));
+  writeFileSync(join(main, 'shared', 'keep.txt'), 'tracked\n');
+  g(main, 'add', '.'); g(main, 'commit', '-q', '-m', 'init');
+  mkdirSync(join(main, '.venv'));
+  writeFileSync(join(main, '.venv', 'sentinel'), 'real\n');
+  mkdirSync(join(main, 'shared', '.model-cache'));
+  const project = { id: 'abcdef1234567890', name: 'assets', path: main };
+  const root = join(base, 'wt');
+  return { base, main, root, project, cleanup: () => rmSync(base, { recursive: true, force: true }) };
+}
+const mainIntact = (main) => {
+  assert.equal(lstatSync(join(main, '.venv')).isSymbolicLink(), false, 'main .venv is still a real dir');
+  assert.equal(readFileSync(join(main, '.venv', 'sentinel'), 'utf8'), 'real\n');
+};
+
+test('ensure links declared gitignored assets from the main checkout', async () => {
+  const r = assetRepo();
+  try {
+    const wt = createWorktrees();
+    const res = await wt.ensure(r.project, { root: r.root, beadId: 'sp-1', linkFromMain: ['.venv', 'shared/.model-cache'] });
+    assert.equal(res.created, true);
+    for (const rel of ['.venv', 'shared/.model-cache']) {
+      assert.ok(lstatSync(join(res.path, rel)).isSymbolicLink(), `${rel} is a link`);
+      assert.equal(readlinkSync(join(res.path, rel)), join(r.main, rel));
+    }
+    assert.equal(readFileSync(join(res.path, '.venv', 'sentinel'), 'utf8'), 'real\n');
+    assert.equal(g(res.path, 'status', '--porcelain'), '', 'links are ignored, so snapshot() commits nothing');
+    mainIntact(r.main);
+  } finally { r.cleanup(); }
+});
+
+test('ensure links on reuse of an existing worktree, and leaves a correct link alone', async () => {
+  const r = assetRepo();
+  try {
+    const wt = createWorktrees();
+    const first = await wt.ensure(r.project, { root: r.root, beadId: 'sp-1' });
+    assert.equal(existsSync(join(first.path, '.venv')), false, 'nothing linked when nothing declared');
+    const again = await wt.ensure(r.project, { root: r.root, beadId: 'sp-1', linkFromMain: ['.venv'] });
+    assert.equal(again.created, false);
+    assert.equal(readlinkSync(join(again.path, '.venv')), join(r.main, '.venv'));
+    const third = await wt.ensure(r.project, { root: r.root, beadId: 'sp-1', linkFromMain: ['.venv'] });
+    assert.equal(readlinkSync(join(third.path, '.venv')), join(r.main, '.venv'), 'idempotent');
+    mainIntact(r.main);
+  } finally { r.cleanup(); }
+});
+
+test('linkFromMain refusals: missing, source-is-symlink, not ignored, destination occupied', async () => {
+  const wt = createWorktrees();
+  const r = assetRepo('.venv/\nlinked\n');
+  try {
+    // Missing in main → refused before any worktree is made.
+    await assert.rejects(wt.ensure(r.project, { root: r.root, beadId: 'm', linkFromMain: ['nope'] }),
+      (e) => e instanceof WorktreeError && /missing in main checkout: .*nope/.test(e.message));
+    assert.equal(existsSync(join(r.root, worktreeName(r.project, 'm'))), false, 'no worktree left behind');
+
+    // Source in main is itself a symlink.
+    symlinkSync(join(r.main, '.venv'), join(r.main, 'linked'));
+    await assert.rejects(wt.ensure(r.project, { root: r.root, beadId: 's', linkFromMain: ['linked'] }),
+      (e) => e instanceof WorktreeError && /itself a symlink: .*linked/.test(e.message));
+
+    // `.venv/` ignores the real dir in main but not a symlink → refused, link removed.
+    await assert.rejects(wt.ensure(r.project, { root: r.root, beadId: 'i', linkFromMain: ['.venv'] }),
+      (e) => e instanceof WorktreeError && /\.venv is not gitignored/.test(e.message));
+    const ipath = join(r.root, worktreeName(r.project, 'i'));
+    assert.equal(existsSync(join(ipath, '.venv')), false, 'the unignored link is not left for snapshot() to commit');
+    assert.equal(g(ipath, 'status', '--porcelain'), '');
+    mainIntact(r.main);
+  } finally { r.cleanup(); }
+
+  const o = assetRepo();
+  try {
+    const first = await wt.ensure(o.project, { root: o.root, beadId: 'o' });
+    mkdirSync(join(first.path, '.venv'));
+    await assert.rejects(wt.ensure(o.project, { root: o.root, beadId: 'o', linkFromMain: ['.venv'] }),
+      (e) => e instanceof WorktreeError && /\.venv already exists in the worktree/.test(e.message));
+    mainIntact(o.main);
+  } finally { o.cleanup(); }
+});
+
+test('remove() after linking leaves the main checkout\'s assets intact', async () => {
+  const r = assetRepo();
+  try {
+    const wt = createWorktrees();
+    const res = await wt.ensure(r.project, { root: r.root, beadId: 'sp-1', linkFromMain: ['.venv'] });
+    await wt.remove(r.project, { root: r.root, beadId: 'sp-1' });
+    assert.equal(existsSync(res.path), false, 'worktree gone');
+    mainIntact(r.main);
+  } finally { r.cleanup(); }
+});
