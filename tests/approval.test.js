@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import { tmpData, fakeSpawn, sleep } from './helpers.js';
+import { tmpData, fakeSpawn, sleep, waitFor } from './helpers.js';
 import {
   createApproval, APPROVAL_CODES, DEFAULT_TIMEOUT_MS, DEFAULT_GRACE_MS, DEFAULT_MAX_QUEUED,
   flattenReason,
@@ -25,8 +25,11 @@ function setup({ helper = true, ...opts } = {}) {
   // Injected clock: the grace window is 5 minutes and no test may wait for it.
   let t = Date.UTC(2026, 6, 26, 12, 0, 0);
   const clock = { now: () => t, advance: (ms) => { t += ms; } };
+  // A dialog timeout no loaded machine reaches: at 60ms the watchdog beat the
+  // test's own answer under parallel load and turned approvals and denials into
+  // approval_timeout (claude-scheduler-yx0). Timeout tests pass their own.
   const approval = createApproval({
-    spawnFn, helperPath, now: clock.now, timeoutMs: 60, graceMs: 300_000, platform: 'darwin', ...opts,
+    spawnFn, helperPath, now: clock.now, timeoutMs: 60_000, graceMs: 300_000, platform: 'darwin', ...opts,
   });
   return { approval, spawnFn, clock, helperPath, dir };
 }
@@ -477,11 +480,15 @@ test('a queued request cannot ride the approval it waited behind', async () => {
   // the user expected.
   //
   // Both requests carry the SAME token, because there is only one.
+  //
+  // Sequenced on spawnFn.calls, not sleeps (claude-scheduler-yx0).
   const { approval, spawnFn } = setup();
   const attacker = approval.request({ action: 'job.create', detail: 'create the attacker job', token: 'the-only-token', grace: true });
-  await sleep(5);
+  assert.ok(await waitFor(() => spawnFn.calls.length === 1), 'the attacker should have taken the dialog');
+  // request() queues synchronously, so the victim is waiting once this returns.
   const victim = approval.request({ action: 'job.create', detail: 'create the user job', token: 'the-only-token', grace: true });
-  await sleep(5);
+  // An absence, so a bounded wait: nothing may spawn while the first dialog is up.
+  await sleep(20);
 
   assert.equal(spawnFn.calls.length, 1, 'only the first request should have a dialog open');
 
@@ -491,7 +498,7 @@ test('a queued request cannot ride the approval it waited behind', async () => {
 
   // The victim's request must now raise its OWN dialog rather than being waved
   // through by the grace the attacker's approval opened.
-  await sleep(10);
+  await waitFor(() => spawnFn.calls.length === 2, 2000);
   assert.equal(spawnFn.calls.length, 2,
     'the queued request must earn its own approval, not inherit one');
   await answer(spawnFn, { code: 1, stdout: '{"errorCode":-2}', nth: -1 });
