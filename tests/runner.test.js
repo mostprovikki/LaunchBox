@@ -181,17 +181,19 @@ test('spawn ENOENT fault clears once the same cmd spawns successfully again', as
     }
     return child;
   };
-  // A short cooldown so the test can observe both halves for real: refused
-  // immediately after the fault (< cooldown), then re-verified once it's stale
-  // (> cooldown) — no fake clock needed.
+  // A hand-driven clock for the cooldown: both halves are observed at exact
+  // offsets from the fault, so no event-loop stall can push either across it.
+  let clock = 1_000_000;
   const runner = createRunner({
     db, extensions, spawnFn: flakySpawn, notifyFn: () => {}, minuteMs: 1, spawnFaultCooldownMs: 20,
+    now: () => clock,
   });
 
   const run1 = runner.start(jobA, 'manual');
-  await sleep(5); // just enough for the nextTick ENOENT to fire — well under the 20ms cooldown
+  await sleep(5); // let the nextTick ENOENT fire; the fault is recorded at `clock`
   assert.equal(getRun(db, run1.id).status, 'skipped');
 
+  clock += 5; // well under the 20ms cooldown
   const run2 = runner.start(jobB, 'manual');
   assert.equal(run2.status, 'skipped', 'still remembered — refused before spawning');
   assert.equal(calls, 1, 'jobB was refused without ever reaching the spawner');
@@ -199,7 +201,7 @@ test('spawn ENOENT fault clears once the same cmd spawns successfully again', as
   // The owner fixed settings.claudePath (or reinstalled the binary), and the
   // cooldown has since elapsed: the next real attempt succeeds, so the fault
   // must not haunt the job forever.
-  await sleep(30); // total elapsed since the fault > the 20ms cooldown
+  clock += 16; // 21ms since the fault > the 20ms cooldown
   mode = 'ok';
   const run3 = runner.start(jobA, 'manual');
   assert.equal(run3.status, 'running', 'no longer refused — reality is re-verified once stale');
