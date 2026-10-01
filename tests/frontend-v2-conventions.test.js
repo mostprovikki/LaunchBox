@@ -54,7 +54,7 @@ test('no /v2 module calls fetch() directly except api.js', () => {
 
 test('no /v2 module uses EventSource', () => {
   for (const f of jsFiles()) {
-    assert.ok(!/\bnew\s+EventSource\b/.test(read(f)), `${f} uses EventSource — see public/util.js's comment on why the log drawer is a snapshot instead`);
+    assert.ok(!/\bnew\s+EventSource\b/.test(read(f)), `${f} uses EventSource — the log drawer is a snapshot with Refresh, since EventSource cannot carry the Authorization header`);
   }
 });
 
@@ -174,7 +174,7 @@ test('disableMutatingControls() sweeps every [data-mutating] element under a roo
   assert.equal(root.querySelectorAll('button')[1].disabled, false, 'a control without data-mutating must be left alone');
 });
 
-test('router: an unrecognised fragment falls back to the default route (public/app.js prior art, preserved)', async () => {
+test('router: an unrecognised fragment falls back to the default route (old-UI prior art, preserved)', async () => {
   freshDom('http://127.0.0.1:43410/v2#something-nobody-registered');
   const { registerRoute, parseHash, DEFAULT_ROUTE } = await import('../public/v2/router.js?t=' + Date.now());
   registerRoute('overview', () => {});

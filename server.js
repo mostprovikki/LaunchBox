@@ -496,8 +496,8 @@ export function createApp({
   // 404 or half-load a page whose files are being deleted, so it answers 410
   // with a pointer to `/`.
   //
-  // Ahead of express.static, which would otherwise serve public/index.html for
-  // `/` first. Only the literal root is matched.
+  // Ahead of express.static, which would otherwise answer
+  // `/` first (404, now that public/ holds no index). Only the literal root is matched.
   app.get('/', (req, res) => {
     res.sendFile(join('public', 'v2', 'index.html'), { root: ROOT });
   });

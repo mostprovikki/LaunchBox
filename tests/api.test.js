@@ -1892,7 +1892,7 @@ test('every /api route requires the token, and the static shell does not', async
   // The shell carries no data and must load, so the page can say it has no key
   // rather than showing a blank window.
   assert.equal((await fetch(base() + '/')).status, 200);
-  assert.equal((await fetch(base() + '/app.js')).status, 200);
+  assert.equal((await fetch(base() + '/v2/main.js')).status, 200);
 });
 
 test('a wrong, absent or malformed token is refused; the right one works', async (t) => {
