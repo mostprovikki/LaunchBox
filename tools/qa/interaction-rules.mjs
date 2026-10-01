@@ -226,5 +226,5 @@ export function summarise(findings = []) {
 export const V2_DIALOGS = Object.freeze([
   { name: 'job', route: '#jobs', openerText: /New job|Create the first job/, module: 'pages/job-dialog.js' },
   { name: 'burn-down', route: '#jobs', openerText: /Plan burn-down/, module: 'pages/plan-dialogs.js' },
-  { name: 'burst', route: '#projects', openerText: /Start a burst/, module: 'pages/plan-dialogs.js' },
+  { name: 'burst', route: '#projects', openerText: /Burst all active/, module: 'pages/plan-dialogs.js' },
 ]);

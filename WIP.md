@@ -1741,3 +1741,33 @@ or posts visits yet — that is btv.21.
 - Gates touched: shell-before-load source gate now also accepts a helper that clear(page)s and paints (Monitor has no pagehead) — mutation (drop entry render()) still red; parity declares /api/usage/refresh (cut §7), /api/v2/inbox, /api/v2/visits.
 - Measured: 18 page/logic tests, 7 page tests red on old page; 15 mutations all red. npm test 928/928; qa:v2, qa:v2:interactions, qa:v2:parity clean. Live CDP on a sandbox daemon: 0 buttons, 46px hero, no overflow, both themes, fault state.
 - Open: the old .ovgrid/.meters3/.nextrow CSS still serves redesign/ mockups — left in place.
+
+## 2026-09-30 claude-scheduler-btv.20 — /v2 Projects list as Browser
+
+Projects list rebuilt to Option 2 of `docs/design/mockups/projects-flavours.html`: rows grouped
+Active / Paused / Not activated, one `Burst…` per active row with ready > 0 (disabled with a
+`data-tip` reason while paused or a burst runs), paused rows say "not polled", row click opens
+`#project?id=`, page-level "Burst all active…", Register + Discover behind "Add a project…".
+Pure decisions in `projects-logic.js` (`groupProjects`, `rowBurst`, `rowProblem`);
+`openBurstDialog({ projectId })` preselects only that project. CSS = mockup's `.p2-*` verbatim.
+
+**Mutations** (8/8 red): dialog ignoring projectId, Burst with 0 ready, pause not disabling,
+paused grouped as active, warn banner as row problem, Burst click also navigating, row Burst
+unscoped, paused showing a count. **Gates:** `npm test` 925/925; `qa:v2`, `qa:v2:interactions`
+(burst opener now /Burst all active/), `qa:v2:parity` clean. Open: none.
+
+## 2026-09-30 claude-scheduler-btv.24 — /v2 Project page as Workbench
+
+Project page rebuilt to Option 2 of `docs/design/mockups/project-flavours.html`: header = `Burst…`
+(the one primary, `openBurstDialog({ projectId })`, disabled with a reason when not active / 0 ready /
+paused / bursting) + one state control (Activate… / Resume / Pause) + ⋯ menu (Poll now, Dependency
+graph, Remove project… with the old list confirms incl. the 409 lease path). Three facts, waiting-
+to-merge strip off `/api/v2/projects/:id/branches` (re-read ≤ once a minute — it runs `bd show` per
+branch), Up next + Recent runs on one grid with short mono ids, collapsed Declared config. btv.20 was
+closed but unmerged, so it was merged into this branch first. `.menu` CSS in both launchbox.css.
+
+**Found in a real browser, not by jsdom:** a poll tick deferred while the menu is open repainted
+AFTER Escape's refocus, leaving focus on a detached ⋯. Test added red-first; fixed by painting
+before refocus. **Mutations** 10/10 red. **Gates:** `npm test` 950/950; `qa:v2`,
+`qa:v2:interactions`, `qa:v2:parity` clean. Open: Inbox route doesn't exist yet — "Review in
+Inbox →" points at `#review?id=` until the Inbox bead lands.
