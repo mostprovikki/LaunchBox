@@ -371,3 +371,121 @@ export function bdVersionText(raw) {
   const m = /^bd\s+(?:version\s+)?(.+)$/i.exec(s);
   return m ? m[1] : s;
 }
+
+// ------------------------------------------ Browser list (claude-scheduler-btv.20)
+// docs/design/launchbox.md §5: "Projects (Browser): one action at rest per
+// row: Burst. Everything else is on the Project page." Owner chose Option 2 of
+// docs/design/mockups/projects-flavours.html on 2026-09-26.
+
+const GROUPS = [
+  // `error` is written by the poller onto a project the human activated, so it
+  // sits with the active rows; its fault is said on the row's meta line.
+  { key: 'active', label: 'Active', states: ['active', 'error'] },
+  { key: 'paused', label: 'Paused', states: ['paused'] },
+  { key: 'pending', label: 'Not activated', states: ['pending'] },
+];
+
+/**
+ * Rows grouped under the list's headings, in the order they render. Empty
+ * groups are omitted; a state no group names falls into the last one rather
+ * than vanishing from the list.
+ */
+export function groupProjects(projects = []) {
+  const out = GROUPS.map((g) => ({ key: g.key, label: g.label, projects: [] }));
+  for (const p of projects) {
+    const i = GROUPS.findIndex((g) => g.states.includes(p?.state));
+    out[i === -1 ? out.length - 1 : i].projects.push(p);
+  }
+  return out.filter((g) => g.projects.length);
+}
+
+/**
+ * The row's one action, or null for none. Burst appears only where it can do
+ * something — an active project (plan-dialogs.js's splitProjects eligibility)
+ * with ready beads. Where it cannot run *right now* for a global reason
+ * (pause, a live burst) it stays visible and disabled with the reason, rather
+ * than vanishing and leaving the reader to guess.
+ */
+export function rowBurst(project, { pauseMode = 'off', burstLive = false } = {}) {
+  if (project?.state !== 'active') return null;
+  if (!(project?.ready?.count > 0)) return null;
+  if (burstLive) return { disabled: true, tip: 'A burst is already running — cancel it first' };
+  if (pauseMode && pauseMode !== 'off') {
+    return { disabled: true, tip: `The schedule is paused (${pauseMode}). Set pause to Off to burst.` };
+  }
+  return { disabled: false, tip: `Spend a fixed slice of your limit on ${project.name}'s ready beads, then stop` };
+}
+
+/**
+ * The one meta-line fault a row may carry, or null. Same precedence as
+ * cardBanner(), minus its "would contribute nothing" case: on the list the
+ * ready count already says 0, so restating it as a warning is noise (§7).
+ */
+export function rowProblem(project) {
+  const b = cardBanner(project);
+  if (!b || b.kind === 'warn') return null;
+  if (b.kind === 'busy') return b.title.replace(/\.$/, '');
+  if ((project.configErrors ?? []).length) return project.configErrors.join(' · ');
+  return `last poll failed — ${project.lastError}`;
+}
+
+// ------------------------------------------ Project Workbench (claude-scheduler-btv.24)
+// docs/design/launchbox.md §5 "Project (Workbench)": Burst primary, one state
+// control, the rest in a ⋯ menu. Owner chose Option 2 of
+// docs/design/mockups/project-flavours.html on 2026-09-26.
+
+/**
+ * A bead id without its project prefix — `system_migration-85ht.1` → `85ht.1`
+ * (launchbox.md §6: where the project is already on screen, the short id is
+ * how sessions and searches name a bead). bd prefixes may themselves contain
+ * hyphens (`claude-scheduler-btv.24`), so the id is what follows the LAST one.
+ */
+export function shortBeadId(id) {
+  const s = String(id ?? '');
+  const i = s.lastIndexOf('-');
+  return i === -1 ? s : s.slice(i + 1);
+}
+
+/** "unblocks 3" — only when it is non-zero, because that is what reorders a queue. */
+export function unblocksText(bead) {
+  const n = bead?.dependentCount ?? 0;
+  return n > 0 ? `unblocks ${n}` : null;
+}
+
+const PERM_MODE_TEXT = {
+  auto: 'agents run without asking',
+  bypassPermissions: 'every tool, no checks',
+  acceptEdits: 'file edits only — no shell',
+  default: 'asks for every tool — unattended runs stall',
+  plan: 'read-only planning',
+};
+
+/** The Permission mode fact's second line. An unknown mode is not described. */
+export function permModeText(mode) {
+  if (!mode) return 'none declared';
+  return PERM_MODE_TEXT[mode] ?? 'from .scheduler.json';
+}
+
+/**
+ * The page's one state control: Activate… / Resume / Pause. Same decision as
+ * projectActions() (which the airlock tests pin), minus Poll now — that lives
+ * in the ⋯ menu and at the Ready card's foot now. Never primary: on this page
+ * the primary is Burst.
+ */
+export function stateControl(project) {
+  const a = projectActions(project).find((x) => x.act !== 'poll');
+  return { act: a.act, label: a.label, tip: a.tip };
+}
+
+/**
+ * The header's Burst…. Unlike a list row it never disappears — it is the
+ * page's primary — so where it cannot run it is disabled with the reason.
+ */
+export function projectBurst(project, ctx = {}) {
+  const state = project?.state;
+  if (state === 'pending') return { disabled: true, tip: 'Activate this project first — a burst only runs activated projects' };
+  if (state === 'paused') return { disabled: true, tip: 'This project is paused — Resume it to burst' };
+  if (state !== 'active') return { disabled: true, tip: 'Only an active project can burst' };
+  if (!(project?.ready?.count > 0)) return { disabled: true, tip: 'Nothing is ready to burst' };
+  return rowBurst(project, ctx);
+}
