@@ -13,8 +13,8 @@
 // mutation-checked (tests/qa-interactions.test.js). This file boots, drives and
 // collects — it decides nothing.
 //
-// Isolated by construction, same as E1: its own daemon on 43410 (the allocated
-// QA slot) with a throwaway CS_DATA and a sandbox-only approval stub. The
+// Isolated by construction, same as E1: its own daemon on 43411 (the allocated
+// QA slot; a worktree run's +50+10k block — sandbox-port.mjs) with a throwaway CS_DATA and a sandbox-only approval stub. The
 // owner's 43400 is never touched.
 
 import { spawn } from 'node:child_process';
@@ -24,7 +24,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { launchBrowser, sleep } from '../screenshots/cdp.mjs';
-import { Api, buildFixtureRepos, buildFixtureSessions, waitFor } from '../screenshots/seed.mjs';
+import { Api, buildFixtureRepos, buildFixtureSessions } from '../screenshots/seed.mjs';
+import { qaPort, assertPortFree, waitForOwnSandbox } from './sandbox-port.mjs';
 import {
   V2_DIALOGS, DIALOG_CONTRACT, evaluateDialog, evaluateFilter, evaluateKeyboardWalk,
   evaluateFocusTooltip, evaluateDegraded, evaluateRecovery, evaluateAppbarPollFocus, summarise,
@@ -32,7 +33,7 @@ import {
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '../..');
-const PORT = 43410;
+const PORT = qaPort('interactions', { repo: REPO }); // tools/qa/sandbox-port.mjs: 43410-12, or a worktree's +50+10k block
 const log = (m) => process.stdout.write(m + '\n');
 
 
@@ -60,6 +61,7 @@ function parseArgs(argv) {
 }
 
 async function bootSandbox() {
+  await assertPortFree(PORT); // before any sandbox is built, so a refusal leaves nothing behind
   const dataDir = await mkdtemp(join(tmpdir(), 'cs-qa-int-'));
   await mkdir(join(dataDir, 'bin'), { recursive: true });
   const helper = join(dataDir, 'bin', 'LaunchBox');
@@ -87,7 +89,8 @@ async function bootSandbox() {
   server.on('exit', (c) => { if (c) log(`  server exited ${c}:\n${serverLog.slice(-1200)}`); });
 
   const baseUrl = `http://127.0.0.1:${PORT}`;
-  await waitFor(async () => { try { return (await fetch(`${baseUrl}/`)).ok; } catch { return false; } }, 30_000, 'the server to listen');
+  // Its OWN sandbox, not any 200: the old probe attached to a concurrent run's server.
+  await waitForOwnSandbox({ child: server, dataDir, port: PORT });
   const token = (await readFile(join(dataDir, 'token'), 'utf8')).trim();
   return { server, dataDir, sessionsRoot, baseUrl, token };
 }

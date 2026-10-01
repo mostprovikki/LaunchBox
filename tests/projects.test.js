@@ -344,6 +344,50 @@ test('a bead already leased is refused by acquireLease, not merely by the slot c
   assert.equal(runner.starts.length, 0);
 });
 
+// claude-scheduler-9u2: each live bead run gets its own QA instance slot (0-4,
+// CS_INSTANCE via params._qaInstance) so concurrent worktree runs' qa:v2
+// sandboxes bind disjoint ports. Lowest free slot; freed when the run ends.
+function slotSetup(n, maxConcurrent = n) {
+  const rows = (ids) => JSON.stringify(ids.map((id) => bdReadyRow({ id, labels: ['unattended'] })));
+  let ready = Array.from({ length: n }, (_, i) => `sp-${i + 1}`);
+  const ctx = setup({
+    config: { ...CONFIG, maxConcurrent },
+    bdHandlers: {
+      ready: () => ({ stdout: rows(ready) }),
+      show: ({ args }) => ({ stdout: rows([args[1]]) }),
+      update: ({ args }) => ({ stdout: rows([args[1]]) }),
+    },
+  });
+  return { ...ctx, setReady: (ids) => { ready = ids; } };
+}
+const slotsOf = (runner) => runner.starts.map((s) => s.job.params._qaInstance);
+
+test('concurrent bead runs get distinct QA instance slots, lowest first', async () => {
+  const { projects, project, runner } = slotSetup(3);
+  await projects.pollProject(project.id);
+  assert.deepEqual(slotsOf(runner), [0, 1, 2]);
+});
+
+test('a finished run frees its QA slot for the next run', async () => {
+  const { projects, project, runner, db, setReady } = slotSetup(2);
+  await projects.pollProject(project.id);
+  assert.deepEqual(slotsOf(runner), [0, 1]);
+  runner.finish(runner.starts[0].run.id, 'fail');
+  for (let i = 0; i < 50 && getLease(db, project.id, 'sp-1')?.state === 'held'; i++) await new Promise((r) => setTimeout(r, 20));
+  await new Promise((r) => setTimeout(r, 50));
+  setReady(['sp-3']);
+  await projects.pollProject(project.id);
+  assert.equal(runner.starts.length, 3);
+  assert.equal(slotsOf(runner)[2], 0, 'slot 0 came back');
+});
+
+test('past five live runs there is no slot — never a shared one', async () => {
+  const { projects, project, runner } = slotSetup(6);
+  await projects.pollProject(project.id);
+  assert.equal(runner.starts.length, 6);
+  assert.deepEqual(slotsOf(runner), [0, 1, 2, 3, 4, undefined]);
+});
+
 test('maxConcurrent caps how many beads a project runs at once', async () => {
   const { projects, project, runner } = setup({
     config: { ...CONFIG, maxConcurrent: 2 },

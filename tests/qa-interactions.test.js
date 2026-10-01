@@ -254,7 +254,10 @@ test('the degraded sweep survives a page re-rendering from its own poll', () => 
 
 test('the interaction driver isolates itself the same way the route walk does', () => {
   const src = read('tools/qa/v2-interactions.mjs');
-  assert.match(src, /const PORT = 43410;/);
+  // Allocated (tools/qa/sandbox-port.mjs, claude-scheduler-9u2): 43411, or a worktree run's block.
+  assert.match(src, /const PORT = qaPort\('interactions'/);
+  assert.match(src, /await assertPortFree\(PORT\)/, 'a busy port is a refusal');
+  assert.match(src, /waitForOwnSandbox\(\{ child: server, dataDir/, 'readiness is ITS sandbox, not any 200');
   const stripped = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
   assert.ok(!/43400/.test(stripped), 'it must not reach for the owner\'s daemon');
   assert.match(src, /CS_DATA: dataDir/);
