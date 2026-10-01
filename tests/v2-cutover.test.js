@@ -3,6 +3,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
+import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { tmpData, extensions } from './helpers.js';
 import { ensureDirs } from '../lib/paths.js';
 import { ensureToken } from '../lib/token.js';
@@ -77,4 +79,31 @@ test('the ui-default switch and uiDefault setting are gone', async (t) => {
   assert.equal(put.status, 404);
   const settings = await (await fetch(base + '/api/settings', { headers })).json();
   assert.equal('uiDefault' in settings, false);
+});
+
+// C4 (claude-scheduler-axg.5): the tools that compared or captured the old UI
+// are gone, and the screenshot harness captures v2 — every route the qa:v2
+// walk knows about, in both themes, read from V2_ROUTES rather than retyped.
+test('the parity gate is retired', async () => {
+  const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal('qa:v2:parity' in pkg.scripts, false);
+  assert.ok(pkg.scripts['qa:v2'] && pkg.scripts['qa:v2:interactions'], 'qa:v2 and qa:v2:interactions stay');
+  assert.equal(existsSync(new URL('../tools/qa/v2-parity.mjs', import.meta.url)), false);
+});
+
+test('screenshot harness captures every v2 route in both themes, and nothing of the old UI', async () => {
+  const { shots } = await import('../tools/screenshots/shots.mjs');
+  const { V2_ROUTES } = await import('../tools/qa/audit-rules.mjs');
+  const files = new Set(shots.map((s) => s.file));
+  for (const r of V2_ROUTES) {
+    for (const theme of ['dark', 'light']) {
+      assert.ok(files.has(`${r.name}-${theme}`), `missing shot ${r.name}-${theme}`);
+    }
+  }
+  for (const f of ['capture.mjs', 'shots.mjs']) {
+    const src = await readFile(new URL(`../tools/screenshots/${f}`, import.meta.url), 'utf8');
+    assert.doesNotMatch(src, /public\/style\.css/, `${f} still names the old stylesheet`);
+    // Old-UI-only ids: none of these exist under public/v2.
+    assert.doesNotMatch(src, /#(runs-list|pause-seg|log-drawer|awake-menu|log-close)\b/, `${f} drives old-UI selectors`);
+  }
 });
