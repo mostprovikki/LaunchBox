@@ -77,9 +77,10 @@ left as-is and corrected here instead. Two of its rules do not hold in this repo
 ```bash
 npm install
 npm test                  # node --test tests/*.test.js
-npm start                 # server on 127.0.0.1:43400 (PORT_BASE in lib/paths.js; override with CS_PORT)
+npm start                 # server on 127.0.0.1:43400 (PORT_BASE in lib/paths.js; override with LB_PORT, CS_PORT still read)
 npm run screenshots       # UI capture → working_prototype_screenshots/
-node bin/claude-scheduler.mjs open   # launch + open the UI
+node bin/launchbox.mjs open   # launch + open the UI
+node bin/launchbox.mjs migrate --dry-run   # pre-M6 install: see README "Upgrading"
 ```
 
 ## Architecture Overview

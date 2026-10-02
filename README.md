@@ -1,4 +1,4 @@
-# Claude Scheduler
+# LaunchBox
 
 Local web UI to schedule cron jobs and one-shot tasks — on time, without the UI open. macOS only.
 
@@ -11,20 +11,43 @@ At its core it's a friendly frontend for cron-style jobs. Job *types* are plugga
 ```
 
 Installs deps, builds the approval helper, writes
-`~/Library/LaunchAgents/com.claude-scheduler.plist` (RunAtLoad + KeepAlive) and starts the daemon.
+`~/Library/LaunchAgents/com.launchbox.plist` (RunAtLoad + KeepAlive) and starts the daemon. Needs node 24+.
 
 **Open the UI with the CLI, not a bookmark:**
 
 ```bash
-node bin/claude-scheduler.mjs open      # or: claude-scheduler open, if npm-linked
+node bin/launchbox.mjs open      # or: launchbox open, if npm-linked
 ```
 
 That prints a one-time URL carrying your session key and opens it. Visiting
 `http://127.0.0.1:43400` directly shows a banner explaining that it has no key — which is the
 point.
 
-Data lives in `~/.claude-scheduler/` (sqlite db, per-run logs, daemon.log, `token`, `bin/`). The
+Data lives in `~/.launchbox/` (`launchbox.db`, per-run logs, daemon.log, `token`, `bin/`). The
 `claude` binary path is auto-detected at first boot; fix it in Settings if needed.
+
+## Upgrading from claude-scheduler (pre-M6)
+
+The product was renamed. An old install keeps its data in `~/.claude-scheduler/scheduler.db`;
+LaunchBox reads `~/.launchbox/launchbox.db` and refuses to start (and `launchbox open|url|token`
+refuse) until the data is moved. To move it:
+
+1. Pause everything in the old UI and wait until it is idle (no runs running or queued).
+2. Stop the old daemon: Ctrl-C its terminal, or `launchctl bootout gui/$(id -u)/com.claude-scheduler`
+   if it was installed with the old `install.sh`.
+3. `node bin/launchbox.mjs migrate --dry-run` — shows what would move and any refusal.
+4. `node bin/launchbox.mjs migrate` — backs up the DB (`scheduler.db.pre-m6.bak`), rewrites stored
+   paths, moves the dir to `~/.launchbox`, leaves `~/.claude-scheduler` as a symlink to it, and runs
+   `git worktree repair` in each registered repo.
+5. `npm start` (or `./install.sh` for the background service).
+
+Run it with `LB_DATA`/`CS_DATA` unset; migrate always targets `~/.launchbox`.
+
+**If migrate refuses because a run is live, a lease is held or a worktree is checked out** (for
+example, the old daemon was stopped mid-run), let the old install recover its orphaned runs:
+`LB_DATA=~/.claude-scheduler npm start`, wait until idle (no runs), stop it, then run migrate again.
+If it refuses because `~/.launchbox` is not empty and that holds only an empty `logs/` and a
+`token`, delete `~/.launchbox` and run migrate again.
 
 ## Security
 
@@ -43,7 +66,7 @@ Four layers, smallest first:
 3. **`Content-Type: application/json` on every mutating method.** A cross-origin HTML form cannot
    set that header, and a cross-origin `fetch` that does becomes preflighted — which is never
    answered. Note that checking the *body* would not work: the destructive routes take no body.
-4. **A capability token** (`~/.claude-scheduler/token`, mode `0600`) required on every `/api`
+4. **A capability token** (`~/.launchbox/token`, mode `0600`) required on every `/api`
    route, reads included. This is what holds if a header check ever regresses, what shuts out a
    browser extension, and what protects you if the port is ever exposed by accident — a container
    forward, an `ssh -R`, a VPN misconfig.
@@ -80,19 +103,20 @@ Details, including the measurements behind each decision:
 ## Cleanup / Uninstall
 
 - **Settings → Cleanup**: wipes all jobs, run history and logs (daemon + settings stay).
-- **Settings → Uninstall** or `./uninstall.sh`: removes launchd agent, `~/.claude-scheduler`, and this directory.
+- **Settings → Uninstall** or `./uninstall.sh`: removes launchd agent, `~/.launchbox`, and this directory.
 
 ## Dev
 
 ```bash
-npm test                                  # sandboxed (tmp CS_DATA, fake spawns)
-CS_DATA=$(mktemp -d) CS_PORT=18741 node server.js   # dev server
+npm test                                  # sandboxed (tmp LB_DATA, fake spawns)
+LB_DATA=$(mktemp -d) LB_PORT=18741 node server.js   # dev server
 npm run screenshots                       # capture the whole UI to a versioned folder
 ```
 
-Env: `CS_PORT` (default 43400 — this project's allocated port block, see
+Env: `LB_PORT` (default 43400 — this project's allocated port block, see
 `~/.claude/docs/port-allocation.md`; the server fails fast if it's busy rather than picking
-another one), `CS_DATA` (default `~/.claude-scheduler`), `CS_NO_NOTIFY=1` (suppress banners).
+another one), `LB_DATA` (default `~/.launchbox`), `LB_NO_NOTIFY=1` (suppress banners). The
+pre-rename `CS_*` names are still read when the `LB_*` one is unset.
 
 ### UI screenshots
 
@@ -101,8 +125,8 @@ another one), `CS_DATA` (default `~/.claude-scheduler`), `CS_NO_NOTIFY=1` (suppr
 before/after comparison across a UI overhaul. Needs Chrome (or `CHROME_PATH`) and node 22+;
 no npm dependencies. Takes ~3 min, most of it seeding.
 
-It boots its own scheduler on a free port against a throwaway `CS_DATA`, so
-`~/.claude-scheduler` is never touched. `claudePath` is pre-seeded to a fake binary, so the
+It boots its own scheduler on a free port against a throwaway `LB_DATA`, so
+`~/.launchbox` is never touched. `claudePath` is pre-seeded to a fake binary, so the
 usage meters read fixed percentages from `tests/fixtures/get-usage-response.json` and **no
 real `claude` can run** — a capture spends no API quota. Only `command`-type jobs are
 executed; `claude` jobs are created disabled and never fired, and no project is ever
