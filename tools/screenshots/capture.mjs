@@ -25,7 +25,6 @@ import { launchBrowser, sleep } from './cdp.mjs';
 import { Api, buildFixtureRepos, buildFixtureSessions, seed, waitFor } from './seed.mjs';
 import { shots } from './shots.mjs';
 import { qaPort, assertPortFree, waitForOwnSandbox } from '../qa/sandbox-port.mjs';
-import { env } from '../../lib/paths.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '../..');
@@ -56,7 +55,8 @@ const SESSION_MS = (2 * 60 + 7) * 60e3;               // 2h07m
 const WEEKLY_MS = (3 * 24 * 60 + 5 * 60 + 13) * 60e3; // 3d05h13m
 const iso = (ms) => new Date(Date.now() + ms).toISOString();
 
-const fixture = JSON.parse(readFileSync(env('SHOTS_FIXTURE'), 'utf8'));
+// Standalone stub: cannot import lib/paths.js, so the LB_ -> legacy CS_ fallback is inline.
+const fixture = JSON.parse(readFileSync(process.env.LB_SHOTS_FIXTURE || process.env.CS_SHOTS_FIXTURE, 'utf8'));
 const payload = fixture.response.response;
 const rl = payload.rate_limits ?? {};
 if (rl.five_hour) rl.five_hour.resets_at = iso(SESSION_MS);

@@ -42,5 +42,8 @@ test('default data dir is ~/.launchbox; the legacy dir is named for migrate', ()
     if (saved.CS !== undefined) process.env.CS_DATA = saved.CS;
     if (saved.HOME !== undefined) process.env.LB_HOME = saved.HOME; else delete process.env.LB_HOME;
   }
-  assert.equal(explicitDataDir(), saved.LB !== undefined || saved.CS !== undefined);
+  process.env.LB_DATA = '/x/explicit';
+  try { assert.equal(explicitDataDir(), true); } finally {
+    if (saved.LB !== undefined) process.env.LB_DATA = saved.LB; else delete process.env.LB_DATA;
+  }
 });

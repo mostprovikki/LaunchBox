@@ -34,13 +34,12 @@ import {
 } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
-import { env } from '../lib/paths.js';
 import { createHash } from 'node:crypto';
 
 const REPO = join(new URL('.', import.meta.url).pathname, '..');
 const DRY = process.argv.includes('--dry');
 
-const { PORT_BASE } = await import(join(REPO, 'lib/paths.js'));
+const { PORT_BASE, env } = await import(join(REPO, 'lib/paths.js'));
 // +10 = this project's QA/e2e-web offset (see ~/.claude/docs/port-allocation.md).
 const PORT = PORT_BASE + 10;
 const BASE = `http://127.0.0.1:${PORT}`;
