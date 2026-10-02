@@ -19,7 +19,10 @@ test('a database written by better-sqlite3 opens and reads under node:sqlite', (
 test('better-sqlite3 is gone from the dependency graph', () => {
   const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   assert.equal(pkg.dependencies?.['better-sqlite3'], undefined);
-  assert.equal(pkg.engines.node, '>=22.5');
+  // node:sqlite needs a flag before 22.13; allowUnknownNamedParameters/readOnly came later.
+  assert.equal(pkg.engines.node, '>=24');
+  const lock = JSON.parse(readFileSync(new URL('../package-lock.json', import.meta.url), 'utf8'));
+  assert.equal(lock.packages[''].engines.node, '>=24');
 });
 
 test('a fresh database is opened in WAL mode', () => {
