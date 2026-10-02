@@ -523,6 +523,63 @@ test('linkFromMain refusals: missing, source-is-symlink, not ignored, destinatio
   } finally { o.cleanup(); }
 });
 
+// claude-scheduler-u9h: an asset dir ignored by content (`dir/*` + `!dir/manifest.json`)
+// cannot be linked as a whole — a tracked manifest lives inside. A trailing `/*`
+// expands against main's listing and links each ignored entry.
+function fontsRepo() {
+  const r = assetRepo('assets/fonts/*\n!assets/fonts/manifest.json\n');
+  mkdirSync(join(r.main, 'assets', 'fonts'), { recursive: true });
+  writeFileSync(join(r.main, 'assets', 'fonts', 'manifest.json'), '{}\n');
+  g(r.main, 'add', '.'); g(r.main, 'commit', '-q', '-m', 'manifest');
+  writeFileSync(join(r.main, 'assets', 'fonts', 'a.ttf'), 'font-a\n');
+  return r;
+}
+
+test('linkFromMain glob links ignored files and skips tracked ones', async () => {
+  const r = fontsRepo();
+  try {
+    const logs = [];
+    const wt = createWorktrees({ log: (m) => logs.push(m) });
+    const res = await wt.ensure(r.project, { root: r.root, beadId: 'f', linkFromMain: ['assets/fonts/*'] });
+    assert.ok(lstatSync(join(res.path, 'assets/fonts/a.ttf')).isSymbolicLink(), 'ignored file is linked');
+    assert.equal(readlinkSync(join(res.path, 'assets/fonts/a.ttf')), join(r.main, 'assets/fonts/a.ttf'));
+    assert.equal(lstatSync(join(res.path, 'assets/fonts/manifest.json')).isSymbolicLink(), false, 'tracked manifest stays the checked-out file');
+    assert.equal(g(res.path, 'status', '--porcelain'), '', 'nothing for snapshot() to commit');
+    assert.equal(logs.length, 1, 'one log line for the skipped tracked entries');
+    assert.match(logs[0], /assets\/fonts\/\*.*manifest\.json/);
+  } finally { r.cleanup(); }
+});
+
+test('linkFromMain glob refusals: dir missing in main, nothing matched', async () => {
+  const r = fontsRepo();
+  try {
+    const wt = createWorktrees({ log: () => {} });
+    await assert.rejects(wt.ensure(r.project, { root: r.root, beadId: 'm', linkFromMain: ['assets/music/*'] }),
+      (e) => e instanceof WorktreeError && /assets\/music is missing in main checkout/.test(e.message));
+    assert.equal(existsSync(join(r.root, worktreeName(r.project, 'm'))), false, 'no worktree left behind');
+
+    // Only the tracked manifest → an empty link set is a config mistake, not success.
+    rmSync(join(r.main, 'assets', 'fonts', 'a.ttf'));
+    await assert.rejects(wt.ensure(r.project, { root: r.root, beadId: 'e', linkFromMain: ['assets/fonts/*'] }),
+      (e) => e instanceof WorktreeError && /assets\/fonts\/\* matched nothing to link/.test(e.message));
+    assert.equal(existsSync(join(r.root, worktreeName(r.project, 'e'))), false, 'no worktree left behind');
+  } finally { r.cleanup(); }
+});
+
+test('linkFromMain glob re-expands on reuse and links a file added to main since', async () => {
+  const r = fontsRepo();
+  try {
+    const wt = createWorktrees({ log: () => {} });
+    const first = await wt.ensure(r.project, { root: r.root, beadId: 'f', linkFromMain: ['assets/fonts/*'] });
+    assert.equal(existsSync(join(first.path, 'assets/fonts/b.ttf')), false);
+    writeFileSync(join(r.main, 'assets', 'fonts', 'b.ttf'), 'font-b\n');
+    const again = await wt.ensure(r.project, { root: r.root, beadId: 'f', linkFromMain: ['assets/fonts/*'] });
+    assert.equal(again.created, false);
+    assert.equal(readlinkSync(join(again.path, 'assets/fonts/b.ttf')), join(r.main, 'assets/fonts/b.ttf'));
+    assert.equal(readlinkSync(join(again.path, 'assets/fonts/a.ttf')), join(r.main, 'assets/fonts/a.ttf'), 'existing link left alone');
+  } finally { r.cleanup(); }
+});
+
 test('remove() after linking leaves the main checkout\'s assets intact', async () => {
   const r = assetRepo();
   try {
