@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync, symlinkSync, copyFileSync, existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { mkdirSync, writeFileSync, symlinkSync, copyFileSync, existsSync, readdirSync, readFileSync, statSync, lstatSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { fixtureInstall } from './helpers.js';
 import { openDb } from '../lib/db.js';
-import { planMigration } from '../lib/migrate.js';
+import { planMigration, applyMigration } from '../lib/migrate.js';
 
 const dead = async () => false;
 
@@ -71,4 +71,70 @@ test('an already-migrated install (old path is a symlink to the new) reports alr
   const oldLink = join(root, 'linked');
   mkdirSync(newDir); symlinkSync(newDir, oldLink);
   assert.equal((await planMigration({ oldDir: oldLink, newDir, portAlive: dead })).state, 'already');
+});
+
+// -wal/-shm are skipped: SQLite creates them on any read-only open of a WAL db (planMigration's), content untouched.
+const hashTree = (dir) => {
+  const h = createHash('sha256');
+  for (const n of readdirSync(dir, { recursive: true }).sort()) {
+    if (/-(wal|shm)$/.test(n)) continue;
+    const p = join(dir, n);
+    if (lstatSync(p).isFile()) h.update(n).update(readFileSync(p));
+  }
+  return h.digest('hex');
+};
+const okRepair = async (path) => ({ ok: true, path });
+
+test('apply moves the install, rewrites exactly the old-dir paths, leaves sessions alone', async () => {
+  const { root, oldDir, newDir } = fixtureInstall();
+  const res = await applyMigration({ oldDir, newDir, portAlive: dead, projectPaths: ['/p'], gitRepair: okRepair });
+  assert.equal(res.state, 'migrated');
+  assert.ok(lstatSync(oldDir).isSymbolicLink());
+  assert.ok(existsSync(join(newDir, 'launchbox.db')));
+  assert.ok(existsSync(join(newDir, 'scheduler.db.pre-m6.bak')));
+  const db = openDb(join(newDir, 'launchbox.db'));
+  const r1 = db.prepare(`SELECT logPath, meta FROM runs WHERE id='r1'`).get();
+  assert.equal(r1.logPath, `${newDir}/logs/r1.log`);
+  assert.equal(JSON.parse(r1.meta).wt, `${newDir}/worktrees/p--b1`);
+  assert.equal(db.prepare(`SELECT logPath FROM runs WHERE id='r2'`).get().logPath, `${root}/.claude-scheduler-old/r2.log`);
+  assert.equal(db.prepare(`SELECT cwd FROM jobs WHERE id='j1'`).get().cwd, `${newDir}/worktrees/p--b1`);
+  assert.equal(JSON.parse(db.prepare(`SELECT params FROM jobs`).get().params).logDir, `${newDir}/logs`);
+  assert.equal(db.prepare(`SELECT value FROM settings WHERE key='worktreeRoot'`).get().value, `${newDir}/worktrees`);
+  assert.equal(db.prepare(`SELECT cwd FROM sessions WHERE id='s1'`).get().cwd, `${oldDir}/worktrees/p--b1`);
+  db.close();
+  assert.deepEqual(res.repaired, [{ ok: true, path: '/p' }]);
+});
+
+test('re-running after success says already and changes nothing', async () => {
+  const { oldDir, newDir } = fixtureInstall();
+  await applyMigration({ oldDir, newDir, portAlive: dead, projectPaths: [], gitRepair: okRepair });
+  const before = hashTree(newDir);
+  assert.equal((await applyMigration({ oldDir, newDir, portAlive: dead, projectPaths: [], gitRepair: okRepair })).state, 'already');
+  assert.equal(hashTree(newDir), before);
+});
+
+for (const faultAt of ['backup', 'rewrite', 'commit', 'move']) {
+  test(`a failure at ${faultAt} leaves the old install byte-identical and the new dir absent`, async () => {
+    const { oldDir, newDir } = fixtureInstall();
+    const before = hashTree(oldDir);
+    await assert.rejects(applyMigration({ oldDir, newDir, portAlive: dead, projectPaths: [], gitRepair: okRepair, faultAt }));
+    assert.equal(existsSync(newDir), false);
+    assert.equal(lstatSync(oldDir).isSymbolicLink(), false);
+    const after = hashTree(oldDir);
+    if (faultAt === 'backup') assert.equal(after, before);
+    else {
+      // A completed backup file is the only allowed difference.
+      const db = openDb(join(oldDir, 'scheduler.db'));
+      assert.equal(db.prepare(`SELECT logPath FROM runs WHERE id='r1'`).get().logPath, `${oldDir}/logs/r1.log`);
+      db.close();
+    }
+  });
+}
+
+test('a failed git worktree repair is reported, and the move is not undone', async () => {
+  const { oldDir, newDir } = fixtureInstall();
+  const res = await applyMigration({ oldDir, newDir, portAlive: dead, projectPaths: ['/gone'],
+    gitRepair: async (path) => ({ ok: false, path, error: 'not a git repository' }) });
+  assert.equal(res.state, 'migrated');
+  assert.deepEqual(res.repaired, [{ ok: false, path: '/gone', error: 'not a git repository' }]);
 });
