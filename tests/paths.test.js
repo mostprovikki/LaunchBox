@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpData } from './helpers.js';
 import { homedir } from 'node:os';
@@ -46,4 +46,17 @@ test('default data dir is ~/.launchbox; the legacy dir is named for migrate', ()
   try { assert.equal(explicitDataDir(), true); } finally {
     if (saved.LB !== undefined) process.env.LB_DATA = saved.LB; else delete process.env.LB_DATA;
   }
+});
+
+// F1 recovery path: `LB_DATA=<old dir> npm start` must open the old install's
+// scheduler.db, not a 0-byte or fresh launchbox.db beside it.
+test('dbPath opens scheduler.db in a legacy-layout dir; launchbox.db otherwise', () => {
+  const dir = tmpData();
+  assert.equal(dbPath(), join(dir, 'launchbox.db'), 'empty dir: new name');
+  writeFileSync(join(dir, 'scheduler.db'), 'old');
+  assert.equal(dbPath(), join(dir, 'scheduler.db'), 'legacy only');
+  writeFileSync(join(dir, 'launchbox.db'), '');
+  assert.equal(dbPath(), join(dir, 'scheduler.db'), '0-byte stray launchbox.db is ignored');
+  writeFileSync(join(dir, 'launchbox.db'), 'new');
+  assert.equal(dbPath(), join(dir, 'launchbox.db'), 'a real launchbox.db wins');
 });
