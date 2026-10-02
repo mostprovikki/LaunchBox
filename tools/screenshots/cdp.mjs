@@ -3,8 +3,7 @@
 
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
-import net from 'node:net';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -25,30 +24,36 @@ function resolveChrome() {
   );
 }
 
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.unref();
-    srv.on('error', reject);
-    srv.listen(0, '127.0.0.1', () => {
-      const { port } = srv.address();
-      srv.close(() => resolve(port));
-    });
-  });
-}
-
-async function waitForDebugger(port, timeoutMs = 20_000) {
+/**
+ * Wait for the DevToolsActivePort file Chrome writes into its own
+ * --user-data-dir and return the browser websocket endpoint it names.
+ *
+ * Chrome is launched with --remote-debugging-port=0, so it binds whatever port
+ * the OS gives it and records it here (line 1 = port, line 2 = ws path, which
+ * carries this browser's GUID). The old flow picked a port, released it, and
+ * then trusted any /json/version answer on it — so a process that grabbed the
+ * port in between got driven as "our" Chrome. Nothing is fetched here: the
+ * endpoint comes from the file only, and connecting to that GUID path is what
+ * proves it is the browser we spawned.
+ * @param {string} profileDir
+ * @param {{timeoutMs?: number, isAlive?: () => boolean}} [opts]
+ */
+export async function devToolsEndpoint(profileDir, { timeoutMs = 20_000, isAlive = () => true } = {}) {
+  const file = join(profileDir, 'DevToolsActivePort');
   const deadline = Date.now() + timeoutMs;
-  let lastErr;
   while (Date.now() < deadline) {
-    try {
-      const res = await fetch(`http://127.0.0.1:${port}/json/version`);
-      const json = await res.json();
-      if (json.webSocketDebuggerUrl) return json.webSocketDebuggerUrl;
-    } catch (err) { lastErr = err; }
+    if (!isAlive()) throw new Error('Chrome exited before writing DevToolsActivePort');
+    let text = null;
+    try { text = await readFile(file, 'utf8'); } catch { /* not written yet */ }
+    // Chrome may be mid-write: accept only a complete port + ws path pair.
+    const [portLine, wsPath] = (text ?? '').split('\n').map((l) => l.trim());
+    const port = Number(portLine);
+    if (Number.isInteger(port) && port > 0 && port < 65536 && wsPath?.startsWith('/devtools/browser/')) {
+      return `ws://127.0.0.1:${port}${wsPath}`;
+    }
     await sleep(100);
   }
-  throw new Error(`Chrome debugger never came up on :${port} — ${lastErr?.message ?? 'timeout'}`);
+  throw new Error(`Chrome never wrote ${file} within ${timeoutMs}ms`);
 }
 
 /** Open a CDP connection and attach a flat session to one page target. */
@@ -130,11 +135,10 @@ async function connect(wsUrl) {
 export async function launchBrowser(opts) {
   const { headful = false, width, height, scale = 2 } = opts;
   const profile = await mkdtemp(join(tmpdir(), 'cs-shots-chrome-'));
-  const port = await freePort();
   const bin = resolveChrome();
 
   const args = [
-    `--remote-debugging-port=${port}`,
+    '--remote-debugging-port=0', // real port read back from DevToolsActivePort
     `--user-data-dir=${profile}`,
     `--window-size=${width},${height}`,
     '--no-first-run',
@@ -152,7 +156,9 @@ export async function launchBrowser(opts) {
 
   let conn;
   try {
-    conn = await connect(await waitForDebugger(port));
+    conn = await connect(await devToolsEndpoint(profile, {
+      isAlive: () => proc.exitCode === null && proc.signalCode === null,
+    }));
   } catch (err) {
     proc.kill('SIGKILL');
     await rm(profile, { recursive: true, force: true }).catch(() => {});
