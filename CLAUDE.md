@@ -82,9 +82,6 @@ npm run screenshots       # UI capture → working_prototype_screenshots/
 node bin/claude-scheduler.mjs open   # launch + open the UI
 ```
 
-`better-sqlite3` is a native dep; if it fails to load with `ERR_DLOPEN_FAILED` on macOS,
-`npm rebuild better-sqlite3 --build-from-source`.
-
 ## Architecture Overview
 
 LaunchBox is a local-only daemon that runs scheduled Claude Code and shell jobs with
