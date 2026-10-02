@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync, symlinkSync, copyFileSync, existsSync, readdirSync, readFileSync, statSync, lstatSync } from 'node:fs';
+import { mkdirSync, writeFileSync, symlinkSync, copyFileSync, existsSync, readdirSync, readFileSync, statSync, lstatSync, realpathSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { fixtureInstall } from './helpers.js';
@@ -162,4 +162,40 @@ test('a failed git worktree repair is reported, and the move is not undone', asy
     gitRepair: async (path) => ({ ok: false, path, error: 'not a git repository' }) });
   assert.equal(res.state, 'migrated');
   assert.deepEqual(res.repaired, [{ ok: false, path: '/gone', error: 'not a git repository' }]);
+});
+
+// F5: a crash between COMMIT and the move leaves a rewritten DB beside the
+// pristine backup; the re-run must not replace that backup.
+test('an existing pre-m6 backup is kept, and no per-attempt copy is left behind', async () => {
+  const { oldDir, newDir } = fixtureInstall();
+  writeFileSync(join(oldDir, 'scheduler.db.pre-m6.bak'), 'pristine');
+  const res = await applyMigration({ oldDir, newDir, portAlive: dead, projectPaths: [], gitRepair: okRepair });
+  assert.equal(res.state, 'migrated');
+  assert.equal(readFileSync(join(newDir, 'scheduler.db.pre-m6.bak'), 'utf8'), 'pristine');
+  assert.deepEqual(readdirSync(newDir).filter((n) => n.includes('pre-m6')), ['scheduler.db.pre-m6.bak']);
+});
+
+test('with an existing backup, a failed move restores this attempt\'s copy, not the old backup', async () => {
+  const { oldDir, newDir } = fixtureInstall();
+  writeFileSync(join(oldDir, 'scheduler.db.pre-m6.bak'), 'pristine');
+  await assert.rejects(applyMigration({ oldDir, newDir, portAlive: dead, projectPaths: [], gitRepair: okRepair, faultAt: 'move' }));
+  assert.equal(readFileSync(join(oldDir, 'scheduler.db.pre-m6.bak'), 'utf8'), 'pristine');
+  const db = openDb(join(oldDir, 'scheduler.db'));
+  assert.equal(db.prepare(`SELECT logPath FROM runs WHERE id='r1'`).get().logPath, `${oldDir}/logs/r1.log`);
+  db.close();
+  assert.deepEqual(readdirSync(oldDir).filter((n) => n.includes('pre-m6')), ['scheduler.db.pre-m6.bak']);
+});
+
+// F6: once the dir has moved, the old path must point at it before anything else can fail.
+test('a failure renaming the DB after the move still leaves the old path linked to the moved data', async () => {
+  const { oldDir, newDir } = fixtureInstall();
+  const err = await applyMigration({ oldDir, newDir, portAlive: dead, projectPaths: [], gitRepair: okRepair, faultAt: 'dbrename' })
+    .then(() => null, (e) => e);
+  assert.ok(err, 'expected a throw');
+  assert.ok(err.message.includes(oldDir) && err.message.includes(newDir), err.message);
+  assert.ok(lstatSync(oldDir).isSymbolicLink());
+  assert.equal(realpathSync(oldDir), realpathSync(newDir));
+  const db = openDb(join(newDir, 'scheduler.db'));
+  assert.equal(db.prepare(`SELECT logPath FROM runs WHERE id='r1'`).get().logPath, `${newDir}/logs/r1.log`);
+  db.close();
 });
