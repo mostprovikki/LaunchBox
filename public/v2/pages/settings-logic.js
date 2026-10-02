@@ -16,11 +16,20 @@ export const secToMs = (sec) => (Number.isFinite(sec) ? Math.round(sec * 1000) :
 // server.js's USAGE_SHOW_MODES (lib/usage.js) are machine keys; these are the
 // mockup's own words for them (redesign/settings.html's <select>). Kept here,
 // not retyped in settings.js, so the value<->label pairing has one home.
+// "Overview headroom" (bead 5v2.1, owner decision 1A): two choices. The server
+// still accepts a stored `off`, which renders exactly as Numbers only.
 export const USAGE_SHOW_OPTIONS = [
-  { value: 'banner', label: 'Meters + chips' },
-  { value: 'compact', label: 'Chips only' },
-  { value: 'off', label: 'Off' },
+  { value: 'banner', label: 'Meters' },
+  { value: 'compact', label: 'Numbers only' },
 ];
+
+// The option a stored value shows as: `off` (no longer offered) → Numbers only;
+// unset → the server default, banner.
+export const usageShowSelected = (stored) => (stored === 'compact' || stored === 'off' ? 'compact' : 'banner');
+
+// What to send for the select: an untouched select keeps the stored value, so
+// a legacy `off` is neither a phantom dirty field nor silently rewritten.
+export const usageShowWire = (selected, stored) => (usageShowSelected(stored) === selected ? (stored ?? selected) : selected);
 
 // Type-to-arm: the input must match the phrase exactly once trimmed — no
 // case-folding. Cleanup/uninstall are the two actions the spec says the

@@ -10,8 +10,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
+import { readFileSync } from 'node:fs';
 import {
   msToSec, secToMs, armPhraseMatches, countDirty, parseExtField, USAGE_SHOW_OPTIONS,
+  usageShowSelected, usageShowWire,
 } from '../public/v2/pages/settings-logic.js';
 
 // ---------------- pure logic ----------------
@@ -23,10 +25,26 @@ test('msToSec/secToMs: round-trip, softGraceMs is the one field stored in ms but
   assert.equal(msToSec(null), null);
 });
 
-test('USAGE_SHOW_OPTIONS: covers exactly lib/usage.js\'s three machine keys with the mockup\'s own words', () => {
-  const values = USAGE_SHOW_OPTIONS.map((o) => o.value);
-  assert.deepEqual(values, ['banner', 'compact', 'off']);
-  assert.equal(USAGE_SHOW_OPTIONS.find((o) => o.value === 'banner').label, 'Meters + chips');
+// Bead 5v2.1 (owner decision 1A): "Overview headroom" offers two values; the
+// server still accepts the third (off), which reads as Numbers only.
+test('USAGE_SHOW_OPTIONS: Meters (banner) and Numbers only (compact) — labels parsed from both Settings mockups', () => {
+  assert.deepEqual(USAGE_SHOW_OPTIONS.map((o) => o.value), ['banner', 'compact']);
+  for (const f of ['redesign/settings.html', 'redesign/settings-danger.html']) {
+    const row = mockupRow(f, 'Overview headroom');
+    assert.ok(row, `${f} has an "Overview headroom" row`);
+    assert.deepEqual(USAGE_SHOW_OPTIONS.map((o) => o.label), row.options, `${f}: option labels match the mockup`);
+  }
+});
+
+test('usageShowSelected / usageShowWire: a stored "off" shows as Numbers only and is not a phantom edit', () => {
+  assert.equal(usageShowSelected('banner'), 'banner');
+  assert.equal(usageShowSelected('compact'), 'compact');
+  assert.equal(usageShowSelected('off'), 'compact');
+  assert.equal(usageShowSelected(undefined), 'banner', 'unset → the server default');
+  assert.equal(usageShowWire('compact', 'off'), 'off', 'untouched select keeps the stored legacy value');
+  assert.equal(usageShowWire('banner', 'off'), 'banner', 'a real change is sent');
+  assert.equal(usageShowWire('compact', 'banner'), 'compact');
+  assert.equal(usageShowWire('banner', 'banner'), 'banner');
 });
 
 test('armPhraseMatches: exact match after trimming, but NOT case-insensitive', () => {
@@ -75,6 +93,19 @@ function freshDom(url = 'http://127.0.0.1:43413/v2') {
 }
 
 const tick = (ms = 20) => new Promise((r) => setTimeout(r, ms));
+
+// One `.setrow` of a redesign/ Settings mockup, read from the file itself
+// (memory: pin goldens by parsing the spec).
+function mockupRow(file, name) {
+  const doc = new JSDOM(readFileSync(new URL(`../${file}`, import.meta.url), 'utf8')).window.document;
+  const row = [...doc.querySelectorAll('.setrow')].find((r) => r.querySelector('.setrow__n')?.textContent.trim() === name);
+  if (!row) return null;
+  return {
+    desc: row.querySelector('.setrow__d')?.textContent.trim(),
+    options: [...row.querySelectorAll('option')].map((o) => o.textContent.trim()),
+  };
+}
+
 
 const SETTINGS_FIXTURE = {
   paused: false,
@@ -194,6 +225,51 @@ test('settings page: Save starts disabled (nothing dirty) and arms the instant a
   pollInput.value = String(Number(pollInput.value) + 1);
   pollInput.dispatchEvent(new window.Event('input'));
   assert.equal(saveBtn.disabled, false, 'an edited field must arm Save');
+  assert.match(page.querySelector('.actionbar__l').textContent, /1 field differs/);
+});
+
+function pageRow(page, name) {
+  return [...page.querySelectorAll('.setrow')].find((r) => r.querySelector('.setrow__n')?.textContent === name);
+}
+
+test('settings page: "Overview headroom" and "Warn at" rows carry the mockup\'s name, description and options', async () => {
+  freshDom();
+  globalThis.fetch = mockFetch(() => 'ok');
+  const settings = (await import(`../public/v2/pages/settings.js?t=${Date.now()}_ohr`)).default;
+  settings(new URLSearchParams());
+  await tick(30);
+  const page = document.getElementById('v2-page');
+  for (const name of ['Overview headroom', 'Warn at']) {
+    const want = mockupRow('redesign/settings.html', name);
+    const row = pageRow(page, name);
+    assert.ok(row, `"${name}" row rendered`);
+    assert.equal(row.querySelector('.setrow__d').textContent, want.desc, `${name}: description matches the mockup`);
+    assert.deepEqual([...row.querySelectorAll('option')].map((o) => o.textContent), want.options);
+  }
+  assert.equal(pageRow(page, 'Show usage as'), undefined, 'the old label is gone');
+});
+
+test('settings page: a stored "off" shows as Numbers only, Save stays disabled, and changing it is one edit', async () => {
+  freshDom();
+  const base = mockFetch(() => 'ok');
+  globalThis.fetch = async (path, opts = {}) => {
+    if (path.startsWith('/api/settings') && (opts.method ?? 'GET') === 'GET') {
+      return { ok: true, status: 200, text: async () => JSON.stringify({ ...SETTINGS_FIXTURE, usageShow: 'off' }) };
+    }
+    return base(path, opts);
+  };
+  const settings = (await import(`../public/v2/pages/settings.js?t=${Date.now()}_off`)).default;
+  settings(new URLSearchParams());
+  await tick(30);
+  const page = document.getElementById('v2-page');
+  const select = pageRow(page, 'Overview headroom').querySelector('select');
+  assert.equal(select.value, 'compact');
+  assert.equal(select.selectedOptions[0].textContent, 'Numbers only');
+  const saveBtn = [...page.querySelectorAll('button')].find((b) => b.textContent === 'Save settings');
+  assert.equal(saveBtn.disabled, true, 'showing off as Numbers only is not an edit');
+  select.value = 'banner';
+  select.dispatchEvent(new window.Event('change'));
+  assert.equal(saveBtn.disabled, false);
   assert.match(page.querySelector('.actionbar__l').textContent, /1 field differs/);
 });
 

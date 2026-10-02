@@ -35,7 +35,8 @@ import { onRender } from '../router.js';
 // same glyph — runs-icons.js is the /v2 icon module, not a runs-only one.
 import { ICON_EMPTY } from './runs-icons.js';
 import {
-  msToSec, secToMs, USAGE_SHOW_OPTIONS, armPhraseMatches, countDirty, parseExtField,
+  msToSec, secToMs, USAGE_SHOW_OPTIONS, usageShowSelected, usageShowWire,
+  armPhraseMatches, countDirty, parseExtField,
 } from './settings-logic.js';
 
 // Core numeric keys — everything else read off a form control is either a
@@ -147,6 +148,14 @@ function selectField(readers, key, options, current) {
   return select;
 }
 
+// "Overview headroom": a stored legacy `off` shows as Numbers only, and is
+// sent back unchanged unless the owner picks something else.
+function usageShowField(readers, stored) {
+  const select = selectField(readers, 'usageShow', USAGE_SHOW_OPTIONS, usageShowSelected(stored));
+  readers.usageShow = () => usageShowWire(select.value, stored);
+  return select;
+}
+
 function textareaField(readers, key, value) {
   // el()'s children are appended via document.createTextNode (see ui.js) —
   // never innerHTML — so a stored path containing "<" or "&" round-trips
@@ -164,11 +173,11 @@ function usageSection(s) {
   return el('section', { class: 'card', style: 'margin-bottom:16px;' }, [
     el('div', { class: 'card__head' }, el('h2', {}, 'Usage monitor')),
     el('div', { class: 'rows' }, [
-      setRow('Show usage as', 'Meters on the Overview; the compact chips in the bar are always on.',
-        selectField(r, 'usageShow', USAGE_SHOW_OPTIONS, s.usageShow)),
+      setRow('Overview headroom', 'The bar chips are always on. Meters add where each window sits against the guard and when it resets.',
+        usageShowField(r, s.usageShow)),
       setRow('Poll every', ['How often the daemon asks ', el('span', { class: 'mono' }, 'claude'), ' for usage. Checks are free but not instant.'],
         numField(r, 'usagePollSec', s.usagePollSec, 'sec')),
-      setRow('Warn at', 'Meters turn amber. Nothing is blocked by this line — it only signals.',
+      setRow('Warn at', 'Meters and chips turn amber. Nothing is blocked by this line; it only signals.',
         numField(r, 'usageWarnPct', s.usageWarnPct, '%')),
       setRow('Critical at', 'Meters turn red, and model-pinned jobs whose model is past this line are guard-skipped.',
         numField(r, 'usageCritPct', s.usageCritPct, '%')),
