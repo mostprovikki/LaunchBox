@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import Database from 'better-sqlite3';
+import { openSqlite } from '../lib/sqlite.js';
 import { tmpData, validJob } from './helpers.js';
 import {
   openDb, createJob, listJobs, getJob, updateJob, deleteJob,
@@ -201,7 +201,7 @@ test('reopening a db with usage tables is idempotent', () => {
 test('migration: v1 flat-column db folds into params + meta', () => {
   const dir = tmpData();
   const path = join(dir, 'legacy.db');
-  const raw = new Database(path);
+  const raw = openSqlite(path);
   raw.exec(`
     CREATE TABLE jobs (
       id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL DEFAULT 'claude',
@@ -247,7 +247,7 @@ test('migration: a db written before beadOutcome existed keeps working, with NUL
   // bead", and for every run that was never a bead run.
   const dir = tmpData();
   const path = join(dir, 'pre-outcome.db');
-  const raw = new Database(path);
+  const raw = openSqlite(path);
   raw.exec(`
     CREATE TABLE runs (
       id TEXT PRIMARY KEY, jobId TEXT NOT NULL, status TEXT NOT NULL, trigger TEXT NOT NULL,

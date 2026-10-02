@@ -16,8 +16,7 @@ mkdir -p "$DATA" "$DATA/bin" "$HOME/Library/LaunchAgents"
 # The approval helper (docs/specs/2026-07-26-local-api-auth-design.md, Layer 2).
 #
 # Compiled from source here rather than shipped as a binary, for two reasons:
-# a downloaded prebuilt Mach-O gets flagged and removed by XProtect (the same
-# problem this repo already documents for better-sqlite3), and swiftc emits the
+# a downloaded prebuilt Mach-O gets flagged and removed by XProtect, and swiftc emits the
 # adhoc signature that Apple Silicon *requires* to execute at all.
 #
 # The output filename is load-bearing: it becomes the title of the system
