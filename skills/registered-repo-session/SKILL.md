@@ -6,7 +6,7 @@ description: Use when a session starts in a repo that contains .scheduler.json (
 # Working in a scheduler-registered repo
 
 The scheduler may have run beads here while nobody was looking, and may be running one now in a
-worktree under `~/.claude-scheduler/worktrees/`. Four steps, in this order, before other work.
+worktree under `~/.launchbox/worktrees/` (pre-M6 installs: `~/.claude-scheduler/worktrees/` until `launchbox migrate` runs). Four steps, in this order, before other work.
 Reference: `~/.claude/docs/beads-task-tracking.md` §3 "Running alongside a live session".
 
 ## 1. Briefing — what the scheduler did
@@ -14,8 +14,8 @@ Reference: `~/.claude/docs/beads-task-tracking.md` §3 "Running alongside a live
 Last session time: the newest transcript under `~/.claude/projects/<slug-of-this-repo>/`
 that is not the current one (its mtime). If none, use 7 days ago.
 
-Read `.beads/interactions.jsonl`, keep lines with `actor == "launchbox"` and
-`created_at > last`. Group by `issue_id`:
+Read `.beads/interactions.jsonl`, keep lines with `actor in ("launchbox", "claude-scheduler")` (pre-M6 actor: `claude-scheduler`)
+and `created_at > last`. Group by `issue_id`:
 - `status → closed` = **finished**;
 - `status → open` after `in_progress` = **handed back** (its `reason` is the agent's closing message);
 - anything else = touched.
@@ -65,4 +65,4 @@ one without finishing, hand it back: `bd update <id> --status open --assignee ""
 
 - Never activate a project or change its state.
 - Never merge a branch whose note does not say gates passed, without asking.
-- Never touch `~/.claude-scheduler/worktrees/*` by hand.
+- Never touch `~/.launchbox/worktrees/*` by hand (pre-M6: `~/.claude-scheduler/worktrees/`).

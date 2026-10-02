@@ -65,3 +65,11 @@ for (const name of EXPECTED_SKILLS) {
     assert.doesNotMatch(src, /state['"]?\s*:\s*['"]active|--state[= ]active|activate the project for/i);
   });
 }
+
+test('the session briefing counts scheduler activity under both actor names', () => {
+  const s = readFileSync(join(SKILLS, 'registered-repo-session', 'SKILL.md'), 'utf8');
+  assert.match(s, /actor[^\n]*launchbox/);
+  assert.match(s, /actor[^\n]*claude-scheduler[^\n]*pre-M6|pre-M6[^\n]*actor[^\n]*claude-scheduler/);
+  assert.match(s, /~\/\.launchbox\/worktrees/);
+  assert.doesNotMatch(s, /Never touch `~\/\.claude-scheduler\/worktrees[^\n]*(?<!pre-M6[^\n]*)$/m);
+});
