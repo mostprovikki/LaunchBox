@@ -1,4 +1,4 @@
-# Skills shipped with claude-scheduler
+# Skills shipped with LaunchBox
 
 Global Claude Code skills that make a registered repo write, claim, run and report beads the
 way the scheduler expects. Spec: `docs/superpowers/specs/2026-09-24-scheduler-skills-design.md`.

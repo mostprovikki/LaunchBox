@@ -1,5 +1,5 @@
 {
-  "name": "claude-scheduler",
+  "name": "launchbox",
   "version": "1.0.0",
   "private": true,
   "type": "module",
@@ -7,7 +7,7 @@
     "node": ">=22.5"
   },
   "bin": {
-    "claude-scheduler": "./bin/claude-scheduler.mjs"
+    "launchbox": "./bin/launchbox.mjs"
   },
   "scripts": {
     "start": "node server.js",

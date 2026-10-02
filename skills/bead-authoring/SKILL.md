@@ -5,7 +5,7 @@ description: Use when turning a plan or spec into beads, when asked to "file the
 
 # Bead authoring for scheduler-aware repos
 
-The scheduler (LaunchBox, `~/mydevelopment/claude-scheduler`) runs beads unattended only if they
+The scheduler (LaunchBox) runs beads unattended only if they
 carry the repo's `autoLabel` (`unattended` everywhere here) and are written so an agent with no
 context can finish them. This skill is how beads get written that way. Reference for the tracker
 itself: `~/.claude/docs/beads-task-tracking.md` (read §2 "Dependency direction" before chaining).

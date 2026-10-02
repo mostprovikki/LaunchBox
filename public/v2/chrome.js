@@ -401,7 +401,7 @@ function renderBanner() {
     banner.appendChild(el('span', {}, [
       el('b', {}, 'Daemon unreachable.'),
       ' Requests are failing; retrying automatically. Check: ',
-      el('span', { class: 'mono' }, 'launchctl list | grep claude-scheduler'),
+      el('span', { class: 'mono' }, 'launchctl list | grep launchbox'),
     ]));
     banner.hidden = false;
     return;
@@ -412,7 +412,7 @@ function renderBanner() {
     banner.appendChild(el('span', {}, [
       el('b', {}, 'This page can no longer talk to the daemon — its session token was rejected.'),
       ' That happens after the daemon restarts or the token is rotated. Buttons will fail until you reopen. In a terminal: ',
-      el('span', { class: 'mono' }, 'claude-scheduler open'),
+      el('span', { class: 'mono' }, 'launchbox open'),
     ]));
     banner.hidden = false;
     return;

@@ -48,7 +48,7 @@ curl -sf "http://127.0.0.1:$CS_PORT/" >/dev/null || { bad "daemon did not start"
 [ "$(grep -c 'approval:' "$D/log")" = "0" ] && ok "no approval warning at boot — the helper is usable" \
   || bad "daemon warned about the helper: $(grep 'approval:' "$D/log" | head -1)"
 
-T=$(node bin/claude-scheduler.mjs token)
+T=$(node bin/launchbox.mjs token)
 A=(-H "Authorization: Bearer $T" -H 'Content-Type: application/json')
 count(){ curl -s "${A[@]}" "http://127.0.0.1:$CS_PORT/api/jobs" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["jobs"]))'; }
 

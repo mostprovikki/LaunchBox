@@ -8,10 +8,10 @@ import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync, chmodSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { launchBrowser, sleep } from '/Users/vignesh-5036/mydevelopment/claude-scheduler/tools/screenshots/cdp.mjs';
-import { PORT_BASE } from '/Users/vignesh-5036/mydevelopment/claude-scheduler/lib/paths.js';
+import { launchBrowser, sleep } from './screenshots/cdp.mjs';
+import { PORT_BASE } from '../lib/paths.js';
 
-const REPO = '/Users/vignesh-5036/mydevelopment/claude-scheduler';
+const REPO = new URL('..', import.meta.url).pathname; // this checkout, wherever it lives
 // +10 = this project's QA/e2e-web offset (see ~/.claude/docs/port-allocation.md) —
 // a sandboxed instance, deliberately never the dev-server port, so this can run
 // alongside a live daemon without fighting it.
@@ -43,7 +43,7 @@ try {
   ok('daemon up with no approval helper (gated actions will 503, not prompt)');
 
   const token = (await import('node:child_process')).execFileSync(
-    'node', [join(REPO, 'bin/claude-scheduler.mjs'), 'token'], { env },
+    'node', [join(REPO, 'bin/launchbox.mjs'), 'token'], { env },
   ).toString().trim();
 
   browser = await launchBrowser({ width: 1400, height: 900, scale: 1 });

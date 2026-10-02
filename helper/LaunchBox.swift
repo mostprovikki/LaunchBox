@@ -1,8 +1,8 @@
 // LaunchBox — the approval helper. Layer 2 of docs/specs/2026-07-26-local-api-auth-design.md.
 //
-// Compiled at install time by lib/install.js into ~/.claude-scheduler/bin/LaunchBox:
+// Compiled at install time by lib/install.js into ~/.launchbox/bin/LaunchBox:
 //
-//     swiftc -O -o ~/.claude-scheduler/bin/LaunchBox helper/LaunchBox.swift
+//     swiftc -O -o ~/.launchbox/bin/LaunchBox helper/LaunchBox.swift
 //
 // MEASURED FACTS — verified by spike on 2026-07-26 from a background launchd agent.
 // These are not stylistic choices; changing any of them changes what the user sees or

@@ -14,11 +14,11 @@ const token = ensureToken();
 
 // The running daemon writes the port it actually bound. Preferred over guessing,
 // because sending someone to the wrong port with a valid token looks exactly
-// like a broken token. An explicit CS_PORT still wins, since that is someone
+// like a broken token. An explicit LB_PORT (CS_PORT still read) wins, since that is someone
 // telling us where they are pointing.
 //
 // Deliberately does NOT open the database: doing so runs migrate() + the schema
-// and would *create* ~/.claude-scheduler/scheduler.db as a side effect of asking
+// and would *create* ~/.launchbox/launchbox.db as a side effect of asking
 // for a URL. A read-only command should stay read-only.
 function port() {
   if (env('PORT')) return Number(env('PORT'));
@@ -65,6 +65,6 @@ if (cmd === 'token') {
   else if (process.platform === 'win32') execFile('cmd', ['/c', 'start', '', url], () => {});
   else execFile('xdg-open', [url], () => {});
 } else {
-  console.error('usage: claude-scheduler [open|url|token]');
+  console.error('usage: launchbox [open|url|token]');
   process.exit(2);
 }

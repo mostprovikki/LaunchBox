@@ -23,7 +23,7 @@
 // any such regression fails loudly instead of surprising the human.
 //
 // SAFETY: CS_DATA/CS_SESSIONS_ROOT are throwaway; claudePath is a fake binary;
-// the real ~/.claude-scheduler top-level listing is fingerprinted before/after.
+// the real ~/.launchbox top-level listing is fingerprinted before/after.
 //
 // Usage:
 //   node tools/verify-auth-sitting.mjs --dry   # scripted helper, no dialogs
@@ -72,7 +72,7 @@ function banner(lines) {
 // must not read as "the sandbox touched your data". A new or removed top-level
 // entry would be alarming and this catches it; ordinary log churn it ignores.
 function realDirFingerprint() {
-  const real = join(homedir(), '.claude-scheduler');
+  const real = join(homedir(), '.launchbox');
   if (!existsSync(real)) return 'absent';
   return createHash('sha256').update(readdirSync(real).sort().join('\n')).digest('hex');
 }
@@ -240,7 +240,7 @@ try {
   // that needs a *short* timeout is the ignore-it row (plan row 4), and that is
   // delegated to tools/verify-approval-timeout.sh (which sets its own 6s).
   await bootDaemon();
-  TOKEN = execFileSync('node', [join(REPO, 'bin/claude-scheduler.mjs'), 'token'],
+  TOKEN = execFileSync('node', [join(REPO, 'bin/launchbox.mjs'), 'token'],
     { env: { ...process.env, CS_DATA: DATA } }).toString().trim();
   ok(`daemon up on ${PORT}, token obtained`);
 
@@ -472,7 +472,7 @@ try {
   hr('teardown');
   for (const d of [DATA, FAKE, SESS, FIXREPO]) rmSync(d, { recursive: true, force: true });
   const untouched = realDirFingerprint() === realBefore;
-  (untouched ? ok : bad)(`real ~/.claude-scheduler untouched (top-level listing ${untouched ? 'unchanged' : 'CHANGED'})`);
+  (untouched ? ok : bad)(`real ~/.launchbox untouched (top-level listing ${untouched ? 'unchanged' : 'CHANGED'})`);
 
   hr('results');
   for (const r of results) console.log(`   ${r.ok ? '✓' : '✗'} [${r.row}] ${r.note}`);

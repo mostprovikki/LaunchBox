@@ -995,7 +995,8 @@ test('cleanup wipes jobs+runs, keeps settings; uninstall fires hook', async (t) 
 test('removalScript removes plist + data but NEVER deletes the tool dir', () => {
   const s = removalScript({ toolDir: '/x/tool', data: '/y/data' });
   assert.ok(s.includes('launchctl bootout'));
-  assert.ok(s.includes('com.claude-scheduler.plist'));
+  assert.ok(s.includes('com.launchbox.plist'));
+  assert.ok(s.includes('com.claude-scheduler.plist')); // legacy (pre-M6) label also removed
   assert.ok(s.includes('rm -rf "/y/data"'));
   // Source tree must be preserved — the tool dir is only mentioned, not rm -rf'd.
   assert.ok(!/rm -rf "?\/x\/tool"?/.test(s), 'must not rm -rf the tool dir');

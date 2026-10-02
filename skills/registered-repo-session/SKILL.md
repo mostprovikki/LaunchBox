@@ -14,7 +14,7 @@ Reference: `~/.claude/docs/beads-task-tracking.md` §3 "Running alongside a live
 Last session time: the newest transcript under `~/.claude/projects/<slug-of-this-repo>/`
 that is not the current one (its mtime). If none, use 7 days ago.
 
-Read `.beads/interactions.jsonl`, keep lines with `actor == "claude-scheduler"` and
+Read `.beads/interactions.jsonl`, keep lines with `actor == "launchbox"` and
 `created_at > last`. Group by `issue_id`:
 - `status → closed` = **finished**;
 - `status → open` after `in_progress` = **handed back** (its `reason` is the agent's closing message);
@@ -39,7 +39,7 @@ more than zero, ask **now or later?** once. Later: `bd update <id> --defer <date
 ## 3. Claim is the lock
 
 Before editing anything for a bead: `bd update <id> --claim`. If it fails with `already claimed
-by claude-scheduler`, stop: that bead is running in a worktree right now. Say so and pick
+by launchbox`, stop: that bead is running in a worktree right now. Say so and pick
 another. Never force a claim, never edit that bead's files on main meanwhile.
 
 Beads you claim leave `bd ready`, so the scheduler will not take them. When you stop working on

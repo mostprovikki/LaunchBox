@@ -7,7 +7,7 @@
 //
 // One deliberate difference from public/auth.js: token *capture* from the URL
 // fragment is NOT done here. /v2 needs the fragment for routing too (the same
-// channel bin/claude-scheduler.mjs uses to deliver `#token=<hex>`), so
+// channel bin/launchbox.mjs uses to deliver `#token=<hex>`), so
 // public/v2/router.js owns stripping it and calls `setToken()` below. This
 // module only reads/writes the stored value.
 
@@ -27,7 +27,7 @@ const authHeaders = () => {
 // threw" (daemon down, refused connection) as its own state, because /v2 is
 // the surface that stays open across a daemon restart and has to explain that.
 export const FAILURE_COPY = {
-  token_invalid: 'This session key is no longer valid. Stop the scheduler, start it again, then reopen with: claude-scheduler open',
+  token_invalid: 'This session key is no longer valid. Stop the scheduler, start it again, then reopen with: launchbox open',
   approval_denied: 'You denied the approval — nothing was saved. Press Submit again to retry.',
   approval_timeout: 'The approval request timed out — nothing was saved. Press Submit again to retry.',
   approval_unavailable: 'The approval helper is unavailable, so this was refused. Reinstall to rebuild it.',
@@ -64,7 +64,7 @@ export function getAuthState() {
 // FAILURE_COPY above exists to prevent; this closes that gap for good.
 export function degradedReason(state = authState) {
   if (state === 'unreachable') return 'Unavailable — daemon unreachable';
-  if (state === 'token_invalid') return 'Unavailable — session token rejected; reopen with claude-scheduler open';
+  if (state === 'token_invalid') return 'Unavailable — session token rejected; reopen with launchbox open';
   return null;
 }
 

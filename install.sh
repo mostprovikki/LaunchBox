@@ -1,11 +1,11 @@
 #!/bin/zsh
-# Install claude-scheduler: deps + launchd agent (RunAtLoad + KeepAlive).
+# Install launchbox: deps + launchd agent (RunAtLoad + KeepAlive).
 set -e
 cd "$(dirname "$0")"
 TOOL_DIR="$PWD"
-LABEL="com.claude-scheduler"
+LABEL="com.launchbox"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-DATA="$HOME/.claude-scheduler"
+DATA="$HOME/.launchbox"
 NODE="$(command -v node)"
 [ -n "$NODE" ] || { echo "node not found on PATH"; exit 1; }
 
@@ -76,8 +76,8 @@ sleep 1
 # route now requires the capability token, so an authenticated probe would need
 # the key and an unauthenticated one answers 401 — which `curl -sf` treats as
 # failure, making a perfectly healthy daemon report itself as still starting.
-if curl -sf "http://127.0.0.1:${CS_PORT:-9099}/" >/dev/null; then
-  echo "✓ claude-scheduler running"
+if curl -sf "http://127.0.0.1:${LB_PORT:-${CS_PORT:-43400}}/" >/dev/null; then
+  echo "✓ launchbox running"
 else
   echo "daemon starting… check $DATA/daemon.log"
 fi
@@ -86,7 +86,7 @@ fi
 # a bare URL that would just show the "no session key" banner.
 echo ""
 echo "Open the UI with:"
-echo "  node $TOOL_DIR/bin/claude-scheduler.mjs open"
+echo "  node $TOOL_DIR/bin/launchbox.mjs open"
 echo ""
 echo "That prints a one-time URL carrying your session key and opens it. The key"
 echo "lives in $DATA/token (mode 0600). Anything without it gets a 401, which is"
