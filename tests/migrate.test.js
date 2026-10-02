@@ -36,6 +36,31 @@ for (const [name, live, tweak, re] of [
   });
 }
 
+// F1: a Ctrl-C mid-run leaves these three behind; each refusal must name the way out.
+for (const [name, live] of [['a run is live', { run: true }], ['a lease is held', { lease: true }], ['a worktree is checked out', { worktree: true }]]) {
+  test(`the refusal when ${name} names the recovery command`, async () => {
+    const f = fixtureInstall({ live });
+    const plan = await planMigration({ ...f, portAlive: dead });
+    assert.equal(plan.state, 'refused');
+    const r = plan.refusals.find((x) => /running or queued|lease|worktree/.test(x));
+    assert.ok(r, plan.refusals.join(' | '));
+    assert.ok(r.includes(`LB_DATA=${f.oldDir} npm start`), r);
+    assert.match(r, /wait until idle.*stop it.*run migrate again/s);
+  });
+}
+
+// F2: `launchbox url` / install.sh before migrate leaves ~/.launchbox with logs/ + token.
+test('the target-not-empty refusal lists what is there and when it is safe to delete', async () => {
+  const f = fixtureInstall();
+  mkdirSync(join(f.newDir, 'logs'), { recursive: true });
+  writeFileSync(join(f.newDir, 'token'), 't');
+  const plan = await planMigration({ ...f, portAlive: dead });
+  const r = plan.refusals.find((x) => /already exists/.test(x));
+  assert.ok(r, plan.refusals.join(' | '));
+  assert.match(r, /contains: logs\/, token/);
+  assert.match(r, /only an empty logs\/ and a token.*delete/s);
+});
+
 test('a missing old dir reports nothing', async () => {
   const { root, newDir } = fixtureInstall();
   const plan = await planMigration({ oldDir: join(root, 'absent'), newDir, portAlive: dead });
