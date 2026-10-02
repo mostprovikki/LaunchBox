@@ -468,7 +468,7 @@ export function createApp({
       // raise a persistent banner for this and never confuse it with an
       // approval refusal, which is recoverable by pressing Submit again.
       return res.status(401).json({
-        error: 'this session key is not valid — stop the scheduler, start it again, then reopen with: claude-scheduler open',
+        error: 'this session key is not valid — stop the scheduler, start it again, then reopen with: launchbox open',
         code: 'token_invalid',
       });
     }
@@ -2321,7 +2321,7 @@ export function createApp({
   app.post('/api/uninstall', async (req, res) => {
     if (!await approve(req, res, {
       action: 'uninstall',
-      detail: 'remove the claude-scheduler background service from this Mac',
+      detail: 'remove the LaunchBox background service from this Mac',
       grace: false,
     })) return;
     res.status(202).json({ ok: true, message: 'uninstalling — daemon will exit' });
@@ -2503,7 +2503,7 @@ export async function main() {
   // busy-port path, not just reading the happy path.
   const server = app.listen(port, '127.0.0.1');
   server.on('listening', () => {
-    // Publish the port we actually bound, so `claude-scheduler open` builds a
+    // Publish the port we actually bound, so `launchbox open` builds a
     // URL that works even when CS_PORT moved it. The alternative — having the
     // CLI guess, or read a `port` setting nothing ever writes — sends the user
     // to the wrong port with a valid token, which reads as "the token is
@@ -2511,14 +2511,14 @@ export async function main() {
     try {
       writeFileSync(join(dataDir(), 'port'), `${port}\n`);
     } catch { /* a missing port file just means the CLI falls back */ }
-    console.log(`claude-scheduler on http://127.0.0.1:${port} · extensions: ${[...extensions.keys()].join(', ')}`);
+    console.log(`launchbox on http://127.0.0.1:${port} · extensions: ${[...extensions.keys()].join(', ')}`);
   });
   // Fail fast on a busy port instead of silently drifting to another one — a
   // server that auto-increments is how two projects end up driving each
   // other's app. Whoever wants a different port sets CS_PORT explicitly.
   server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
-      console.error(`claude-scheduler: port ${port} is already in use — refusing to fall back to another port.`);
+      console.error(`launchbox: port ${port} is already in use — refusing to fall back to another port.`);
       console.error('Free it (`lsof -ti:' + port + '` then inspect before killing), or set CS_PORT to bind elsewhere.');
       process.exit(1);
     }

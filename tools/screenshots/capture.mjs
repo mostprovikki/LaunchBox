@@ -9,7 +9,7 @@
 //
 // It boots its OWN scheduler on its allocated QA port (43412, or a worktree's
 // +50+10k block — tools/qa/sandbox-port.mjs) against a throwaway CS_DATA, so it
-// never touches ~/.claude-scheduler. `claudePath` is pre-seeded to a fake
+// never touches ~/.launchbox. `claudePath` is pre-seeded to a fake
 // binary, which means the usage probe returns fixed percentages (screenshots
 // stay comparable between runs) and no real `claude` can be invoked even by
 // accident — a capture run cannot spend API quota.
@@ -138,7 +138,7 @@ async function main() {
   // Filled in after the daemon boots and writes its token file.
   let api = new Api(baseUrl);
 
-  log(`claude-scheduler screenshots → ${outDir}`);
+  log(`launchbox screenshots → ${outDir}`);
   log(`  sandbox CS_DATA=${dataDir}  port=${port}`);
 
   // Fake claude, and pre-seed it as claudePath BEFORE boot so the extension's
@@ -338,7 +338,7 @@ Each populated route is captured twice, in the dark and the light theme
 
 ## How this was produced
 
-A throwaway scheduler on its own port against a temp \`CS_DATA\`; \`~/.claude-scheduler\` is
+A throwaway scheduler on its own port against a temp \`CS_DATA\`; \`~/.launchbox\` is
 never touched. \`claudePath\` is pre-seeded to a fake binary, so the usage meters read fixed
 values (5h 37%, weekly 64%, Fable 90%) and **no real \`claude\` can run** — a capture spends
 no API quota. Only \`command\`-type jobs are ever executed; the three \`claude\` jobs are

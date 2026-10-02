@@ -18,7 +18,7 @@
 # the whole point of the layer, so it is the whole of what is asked below.
 #
 # Sandboxed: throwaway CS_DATA, a fake `claude`, and an 8s timeout. Your real
-# ~/.claude-scheduler is never touched and no quota can be spent.
+# ~/.launchbox is never touched and no quota can be spent.
 set -u
 cd "$(dirname "$0")/.."
 pass=0; fail=0
@@ -67,7 +67,7 @@ node server.js > "$CS_DATA/log" 2>&1 &
 disown 2>/dev/null || true
 for i in $(seq 1 30); do curl -sf "http://127.0.0.1:$PORT/" >/dev/null 2>&1 && break; sleep 0.5; done
 curl -sf "http://127.0.0.1:$PORT/" >/dev/null || { bad "daemon did not start"; exit 1; }
-T=$(node bin/claude-scheduler.mjs token)
+T=$(node bin/launchbox.mjs token)
 A=(-H "Authorization: Bearer $T" -H 'Content-Type: application/json')
 JOB='{"name":"nightly sweep","type":"command","command":"echo hi","cwd":"/tmp","schedules":[{"type":"cron","expr":"0 3 * * *"}]}'
 count(){ curl -s "${A[@]}" "http://127.0.0.1:$PORT/api/jobs" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["jobs"]))'; }

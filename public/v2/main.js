@@ -84,7 +84,7 @@ const mutatingObserver = new MutationObserver((records) => {
 mutatingObserver.observe(document.body, { childList: true, subtree: true });
 
 // Capture a delivered #token= BEFORE mountChrome(), which fires its first
-// api() poll immediately — otherwise a legitimate cold `claude-scheduler
+// api() poll immediately — otherwise a legitimate cold `launchbox
 // open` deep link would 401 its very first request (see router.js's comment
 // on captureTokenFromHash()). startRouter() calls this again on its own
 // render pass; a second, no-op call here is cheap and correct either way.

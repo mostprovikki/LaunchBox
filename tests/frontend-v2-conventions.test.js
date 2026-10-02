@@ -274,7 +274,7 @@ test('central sweep (main.js): a data-mutating control anywhere on the page is d
   mode = '401';
   await api.api('GET', '/api/probe').catch(() => {});
   assert.equal(probe.disabled, true, 'token_invalid must also disable it');
-  assert.equal(probe.getAttribute('data-tip'), 'Unavailable — session token rejected; reopen with claude-scheduler open');
+  assert.equal(probe.getAttribute('data-tip'), 'Unavailable — session token rejected; reopen with launchbox open');
 
   mode = 'ok';
   await api.api('GET', '/api/probe').catch(() => {});

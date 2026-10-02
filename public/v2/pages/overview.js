@@ -1,5 +1,5 @@
-// Overview tab — the Monitor (docs/design/launchbox.md §5; claude-scheduler-
-// btv.21). Status light + one-line state, a red banner for a daemon fault,
+// Overview tab — the Monitor (docs/design/launchbox.md §5;
+// claude-scheduler-btv.21). Status light + one-line state, a red banner for a daemon fault,
 // then four cards: needs-you (largest, the page's one action "Open Inbox"),
 // headroom left, running now, LaunchBox spend. No list, meter or control at
 // rest — §7 records what was cut and where each now lives. Mockup:

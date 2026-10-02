@@ -396,7 +396,7 @@ function renderDangerBody() {
           el('span', { class: 'mono' }, 'cleanup'), ' to arm the button, then approve with Touch ID.'],
         [cleanupInput, cleanupBtn]),
       setRow('Uninstall LaunchBox',
-        ['Stops and removes the launchd agent, deletes ', el('span', { class: 'mono' }, '~/.claude-scheduler'),
+        ['Stops and removes the launchd agent, deletes ', el('span', { class: 'mono' }, '~/.launchbox'),
           ' including this UI, and removes the binary. Your repos, beads and Claude sessions are untouched. Type ',
           el('span', { class: 'mono' }, 'uninstall'), ' to arm, then approve with Touch ID.'],
         [uninstallInput, uninstallBtn]),
@@ -455,8 +455,8 @@ function render() {
 
   wrap.appendChild(pageHead({
     title: 'Settings',
-    sub: ['Data in ', el('span', { class: 'mono' }, '~/.claude-scheduler'), ' · daemon via launchd ',
-      el('span', { class: 'mono' }, 'com.claude-scheduler'), ' · UI theme follows the toggle in the bar'],
+    sub: ['Data in ', el('span', { class: 'mono' }, '~/.launchbox'), ' · daemon via launchd ',
+      el('span', { class: 'mono' }, 'com.launchbox'), ' · UI theme follows the toggle in the bar'],
   }));
 
   if (s.approvalDegraded) {
