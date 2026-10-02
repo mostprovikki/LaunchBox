@@ -1,9 +1,10 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { loadExtensions } from '../lib/extensions.js';
 import { validateJob } from '../lib/validate.js';
+import { openDb } from '../lib/db.js';
 
 // Real extensions (claude, command) loaded once for all tests.
 export const extensions = await loadExtensions();
@@ -194,4 +195,31 @@ export function bdReadyRow(overrides = {}) {
   // Deliberately omit the key when there are no labels — the measured trap.
   if (labels !== undefined) row.labels = labels;
   return row;
+}
+
+// A pre-M6 install in miniature: scheduler.db with one path in each rewritten
+// column, plus the 0-byte launchbox.db the real install has had since 2026-09-21.
+export function fixtureInstall({ live = {} } = {}) {
+  const root = tmpDir('cs-m6-');
+  const oldDir = join(root, '.claude-scheduler');
+  const newDir = join(root, '.launchbox');
+  mkdirSync(join(oldDir, 'logs'), { recursive: true });
+  mkdirSync(join(oldDir, 'worktrees'));
+  const db = openDb(join(oldDir, 'scheduler.db'));
+  db.prepare(`INSERT INTO jobs (id,name,type,params,cwd,schedule,createdAt,updatedAt)
+    VALUES ('j1','bead','claude',?,?,'{}','t','t')`).run(
+    JSON.stringify({ prompt: 'x', logDir: `${oldDir}/logs` }), `${oldDir}/worktrees/p--b1`);
+  db.prepare(`INSERT INTO runs (id,jobId,status,trigger,logPath,meta,createdAt)
+    VALUES ('r1','j1',?,'schedule',?,?,'t')`).run(
+    live.run ? 'running' : 'ok', `${oldDir}/logs/r1.log`, JSON.stringify({ wt: `${oldDir}/worktrees/p--b1` }));
+  db.prepare(`INSERT INTO runs (id,jobId,status,trigger,logPath,createdAt)
+    VALUES ('r2','j1','ok','schedule',?,'t')`).run(`${root}/.claude-scheduler-old/r2.log`);
+  db.prepare(`INSERT INTO settings (key,value) VALUES ('worktreeRoot',?)`).run(`${oldDir}/worktrees`);
+  db.prepare(`INSERT INTO sessions (id,filePath,mtimeMs,sizeBytes,cwd,scannedAt) VALUES ('s1','/f.jsonl',0,0,?,'t')`).run(`${oldDir}/worktrees/p--b1`);
+  if (live.lease) db.prepare(`INSERT INTO task_leases (projectId,beadId,runId,state,acquiredAt) VALUES ('p','b1','r1','held','t')`).run();
+  db.pragma('wal_checkpoint(TRUNCATE)');
+  db.close();
+  writeFileSync(join(oldDir, 'launchbox.db'), '');
+  if (live.worktree) mkdirSync(join(oldDir, 'worktrees', 'p--b1'));
+  return { root, oldDir, newDir };
 }
