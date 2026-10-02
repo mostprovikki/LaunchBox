@@ -1010,7 +1010,7 @@ test('every bd call identifies the scheduler as the actor, not the repo owner', 
   assert.ok(bd.calls.length > 0);
   // Otherwise `--claim` assigns the bead to the human's own git user.name, and the
   // notice board says "taken" without being able to say by whom.
-  for (const c of bd.calls) assert.equal(c.env.BEADS_ACTOR, 'claude-scheduler', `actor missing on bd ${c.sub}`);
+  for (const c of bd.calls) assert.equal(c.env.BEADS_ACTOR, 'launchbox', `actor missing on bd ${c.sub}`);
 });
 
 // --- "ok" is not "done" (found by live-driving) --------------------------
@@ -1270,6 +1270,20 @@ test('the materialised job carries permMode — a field default would never appl
 // was in flight.
 
 test('a restart returns a bead that was mid-run to the backlog', async () => {
+  const { db, bd, projects, project } = setup({
+    bdHandlers: {
+      show: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', status: 'in_progress', assignee: 'launchbox' })]) },
+    },
+  });
+  acquireLease(db, { projectId: project.id, beadId: 'sp-1' });
+
+  const out = await projects.recoverOrphans();
+
+  assert.deepEqual(out, [{ beadId: 'sp-1', handedBack: true }]);
+  assert.equal(unclaimCalls(bd).length, 1);
+});
+
+test('recoverOrphans hands back a bead claimed under the pre-M6 actor name', async () => {
   const { db, bd, projects, project } = setup({
     bdHandlers: {
       show: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1', status: 'in_progress', assignee: 'claude-scheduler' })]) },

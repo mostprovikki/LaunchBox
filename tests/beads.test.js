@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fakeBd, bdReadyRow } from './helpers.js';
-import { createBeads, normaliseBead, BeadsError, BD_TIMEOUT_MS } from '../lib/beads.js';
+import { createBeads, normaliseBead, BeadsError, BD_TIMEOUT_MS, BD_ACTOR, SCHEDULER_ACTORS, isSchedulerActor } from '../lib/beads.js';
 
 // Every test here asserts a behaviour that was measured against real bd 1.1.0 in
 // docs/spikes/. Nothing shells out to the real binary.
@@ -279,4 +279,13 @@ test('close passes a reason through when given', async () => {
 
   await beads.close(PROJECT, 'sp-1', { reason: 'done by scheduler run r1' });
   assert.deepEqual(bd.calls[0].args, ['close', 'sp-1', '--reason', 'done by scheduler run r1']);
+});
+
+test('beads actor is launchbox; the pre-M6 name is still recognised as ours', () => {
+  assert.equal(BD_ACTOR, 'launchbox');
+  assert.deepEqual([...SCHEDULER_ACTORS], ['launchbox', 'claude-scheduler']);
+  assert.equal(isSchedulerActor('launchbox'), true);
+  assert.equal(isSchedulerActor('claude-scheduler'), true);
+  assert.equal(isSchedulerActor('a-human'), false);
+  assert.equal(isSchedulerActor(null), false);
 });

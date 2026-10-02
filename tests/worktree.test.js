@@ -143,7 +143,7 @@ test('snapshot commits a dirty worktree as wip(<bead>) with the scheduler identi
   assert.equal(r.sha, 'abc1234');
   const commit = dirty.calls.find((c) => c.args[0] === '-c' || c.args[0] === 'commit');
   assert.ok(commit, 'a commit was made');
-  assert.ok(commit.args.includes('user.name=claude-scheduler'), 'committed as the scheduler, not as the owner');
+  assert.ok(commit.args.includes('user.name=LaunchBox'), 'committed as the scheduler, not as the owner');
   assert.ok(commit.args.some((a) => /^wip\(sp-1\): uncommitted work at run end$/.test(a)), 'fixed-form message the review queue recognises');
   assert.equal(commit.opts.cwd, join('/outside', worktreeName(PROJECT, 'sp-1')), 'runs IN the bead worktree');
   // -A on purpose here and nowhere else: the point is to lose nothing. `.beads/`
