@@ -142,7 +142,7 @@ test('a helper that will not start at all is unavailable', async () => {
 });
 
 test('the queue serialises: a second request waits rather than stacking a dialog', async () => {
-  const { approval, spawnFn } = setup({ timeoutMs: 1000 });
+  const { approval, spawnFn } = setup();
   const first = approval.request({ ...JOB, detail: 'create job A' });
   const second = approval.request({ ...JOB, detail: 'create job B' });
   await sleep(5);
@@ -164,7 +164,7 @@ test('the queue serialises: a second request waits rather than stacking a dialog
 });
 
 test('the queue is bounded — anything beyond it is approval_busy, immediately', async () => {
-  const { approval, spawnFn } = setup({ timeoutMs: 1000 });
+  const { approval, spawnFn } = setup();
   assert.equal(DEFAULT_MAX_QUEUED, 2, 'one dialog open plus a short queue');
 
   const inFlight = approval.request({ ...JOB, detail: 'create job A' });
@@ -310,7 +310,7 @@ test('every refusal code is one the client has copy for', async () => {
     seen.add((await approval.request(JOB)).code);
   }
   {
-    const { approval, spawnFn } = setup({ timeoutMs: 500, maxQueued: 0 });
+    const { approval, spawnFn } = setup({ maxQueued: 0 });
     const held = approval.request(JOB);
     seen.add((await approval.request(JOB)).code);
     await answer(spawnFn, { code: 0 });
