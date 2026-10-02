@@ -4,7 +4,7 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpData } from './helpers.js';
 import { homedir } from 'node:os';
-import { dataDir, logsDir, dbPath, ensureDirs, env, legacyDataDir, explicitDataDir } from '../lib/paths.js';
+import { dataDir, defaultDataDir, logsDir, dbPath, ensureDirs, env, legacyDataDir, explicitDataDir } from '../lib/paths.js';
 
 test('paths respect CS_DATA and ensureDirs creates logs dir', () => {
   const dir = tmpData();
@@ -59,4 +59,17 @@ test('dbPath opens scheduler.db in a legacy-layout dir; launchbox.db otherwise',
   assert.equal(dbPath(), join(dir, 'scheduler.db'), '0-byte stray launchbox.db is ignored');
   writeFileSync(join(dir, 'launchbox.db'), 'new');
   assert.equal(dbPath(), join(dir, 'launchbox.db'), 'a real launchbox.db wins');
+});
+
+test('defaultDataDir ignores LB_DATA/CS_DATA (migrate target)', () => {
+  const saved = process.env.LB_HOME;
+  process.env.LB_HOME = '/nowhere';
+  process.env.LB_DATA = '/x/stray';
+  try {
+    assert.equal(dataDir(), '/x/stray');
+    assert.equal(defaultDataDir(), join('/nowhere', '.launchbox'));
+  } finally {
+    delete process.env.LB_DATA;
+    if (saved !== undefined) process.env.LB_HOME = saved; else delete process.env.LB_HOME;
+  }
 });
