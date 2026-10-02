@@ -675,6 +675,69 @@ test('re-running one bead reuses its job row, so learned cost accumulates', asyn
   assert.equal(avgDeltaForJob(db, jobId).median.five_hour, 4, 'cost history survives the next run');
 });
 
+
+// --- per-bead model override (claude-scheduler-7v1) ---------------------
+// A `model:<name>` label picks the model for that one bead; everything else
+// stays on the project's defaults.model.
+
+function labelledSetup(labels) {
+  const row = () => JSON.stringify([bdReadyRow({ id: 'sp-1', labels: labels() })]);
+  return setup({
+    bdHandlers: {
+      ready: () => ({ stdout: row() }),
+      show: () => ({ stdout: row() }),
+      update: { stdout: JSON.stringify([bdReadyRow({ id: 'sp-1' })]) },
+      close: { stdout: '' },
+    },
+  });
+}
+
+test('a model: label overrides the project default model for that bead', async () => {
+  const { projects, project, runner } = labelledSetup(() => ['unattended', 'model:opus']);
+  await projects.pollProject(project.id);
+  assert.equal(runner.starts[0].job.params.model, 'opus');
+});
+
+test('an unlabelled bead keeps the project default model', async () => {
+  const { projects, project, runner } = labelledSetup(() => ['unattended']);
+  await projects.pollProject(project.id);
+  assert.equal(runner.starts[0].job.params.model, 'default');
+});
+
+test('two model: labels — the first in sorted order wins', async () => {
+  const { projects, project, runner } = labelledSetup(() => ['unattended', 'model:opus', 'model:claude-fable-5-1']);
+  await projects.pollProject(project.id);
+  assert.equal(runner.starts[0].job.params.model, 'claude-fable-5-1');
+});
+
+for (const bad of ['model:', 'model: ', 'model:-p', 'model:--dangerously-skip-permissions', 'model:op us']) {
+  test(`an invalid model label (${JSON.stringify(bad)}) is ignored — no CLI flag injection`, async () => {
+    const { projects, project, runner } = labelledSetup(() => ['unattended', bad]);
+    await projects.pollProject(project.id);
+    assert.equal(runner.starts[0].job.params.model, 'default');
+  });
+}
+
+test('an invalid model label does not shadow a valid one', async () => {
+  const { projects, project, runner } = labelledSetup(() => ['unattended', 'model:-x', 'model:opus']);
+  await projects.pollProject(project.id);
+  assert.equal(runner.starts[0].job.params.model, 'opus');
+});
+
+test('a re-run picks up a changed model label — the reused job row is refreshed', async () => {
+  let labels = ['unattended', 'model:opus'];
+  const { db, projects, project, runner } = labelledSetup(() => labels);
+  await projects.pollProject(project.id);
+  assert.equal(listJobs(db)[0].params.model, 'opus');
+  runner.finish('run-1', 'fail');
+  await new Promise((r) => setImmediate(r));
+
+  labels = ['unattended'];
+  await projects.pollProject(project.id);
+  assert.equal(listJobs(db).length, 1);
+  assert.equal(listJobs(db)[0].params.model, 'default', 'removing the label falls back to the default');
+});
+
 // --- resilience -------------------------------------------------------
 
 test('a bd failure marks the project error with a reason and does not kill the loop', async () => {
