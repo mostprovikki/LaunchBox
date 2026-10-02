@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Overview meters mockup</title>
+<script src="../../../public/v2/assets/theme.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../../public/v2/assets/system.css">
+<link rel="stylesheet" href="../../../public/v2/assets/launchbox.css">
+<style>
+  /* mockup-only: demobar, setting gating, Monitor layout (copied from overview-flavours.html Option 2). Nothing here ships. */
+  .demobar { display:flex; flex-wrap:wrap; gap:12px; align-items:center; padding:6px 16px; font-size:12px; border-bottom:1px solid var(--line); }
+  .demobar .seg[aria-pressed="true"] { font-weight:600; text-decoration: underline; }
+  body[data-show="banner"] .show-numbers { display: none !important; }
+  body[data-show="compact"] .show-meters,
+  body[data-show="off"] .show-meters { display: none !important; }
+  body:not([data-show="off"]) .show-off { display: none !important; }
+  .light { display:inline-block; width:14px; height:14px; border-radius:50%; flex:none; }
+  .light--warn { background: var(--warn); box-shadow: 0 0 0 4px var(--warn-wash); }
+  .status { display:flex; gap:14px; align-items:center; margin: 8px 0 22px; }
+  .status__t { font-size: 22px; font-weight: 600; }
+  .status__why { margin-top: 2px; }
+  a.fact3 { color: inherit; text-decoration: none; }
+  .hero { display:flex; align-items:center; gap: 20px; padding: 20px 22px; }
+  .hero__v { font-size: 27px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1; font-family: var(--mono); }
+  .toprow { display:grid; grid-template-columns: minmax(0,3fr) minmax(0,1fr); gap: 14px; }
+  .toprow .hero, .toprow .fact3 { height: 100%; box-sizing: border-box; }
+  .facts3 { display:grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 14px; margin-top: 14px; align-items: stretch; }
+  .fact3.fact3--spend { display:flex; flex-direction:column; }
+  body:not([data-show="banner"]) .facts3 { align-items: start; }  /* numbers-only cards are short: natural height, no padding gap */
+  .fact3 { display:block; padding: 14px 16px; }
+  .fact3:hover { background: var(--surface-2); }
+  .fact3__v { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; margin: 4px 0 2px; font-family: var(--mono); }
+  .share { display:flex; gap: 3px; }
+  .share__seg { min-width: 0; display:flex; flex-direction:column; gap: 6px; }
+  .share__bar { display:block; height: 10px; border-radius: 3px; background: var(--ink-3); }
+  .share__n { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .spend2 { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 14px 0 18px; }
+  .spend__v { font-size: 27px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.05; font-family: var(--mono); }
+  /* the change under review: meters inside the existing Headroom card */
+  .head__top { display:flex; align-items:baseline; gap: 10px; }
+  .head__meters { display:grid; gap: 14px; margin-top: 14px; }
+  .note { margin-top: 26px; max-width: 760px; }
+  .note h2 { font-size: 14.5px; font-weight: 600; margin: 0 0 6px; }
+  .setcard { margin-top: 12px; max-width: 760px; }
+  .setrow2 { display:grid; grid-template-columns: minmax(0,1fr) 220px; gap: 16px; align-items:center; padding: 12px 16px; border-top: 1px solid var(--line-2); }
+  .setrow2:first-of-type { border-top: 0; }
+  .setrow2 select { width: 100%; }
+  .callout { border-left: 3px solid var(--warn); padding: 8px 12px; background: var(--warn-wash); }
+  @media (max-width: 760px) {
+    .facts3, .toprow { grid-template-columns: 1fr; }
+    .setrow2 { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body data-show="banner">
+
+<div class="demobar">
+  <b>Mockup · 5v2.1</b>
+  <span class="t-meta">Settings → Show usage as:</span>
+  <span class="segs" role="group" aria-label="Show usage as">
+    <button class="seg" data-v="banner">Meters + chips</button>
+    <button class="seg" data-v="compact">Chips only</button>
+    <button class="seg" data-v="off">Off</button>
+  </span>
+  <span id="viewing" class="t-meta"></span>
+  <span style="margin-left:auto" class="t-meta">usage live 2 Oct 23:21 · spend and "needs you" are samples</span>
+  <button class="iconbtn themebtn" onclick="lbToggleTheme()" aria-label="Switch theme">◐</button>
+</div>
+
+<header class="appbar">
+  <h1 class="appbar__brand">LaunchBox</h1>
+  <nav class="mainnav">
+    <a href="#" aria-current="page">Overview</a><a href="#">Inbox</a><a href="#">Runs</a><a href="#">Projects</a><a href="#">Jobs</a><a href="#">Settings</a>
+  </nav>
+  <div class="appbar__spacer"></div>
+  <div class="uchips" data-tip="Claude usage — checked 23:21:30">
+    <span class="uchip"><span class="uchip__k">5h</span><span class="uchip__v">68%</span></span>
+    <span class="uchip"><span class="uchip__k">wk</span><span class="uchip__v">87%</span></span>
+    <span class="uchip uchip--warn"><span class="uchip__k">fable</span><span class="uchip__v">90%</span></span>
+  </div>
+</header>
+
+<main class="shell">
+  <div class="status">
+    <span class="light light--warn"></span>
+    <div>
+      <div class="status__t">Nothing needs you</div>
+      <div class="status__why t-meta">Fable weekly limit is at 90% (Warn at)</div>
+    </div>
+  </div>
+
+  <div class="toprow">
+  <a class="card hero" href="#inbox" style="color:inherit;text-decoration:none">
+    <div class="hero__v">0</div>
+    <div><div class="t-card">Nothing needs you</div>
+      <div class="t-meta">no branches waiting · nothing handed back</div></div>
+  </a>
+  <a class="card fact3" href="#runs">
+    <div class="t-eyebrow">Running now</div>
+    <div class="fact3__v">0</div>
+    <div class="t-meta">nothing running</div>
+  </a>
+
+  </div>
+
+  <div class="facts3">
+    <!-- Headroom left: the one card this change touches -->
+    <a class="card fact3" href="#settings">
+      <div class="t-eyebrow">Headroom left</div>
+
+      <!-- Chips only / Off: today's card, unchanged -->
+      <div class="show-numbers">
+        <div class="fact3__v">13%<small class="t-meta"> week</small></div>
+        <div class="t-meta">32% of the 5-hour window · as of 23:21:30</div>
+      </div>
+
+      <!-- Meters + chips: same two numbers, plus where each sits against the guard and when it resets -->
+      <div class="show-meters">
+        <div class="head__top">
+          <div class="fact3__v">13%<small class="t-meta"> week</small></div>
+          <span class="t-meta">as of 23:21:30</span>
+        </div>
+        <div class="head__meters">
+          <div class="meter">
+            <div class="meter__head">
+              <span class="meter__k">Week</span>
+              <span class="meter__pct">87%</span>
+              <span class="meter__reset">resets Sat 17:30</span>
+            </div>
+            <div class="meter__track">
+              <span class="meter__fill" style="width:87%"></span>
+              <span class="meter__tick" style="left:90%" title="warn 90%"></span>
+              <span class="meter__tick meter__tick--crit" style="left:95%" title="guard stops runs 95%"></span>
+            </div>
+          </div>
+          <div class="meter">
+            <div class="meter__head">
+              <span class="meter__k">5-hour window</span>
+              <span class="meter__pct">68%</span>
+              <span class="meter__reset">resets 00:30 · in 1h 09m</span>
+            </div>
+            <div class="meter__track">
+              <span class="meter__fill" style="width:68%"></span>
+              <span class="meter__tick" style="left:90%" title="warn 90%"></span>
+              <span class="meter__tick meter__tick--crit" style="left:95%" title="guard stops runs 95%"></span>
+            </div>
+          </div>
+          <!-- shown only when a model limit is tighter than the account week -->
+          <div class="meter meter--warn">
+            <div class="meter__head">
+              <span class="meter__k">Fable · week</span>
+              <span class="meter__pct">90%</span>
+              <span class="meter__reset">resets Sat 17:30</span>
+            </div>
+            <div class="meter__track">
+              <span class="meter__fill" style="width:90%"></span>
+              <span class="meter__tick" style="left:90%" title="warn 90%"></span>
+              <span class="meter__tick meter__tick--crit" style="left:95%" title="guard stops runs 95%"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </a>
+
+    <a class="card fact3 fact3--spend" href="#runs">
+      <div class="t-eyebrow">LaunchBox spend <span class="t-meta">· % of weekly window · sample</span></div>
+      <div class="spend2">
+        <div><div class="spend__v">+4%</div><div class="t-meta">since last visit (21:02)</div></div>
+        <div><div class="spend__v">34%</div><div class="t-meta">last 7 days</div></div>
+      </div>
+      <div class="share" style="margin-top:auto" aria-label="Last 7 days by project">
+        <div class="share__seg" style="flex-basis:56%"><span class="share__bar"></span><span class="share__n t-meta">system_migration</span></div>
+        <div class="share__seg" style="flex-basis:24%"><span class="share__bar" style="opacity:.7"></span><span class="share__n t-meta">trip-planner</span></div>
+        <div class="share__seg" style="flex-basis:14%"><span class="share__bar" style="opacity:.5"></span><span class="share__n t-meta">claude-scheduler</span></div>
+        <div class="share__seg" style="flex-basis:6%"><span class="share__bar" style="opacity:.3"></span><span class="share__n t-meta"></span></div>
+      </div>
+    </a>
+  </div>
+
+  <div class="note show-off">
+    <div class="callout t-meta"><b>Off looks exactly like Chips only.</b> The chips in the bar are always on (Settings says so), and
+      the Headroom card is job 5's zero-click answer (design §5), so neither can go. Off has nothing left to turn off.
+      Recommendation below: drop it.</div>
+  </div>
+
+  <section class="note">
+    <h2>Settings → Usage monitor (proposed)</h2>
+    <div class="t-meta">Two values instead of three. The labels say what the Overview card shows; the bar chips are not part of the choice.</div>
+  </section>
+  <section class="card setcard">
+    <div class="setrow2">
+      <div><div>Overview headroom</div><div class="t-meta">The bar chips are always on. Meters add where each window sits against the guard and when it resets.</div></div>
+      <select aria-label="Overview headroom"><option selected>Meters</option><option>Numbers only</option></select>
+    </div>
+    <div class="setrow2">
+      <div><div>Warn at</div><div class="t-meta">Meters and chips turn amber. Nothing is blocked by this line; it only signals.</div></div>
+      <span class="mono">90 %</span>
+    </div>
+  </section>
+
+  <section class="note t-meta">
+    <h2>What changes, what stays</h2>
+    Changes: the Headroom card grows from two numbers to two meters (week, 5-hour) with reset times, plus one model line only when a
+    model's limit is tighter than the week. Fill is <i>used</i>, matching the chips (design §6: one reading). Ticks mark Warn at and the
+    guard's stop line. No new action; the card still opens Settings.<br>
+    Stays: usage <i>history</i> charts remain off the Overview (cut 2026-09-26, design §7); no new card; the needs-you hero stays the largest. Layout: Running now moves up beside the hero (it is a one-number fact), so Headroom and Spend share a row at equal height and neither card stretches into empty space.
+  </section>
+</main>
+
+<script>
+  const LABEL = {
+    banner: 'Viewing: Meters + chips. Headroom card shows meters',
+    compact: 'Viewing: Chips only. Headroom card is today\'s two numbers',
+    off: 'Viewing: Off. Identical to Chips only (see note)',
+  };
+  function sync() {
+    const v = document.body.dataset.show;
+    document.querySelectorAll('.demobar .seg[data-v]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === v)));
+    document.getElementById('viewing').textContent = LABEL[v];
+    const rest = location.hash.replace(/^#/, '').split('&').filter((t) => t && !/^show=/.test(t));
+    history.replaceState(null, '', '#' + [...rest, `show=${v}`].join('&'));
+  }
+  document.querySelectorAll('.demobar .seg[data-v]').forEach((b) => b.addEventListener('click', () => { document.body.dataset.show = b.dataset.v; sync(); }));
+  document.body.dataset.show = (location.hash.match(/(?:^#|&)show=(banner|compact|off)/) || [])[1] || 'banner';
+  sync();
+</script>
+</body>
+</html>
