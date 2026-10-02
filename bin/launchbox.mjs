@@ -6,9 +6,45 @@ import { execFile } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ensureToken } from '../lib/token.js';
-import { dataDir, ensureDirs, defaultPort, env } from '../lib/paths.js';
+import { dataDir, legacyDataDir, ensureDirs, defaultPort, env } from '../lib/paths.js';
 
 const cmd = process.argv[2] ?? 'open';
+
+// Must run before ensureDirs(): that would create the new data dir and trip the
+// "target not empty" refusal.
+if (cmd === 'migrate') {
+  const { planMigration, applyMigration } = await import('../lib/migrate.js');
+  const { openSqlite } = await import('../lib/sqlite.js');
+  const oldDir = legacyDataDir();
+  const newDir = dataDir();
+  const portAlive = async () => {
+    try { return (await fetch(`http://127.0.0.1:${env('PORT') || defaultPort()}/`, { signal: AbortSignal.timeout(1500) })).ok; }
+    catch { return false; }
+  };
+  try {
+    const plan = await planMigration({ oldDir, newDir, portAlive });
+    console.log(`state: ${plan.state}`);
+    for (const r of plan.refusals ?? []) console.log(`refused: ${r}`);
+    for (const w of plan.rewrites ?? []) console.log(`rewrite ${`${w.table}.${w.column}`.padEnd(16)} ${w.rows}`);
+    if (plan.strayEmptyDb) console.log('remove: 0-byte launchbox.db (stray)');
+    if (plan.state === 'ready') console.log(`move: ${oldDir} -> ${newDir}, then symlink the old path`);
+    if (process.argv.includes('--dry-run') || plan.state !== 'ready') process.exit(plan.state === 'refused' ? 1 : 0);
+    let projectPaths = [];
+    const db = openSqlite(join(oldDir, 'scheduler.db'), { readOnly: true });
+    try { projectPaths = db.prepare('SELECT path FROM projects').all().map((r) => r.path); }
+    catch { /* no projects table: nothing to repair */ }
+    finally { db.close(); }
+    const res = await applyMigration({ oldDir, newDir, portAlive, projectPaths });
+    console.log(res.state);
+    for (const r of res.refusals ?? []) console.log(`refused: ${r}`);
+    for (const r of res.repaired ?? []) console.log(`git worktree repair ${r.path}: ${r.ok ? 'ok' : r.error}`);
+    process.exit(res.state === 'refused' ? 1 : 0);
+  } catch (e) {
+    console.error(`migrate failed: ${e.message}`);
+    process.exit(1);
+  }
+}
+
 ensureDirs();
 const token = ensureToken();
 
@@ -65,6 +101,6 @@ if (cmd === 'token') {
   else if (process.platform === 'win32') execFile('cmd', ['/c', 'start', '', url], () => {});
   else execFile('xdg-open', [url], () => {});
 } else {
-  console.error('usage: launchbox [open|url|token]');
+  console.error('usage: launchbox [open|url|token|migrate [--dry-run]]');
   process.exit(2);
 }
