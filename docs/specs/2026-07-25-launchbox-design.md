@@ -64,7 +64,7 @@ Design consequences, each load-bearing:
 
 - `interrupt` makes **soft pause genuinely graceful** (M3) rather than SIGTERM-and-hope.
 - `set_model` enables budget-driven model routing mid-run (future; see M2 "not doing yet").
-- Using any of these requires the child be spawned with `--input-format stream-json` **and a piped stdin**. The runner currently uses `stdio: ['ignore', …]`, so this is a real change to the `claude` extension — a shared prerequisite for M3.
+- Using any of these requires the child be spawned with `--input-format stream-json` **and a piped stdin**. The runner currently uses `stdio: ['ignore', …]`, so this is a real change to the `claude` extension. *Superseded:* the M3 spike (m3-pause-modes §3.3) found it unnecessary for soft pause; M3 shipped the SIGINT→SIGTERM→SIGKILL ladder and the control channel was never built.
 
 ### 3. Token counts in session JSONL are inflated ~2.5×
 
