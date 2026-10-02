@@ -5,7 +5,8 @@ import { join, dirname, isAbsolute, resolve as resolvePath } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { ensureDirs, dbPath, dataDir, PORT_BASE, env } from './lib/paths.js';
+import { ensureDirs, dbPath, dataDir, legacyDataDir, explicitDataDir, PORT_BASE, env } from './lib/paths.js';
+import { legacyInstallBlocks } from './lib/startup-guard.js';
 import { ensureToken, tokenMatches } from './lib/token.js';
 import { createApproval, APPROVAL_CODES } from './lib/approval.js';
 import {
@@ -2334,6 +2335,8 @@ export function createApp({
 }
 
 export async function main() {
+  const blocked = legacyInstallBlocks({ legacy: legacyDataDir(), current: dataDir(), explicit: explicitDataDir() });
+  if (blocked) { console.error(blocked); process.exit(1); }
   ensureDirs();
   const db = openDb(dbPath());
   failOrphanRuns(db);
