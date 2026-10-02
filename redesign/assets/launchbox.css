@@ -719,13 +719,21 @@ input.field--mono { font-family: var(--mono) !important; }
 .ov .hero__v { font-size: 46px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1; }
 .ov .hero__v--warn { color: var(--warn); }
 .ov .hero__go { margin-left: auto; }
-.ov .facts3 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); grid-template-rows: auto auto; gap: 14px; margin-top: 14px; }
+/* Row 1: needs-you hero beside Running now; row 2: Headroom | Spend, equal   */
+/* columns — stretched to one height only with meters (bead 5v2.1,           */
+/* docs/design/mockups/overview-meters.html); Numbers only keeps natural.    */
+.ov .toprow { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 1fr); gap: 14px; }
+.ov .toprow > .hero, .ov .toprow > .fact3 { height: 100%; box-sizing: border-box; }
+.ov .facts3 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; margin-top: 14px; align-items: start; }
+.ov .facts3.facts3--meters { align-items: stretch; }
+.ov .head__top { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.ov .head__meters { display: grid; gap: 14px; margin-top: 14px; }
 .ov .fact3 { display: block; padding: 14px 16px; }
 .ov .fact3__v { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; margin: 4px 0 2px; }
 .ov .fact3__v small { font-size: 15px; font-weight: 500; opacity: .75; }
 .ov .fact3--warn .fact3__v { color: var(--warn); }
 .ov .fact3--bad .fact3__v { color: var(--bad); }
-.ov .fact3.fact3--spend { grid-column: 2; grid-row: 1 / span 2; display: flex; flex-direction: column; }
+.ov .fact3.fact3--spend { display: flex; flex-direction: column; }
 .ov .spend2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 6px 0 14px; }
 .ov .fact3--spend .spend2 { margin: 14px 0 18px; }
 .ov .spend__v { font-size: 44px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.05; }
@@ -734,8 +742,7 @@ input.field--mono { font-family: var(--mono) !important; }
 .ov .share__bar { display: block; height: 10px; border-radius: 3px; background: currentColor; }
 .ov .share__n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 @media (max-width: 760px) {
-  .ov .facts3 { grid-template-columns: minmax(0, 1fr); }
-  .ov .fact3.fact3--spend { grid-column: auto; grid-row: auto; }
+  .ov .facts3, .ov .toprow { grid-template-columns: minmax(0, 1fr); }
   .ov .hero { flex-wrap: wrap; }
 }
 
