@@ -23,7 +23,7 @@ Product name in UI/docs is **LaunchBox**. The launchd label (`com.claude-schedul
 | M4a | [m4a-beads-task-sources](../plans/2026-07-25-m4a-beads-task-sources.md) | Projects declare work in beads; the scheduler polls `bd ready` and runs it (shipped) |
 | M4 | [m4-bursts](../plans/2026-07-25-m4-bursts.md) | "Spend N% of session/weekly limit" bursts over ready beads + per-bead worktrees |
 | M5 | [m5-sessions-dashboard](../plans/2026-07-25-m5-sessions-dashboard.md) | Sessions dashboard (port of claude-sessions-dashboard, MIT) |
-| M6 | deferred | Full LaunchBox rename (launchd label, package, data dir) + optional `node:sqlite` migration |
+| M6 | [m6-launchbox-rename](2026-10-02-m6-launchbox-rename-design.md) | Full LaunchBox rename (launchd label, package, data dir) + optional `node:sqlite` migration |
 
 ---
 
