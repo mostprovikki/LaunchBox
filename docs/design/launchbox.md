@@ -78,14 +78,19 @@ Optional keys on Inbox: ↑↓ move selection, Enter = primary action, L = log, 
   you", "Waiting on you", "Cannot run beads") and why. A daemon fault (e.g. the claude binary is
   missing) is a red banner with one fix link. Below it:
   - **needs-you card**, the largest: the count, what it is made of, and *Open Inbox* (the one
-    action on the page) → decides "review now?";
-  - **headroom left** (weekly %, 5-hour % beneath, "as of" time) → "can I burst today?";
-  - **running now** (count, pause state) → "don't touch that repo"; opens Runs;
+    action on the page) → decides "review now?"; **running now** (count, pause state) sits
+    beside it in the top row → "don't touch that repo"; opens Runs;
+  - **headroom left** (weekly % left, large, and "as of" time) → "can I burst today?". With
+    Settings → *Overview headroom* = **Meters** (default) it adds Week and 5-hour meters (fill
+    = % used, the chips' reading; ticks at Warn at and the guard line; reset times), plus one
+    per-model week line only when that model is tighter than the account week. **Numbers
+    only** keeps the 5-hour % as a line beneath. Shares row 2 with spend, equal columns;
   - **LaunchBox spend** card: two large numbers — since last visit, and last 7 days (% of the
     weekly window) — and one thin share bar of the last 7 days by project, **names only, no
     numbers** → "which project is eating headroom, by how big a margin, so I reprioritise".
     Exact figures live on Runs.
-  No list at rest. Mockup: `docs/design/mockups/overview-flavours.html` (Option 2).
+  No list at rest. Mockups: `docs/design/mockups/overview-flavours.html` (Option 2),
+  `docs/design/mockups/overview-meters.html` (headroom meters, layout).
 - **Inbox (Workbench, triage split):** list on the left, grouped *waiting to merge* /
   *handed back*; detail on the right for the selected item. Actions appear **only for the
   selected item**, never per row at rest. Primary action moves with state: branch → *Review*;
@@ -153,7 +158,7 @@ are a glance copy and must show the same reading and "as of" time.
 | 2026-09-26 | Next 24 hours card | Overview | no morning-review decision; lives on Jobs | you check upcoming fires daily |
 | 2026-09-26 | Running-now card with stop/kill | Overview | actions on a Monitor; controls live on Runs | you stop runs often from Overview |
 | 2026-09-26 | Automation (projects) card | Overview | duplicates Projects | — |
-| 2026-09-26 | Three headroom meters + refresh buttons | Overview | one headroom fact is enough at a glance; detail in Settings | you tune reserves daily |
+| 2026-09-26 | Three headroom meters + refresh buttons | Overview | one headroom fact is enough at a glance; detail in Settings | you tune reserves daily — meters restored 2026-10-02 inside the Headroom card (bead 5v2.1, §9); refresh buttons stay cut |
 | 2026-09-26 | Auto label, Last poll, Leases held, Min headroom facts | Project | no decision at a glance; auto label + timeout live in the collapsed config line | you change config often |
 | 2026-09-26 | Review queue + Poll now + Remove as header buttons | Project | not the page's job at rest; ⋯ menu, with Poll now / graph shortcuts in place | — |
 
@@ -183,3 +188,4 @@ Mockups (Option 2 chosen in each): `docs/design/mockups/inbox-flavours.html`, `p
 | 2026-09-26 | marked agreed | owner | smoke test was the Projects design-gate + mockup (Option 2 chosen, cuts in §7), not a full `ux-expert-review` run; no identity changes raised |
 | 2026-09-26 | Overview: needs-you hero + spend card with per-project share bar | owner, via Overview mockup | owner wants to see which project consumed the most, by what margin, at a glance; replaces "overnight spend" as a single number |
 | 2026-09-26 | Project page: Poll now and graph get in-place shortcuts besides the ⋯ menu; short bead ids everywhere the project is in context | owner, via Project mockup | owner refers to beads by short id; poll/graph are wanted next to what they act on |
+| 2026-10-02 | Overview: Running now moves beside the needs-you hero; Headroom card gets Week / 5-hour (+ tighter model) meters when Settings → *Overview headroom* is Meters; that setting (was the dead "Show usage as") now offers Meters / Numbers only, a stored `off` reads as Numbers only | owner, via `overview-meters.html` + design-gate on bead 5v2.1 (decisions 1A, 2, 3) | the setting changed nothing in `/v2`; owner chose to wire it rather than remove it. Usage history charts stay cut (§7) |
