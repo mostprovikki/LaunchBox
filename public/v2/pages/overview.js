@@ -1,9 +1,11 @@
 // Overview tab — the Monitor (docs/design/launchbox.md §5;
 // claude-scheduler-btv.21). Status light + one-line state, a red banner for a daemon fault,
-// then four cards: needs-you (largest, the page's one action "Open Inbox"),
-// headroom left, running now, LaunchBox spend. No list, meter or control at
-// rest — §7 records what was cut and where each now lives. Mockup:
-// docs/design/mockups/overview-flavours.html Option 2.
+// then four cards: needs-you (largest, the page's one action "Open Inbox")
+// with running now beside it, then headroom left | LaunchBox spend. No list or
+// control at rest — §7 records what was cut and where each now lives. The
+// headroom card shows Week / 5-hour meters when Settings → Overview headroom
+// is Meters (bead 5v2.1). Mockups: docs/design/mockups/overview-flavours.html
+// Option 2, docs/design/mockups/overview-meters.html.
 //
 // Data: GET /api/v2/overview (headroom, pause, running, spend, fault sources)
 // and GET /api/v2/inbox (the needs-me count, §6 "one number, one place").
@@ -14,6 +16,7 @@ import { api, getAuthState, onAuthState, failureToast } from '../api.js';
 import { onRender } from '../router.js';
 import {
   statusLight, daemonFault, needsModel, headroomModel, runningModel, spendModel,
+  showMeters, headroomMetersModel,
 } from './overview-logic.js';
 
 const POLL_MS = 15_000; // same cadence as the appbar chips' poll (chrome.js)
@@ -88,6 +91,35 @@ function factCard(k, m, v) {
   ]);
 }
 
+function meterEl(m) {
+  return el('div', { class: `meter${m.cls ? ` meter--${m.cls}` : ''}` }, [
+    el('div', { class: 'meter__head' }, [
+      el('span', { class: 'meter__k' }, m.k),
+      el('span', { class: 'meter__pct' }, m.pct),
+      el('span', { class: 'meter__reset' }, m.reset),
+    ]),
+    el('div', { class: 'meter__track' }, [
+      el('span', { class: 'meter__fill', style: `width:${m.width}%` }),
+      ...m.ticks.map((t) => el('span', {
+        class: `meter__tick${t.crit ? ' meter__tick--crit' : ''}`, style: `left:${t.left}%`, title: t.title,
+      })),
+    ]),
+  ]);
+}
+
+// Headroom left in Meters mode: the same big "N% week" (headroom LEFT) and
+// as-of, then where each window sits against Warn at and the guard line.
+function headroomMetersCard(head, meters) {
+  return el('a', { class: `card fact3${head.cls ? ` fact3--${head.cls}` : ''}`, href: head.href }, [
+    el('div', { class: 't-eyebrow' }, 'Headroom left'),
+    el('div', { class: 'head__top' }, [
+      el('div', { class: 'fact3__v' }, [head.v, el('small', {}, ' week')]),
+      el('span', { class: 't-meta' }, head.asOf),
+    ]),
+    el('div', { class: 'head__meters' }, meters.map(meterEl)),
+  ]);
+}
+
 function spendCard(s) {
   const bar = s.share.length
     ? el('div', { class: 'share', 'aria-label': 'Last 7 days by project' }, s.share.map((seg) => el('div', {
@@ -128,11 +160,16 @@ function render() {
   const fault = daemonFault(data);
   if (fault) root.appendChild(faultBanner(fault));
 
-  root.appendChild(heroCard(needs));
-  const head = headroomModel(data.headroom);
-  root.appendChild(el('div', { class: 'facts3' }, [
-    factCard('Headroom left', head, [head.v, el('small', {}, ' week')]),
+  root.appendChild(el('div', { class: 'toprow' }, [
+    heroCard(needs),
     factCard('Running now', runningModel(data.running, data.pause)),
+  ]));
+  const head = headroomModel(data.headroom);
+  const meters = showMeters(data.headroom);
+  root.appendChild(el('div', { class: `facts3${meters ? ' facts3--meters' : ''}` }, [
+    meters
+      ? headroomMetersCard(head, headroomMetersModel(data.headroom))
+      : factCard('Headroom left', head, [head.v, el('small', {}, ' week')]),
     spendCard(spendModel(data.spend)),
   ]));
 }

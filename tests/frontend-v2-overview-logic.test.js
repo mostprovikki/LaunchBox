@@ -11,6 +11,7 @@ import { JSDOM } from 'jsdom';
 import {
   fmtPct, pauseModeLabel, daemonFault, statusLight,
   needsModel, headroomModel, runningModel, spendModel,
+  showMeters, headroomMetersModel, fmtResetWeek, fmtResetIn,
 } from '../public/v2/pages/overview-logic.js';
 
 const iso = (msAgo = 0) => new Date(Date.now() - msAgo).toISOString();
@@ -21,6 +22,7 @@ function win(key, percent, extra = {}) {
 
 function overviewPayload({
   pauseMode = 'off', week = 30, five = 12, running = [], projects = [], attention = [], spend,
+  display = 'compact', modelWindows = [],
 } = {}) {
   return {
     generatedAt: iso(),
@@ -29,7 +31,8 @@ function overviewPayload({
       asOf: '2026-09-26T10:10:07.000Z', available: true, stale: false,
       guard: { enforcing: true, why: null, reserveFiveHourPct: 80, reserveWeeklyPct: 95 },
       windows: [win('five_hour', five), win('seven_day', week)],
-      modelWindows: [],
+      modelWindows,
+      display,
     },
     attention: { asOf: iso(), items: attention },
     next24h: { asOf: iso(), pauseMode, fires: [{ jobId: 'j1', jobName: 'Nightly fire', at: iso(-3600_000), admitted: true }], beyond: [], disabledNeverFireCount: 0 },
@@ -142,6 +145,100 @@ test('headroomModel: weekly left large, 5-hour left beneath, same as-of stamp as
   assert.equal(m.cls, 'bad', 'week at 89% used is past critical (85)');
   const unknown = headroomModel(overviewPayload({ week: null, five: null }).headroom);
   assert.equal(unknown.v, '—');
+});
+
+// Settings → "Overview headroom" (bead 5v2.1): `banner` = Meters; `compact`
+// and a legacy stored `off` = Numbers only. Missing = the server default.
+test('showMeters: only the stored "banner" shows meters; compact and a legacy "off" are Numbers only', () => {
+  assert.equal(showMeters({ display: 'banner' }), true);
+  assert.equal(showMeters({ display: 'compact' }), false);
+  assert.equal(showMeters({ display: 'off' }), false, 'off renders as Numbers only, no migration');
+  assert.equal(showMeters({}), true, 'an older server with no display: its default is banner');
+  assert.equal(showMeters(null), false, 'no headroom at all: nothing to meter');
+});
+
+// Local-time fixtures so the formatting is deterministic in any TZ.
+const NOW = new Date(2026, 9, 2, 23, 21, 30).getTime(); // Fri 2 Oct 23:21:30
+
+test('fmtResetWeek / fmtResetIn: "Sat 17:30" and "00:30 · in 1h 09m"; past or missing never NaN', () => {
+  assert.equal(fmtResetWeek(new Date(2026, 9, 3, 17, 30).toISOString()), 'Sat 17:30');
+  assert.equal(fmtResetIn(new Date(2026, 9, 3, 0, 30).toISOString(), NOW), '00:30 · in 1h 09m');
+  assert.equal(fmtResetIn(new Date(2026, 9, 2, 23, 50).toISOString(), NOW), '23:50 · in 29m', 'under an hour drops the 0h');
+  assert.equal(fmtResetIn(new Date(2026, 9, 2, 23, 0).toISOString(), NOW), '23:00', 'already past: no "in -21m"');
+  assert.equal(fmtResetWeek(null), null);
+  assert.equal(fmtResetIn(null, NOW), null);
+  assert.equal(fmtResetIn('not a date', NOW), null);
+});
+
+function meterHeadroom({ week = 87, five = 68, models = [], warnPct = 90, critPct = 95 } = {}) {
+  const w = (key, percent, resetsAt) => ({ key, label: key, reservePct: 80, warnPct, critPct, percent, resetsAt, unknown: percent == null });
+  return {
+    asOf: new Date(NOW).toISOString(), available: true, display: 'banner',
+    windows: [
+      w('five_hour', five, new Date(2026, 9, 3, 0, 30).toISOString()),
+      w('seven_day', week, new Date(2026, 9, 3, 17, 30).toISOString()),
+    ],
+    modelWindows: models,
+  };
+}
+const fable = (percent, extra = {}) => ({
+  kind: 'weekly_scoped', group: 'weekly', scopeModel: 'Fable', percent, severity: 'normal',
+  resetsAt: new Date(2026, 9, 3, 17, 30).toISOString(), isActive: true, unknown: percent == null, ...extra,
+});
+
+test('headroomMetersModel: Week then 5-hour, fill = percent USED, reset times, ticks at warn and the guard line', () => {
+  const m = headroomMetersModel(meterHeadroom(), NOW);
+  assert.deepEqual(m.map((x) => x.k), ['Week', '5-hour window']);
+  const [wk, five] = m;
+  assert.equal(wk.pct, '87%', 'same reading as the appbar chip (used, not left)');
+  assert.equal(wk.width, 87);
+  assert.equal(wk.reset, 'resets Sat 17:30');
+  assert.equal(wk.cls, '', '87 < warn 90');
+  assert.deepEqual(wk.ticks, [
+    { left: 90, crit: false, title: 'warn 90%' },
+    { left: 95, crit: true, title: 'guard stops runs 95%' },
+  ]);
+  assert.equal(five.pct, '68%');
+  assert.equal(five.reset, 'resets 00:30 · in 1h 09m');
+});
+
+test('headroomMetersModel: warn at >= warnPct, crit at >= critPct, fill clamped to the track', () => {
+  const at = (week) => headroomMetersModel(meterHeadroom({ week }), NOW)[0];
+  assert.equal(at(89).cls, '');
+  assert.equal(at(90).cls, 'warn', 'exactly at Warn at is amber');
+  assert.equal(at(94).cls, 'warn');
+  assert.equal(at(95).cls, 'crit', 'exactly at the guard line is red');
+  assert.equal(at(130).width, 100, 'a reading past 100 never overflows the track');
+  assert.equal(at(0).pct, '0%', 'a real 0 is a reading, not unknown');
+});
+
+test('headroomMetersModel: a model week appears ONLY when tighter than the account week', () => {
+  const tighter = headroomMetersModel(meterHeadroom({ week: 87, models: [fable(90)] }), NOW);
+  assert.deepEqual(tighter.map((x) => x.k), ['Week', '5-hour window', 'Fable · week']);
+  assert.equal(tighter[2].pct, '90%');
+  assert.equal(tighter[2].cls, 'warn');
+  assert.equal(tighter[2].reset, 'resets Sat 17:30');
+  assert.equal(tighter[2].ticks.length, 2);
+  assert.equal(headroomMetersModel(meterHeadroom({ week: 87, models: [fable(87)] }), NOW).length, 2, 'equal is not tighter');
+  assert.equal(headroomMetersModel(meterHeadroom({ week: 87, models: [fable(40)] }), NOW).length, 2);
+  assert.equal(headroomMetersModel(meterHeadroom({ models: [fable(99, { kind: 'weekly' })] }), NOW).length, 2, 'only weekly_scoped');
+  assert.equal(headroomMetersModel(meterHeadroom({ models: [fable(99, { scopeModel: null })] }), NOW).length, 2, 'needs a model name');
+  assert.equal(headroomMetersModel(meterHeadroom({ models: [fable(null)] }), NOW).length, 2, 'unknown model reading adds nothing');
+});
+
+test('headroomMetersModel: an unknown or missing window is "—" with an empty track and no ticks, never NaN', () => {
+  const h = meterHeadroom({ five: null });
+  h.windows = h.windows.filter((w) => w.key !== 'seven_day'); // missing entirely
+  const [wk, five] = headroomMetersModel(h, NOW);
+  for (const x of [wk, five]) {
+    assert.equal(x.pct, '—');
+    assert.equal(x.width, 0);
+    assert.deepEqual(x.ticks, []);
+    assert.equal(x.cls, '');
+    assert.equal(x.reset, 'no reading');
+    assert.doesNotMatch(JSON.stringify(x), /NaN|undefined/);
+  }
+  assert.deepEqual(headroomMetersModel(null, NOW).map((x) => x.pct), ['—', '—']);
 });
 
 test('runningModel: count + pause state, links to Runs', () => {
@@ -298,6 +395,51 @@ test('Monitor: NONE of the §7 cuts — attention list, next 24h, history charts
     assert.ok(!text.includes(gone), `§7 cut "${gone}" is back on the page`);
   }
   assert.equal(p.querySelectorAll('.meter, .meters3, .rows, .row, canvas, svg.chart').length, 0, 'no meters, lists or charts at rest');
+});
+
+// Bead 5v2.1: Settings → Overview headroom = Meters (stored "banner").
+test('Monitor (Meters): running sits beside the hero; Headroom | Spend share row 2, stretched', async () => {
+  await mountOverview(mockFetch({ overview: overviewPayload({ display: 'banner', week: 87, five: 68 }) }));
+  const p = page();
+  const top = p.querySelector('.toprow');
+  assert.ok(top, 'a top row');
+  assert.deepEqual([...top.children].map((c) => c.getAttribute('href')), ['#inbox', '#runs'], 'hero, then Running now');
+  const row2 = p.querySelector('.facts3');
+  assert.deepEqual([...row2.children].map((c) => c.getAttribute('href')), ['#settings', '#runs'], 'Headroom, then Spend');
+  assert.ok(row2.children[1].classList.contains('fact3--spend'));
+  assert.ok(row2.classList.contains('facts3--meters'), 'row 2 stretches to equal height only with meters');
+});
+
+test('Monitor (Meters): Headroom card shows the big week number, as-of, and Week + 5-hour meters', async () => {
+  const fableWin = { kind: 'weekly_scoped', group: 'weekly', scopeModel: 'Fable', percent: 90, severity: 'normal', resetsAt: null, isActive: true, unknown: false };
+  await mountOverview(mockFetch({ overview: overviewPayload({ display: 'banner', week: 87, five: 68, modelWindows: [fableWin] }) }));
+  const head = page().querySelector('a.fact3[href="#settings"]');
+  assert.equal(head.querySelector('.t-eyebrow').textContent, 'Headroom left');
+  assert.equal(head.querySelector('.fact3__v').textContent, '13% week', 'big number stays headroom LEFT');
+  assert.match(head.querySelector('.head__top').textContent, /as of \d{2}:\d{2}:\d{2}$/);
+  assert.doesNotMatch(head.textContent, /of the 5-hour window/, 'the Numbers-only line is replaced, not doubled');
+  const meters = [...head.querySelectorAll('.meter')];
+  assert.deepEqual(meters.map((m) => m.querySelector('.meter__k').textContent), ['Week', '5-hour window', 'Fable · week']);
+  assert.deepEqual(meters.map((m) => m.querySelector('.meter__pct').textContent), ['87%', '68%', '90%']);
+  assert.equal(meters[0].querySelector('.meter__fill').style.width, '87%');
+  // fixture warnPct 70 / critPct 85: week 87 is crit, 5h 68 plain, Fable 90 crit
+  assert.deepEqual(meters.map((m) => m.className), ['meter meter--crit', 'meter', 'meter meter--crit']);
+  const ticks = [...meters[1].querySelectorAll('.meter__tick')];
+  assert.deepEqual(ticks.map((t) => [t.style.left, t.getAttribute('title'), t.classList.contains('meter__tick--crit')]),
+    [['70%', 'warn 70%', false], ['85%', 'guard stops runs 85%', true]]);
+});
+
+test('Monitor (Numbers only): "compact" and a legacy "off" render today\'s card — no meters, natural height', async () => {
+  for (const display of ['compact', 'off']) {
+    await mountOverview(mockFetch({ overview: overviewPayload({ display, week: 89, five: 11 }) }));
+    const p = page();
+    assert.equal(p.querySelectorAll('.meter').length, 0, `${display}: no meters`);
+    const head = p.querySelector('a.fact3[href="#settings"]');
+    assert.equal(head.querySelector('.fact3__v').textContent, '11% week');
+    assert.match(head.textContent, /89% of the 5-hour window · as of \d{2}:\d{2}:\d{2}/);
+    assert.ok(!p.querySelector('.facts3').classList.contains('facts3--meters'), `${display}: row 2 keeps natural height`);
+    assert.ok(p.querySelector('.toprow a[href="#runs"]'), `${display}: running still beside the hero`);
+  }
 });
 
 test('Monitor: POSTs /api/v2/visits once per load, before the first read, never on a poll', async () => {

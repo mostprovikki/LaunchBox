@@ -131,9 +131,82 @@ export function headroomModel(h) {
   return {
     v: wkLeft == null ? '—' : `${wkLeft}%`,
     d: `${fiveLeft == null ? '—' : `${fiveLeft}%`} of the 5-hour window · ${asOf ? `as of ${asOf}` : 'never checked'}`,
+    asOf: asOf ? `as of ${asOf}` : 'never checked',
     cls,
     href: '#settings',
   };
+}
+
+// ---- headroom meters (bead 5v2.1) -------------------------------------------
+// Settings → "Overview headroom": stored usageShow `banner` = Meters; `compact`
+// and a legacy `off` = Numbers only (lib/usage.js still accepts all three, no
+// migration). A headroom with no `display` came from a server that predates
+// it, whose default is banner.
+export function showMeters(h) {
+  if (!h) return false;
+  return (h.display ?? 'banner') === 'banner';
+}
+
+const WEEKDAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const validDate = (iso) => {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+
+// "Sat 17:30" — local weekday + time, for weekly windows.
+export function fmtResetWeek(iso) {
+  const d = validDate(iso);
+  return d ? `${WEEKDAY[d.getDay()]} ${pad2(d.getHours())}:${pad2(d.getMinutes())}` : null;
+}
+
+// "00:30 · in 1h 09m" — for the 5-hour window; `now` injected for tests.
+// Already past: just the time (the next poll will move it).
+export function fmtResetIn(iso, now = Date.now()) {
+  const d = validDate(iso);
+  if (!d) return null;
+  const hm = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  const mins = Math.round((d.getTime() - now) / 60_000);
+  if (mins <= 0) return hm;
+  const h = Math.floor(mins / 60);
+  return `${hm} · in ${h ? `${h}h ${pad2(mins % 60)}m` : `${mins}m`}`;
+}
+
+const hasPct = (w) => !!w && !w.unknown && typeof w.percent === 'number' && Number.isFinite(w.percent);
+
+// One meter. Fill = percent USED, the same reading as the appbar chips (§6:
+// one reading), printed the way chrome.js prints it. `limits` carries the
+// Warn at / Critical at lines (critical is where the guard stops runs).
+function meter(k, w, limits, reset) {
+  if (!hasPct(w)) return { k, pct: '—', width: 0, reset: 'no reading', cls: '', ticks: [] };
+  const { warnPct, critPct } = limits;
+  let cls = '';
+  if (typeof critPct === 'number' && w.percent >= critPct) cls = 'crit';
+  else if (typeof warnPct === 'number' && w.percent >= warnPct) cls = 'warn';
+  const ticks = [];
+  if (typeof warnPct === 'number') ticks.push({ left: warnPct, crit: false, title: `warn ${warnPct}%` });
+  if (typeof critPct === 'number') ticks.push({ left: critPct, crit: true, title: `guard stops runs ${critPct}%` });
+  return {
+    k, pct: `${w.percent}%`, width: Math.min(100, Math.max(0, w.percent)), reset: reset ? `resets ${reset}` : '', cls, ticks,
+  };
+}
+
+// Week, 5-hour, then one line per model-scoped weekly limit — only when that
+// model is tighter than the account week (or the week has no reading).
+export function headroomMetersModel(h, now = Date.now()) {
+  const wk = weekWindow(h);
+  const five = fiveWindow(h);
+  const limits = { warnPct: wk?.warnPct ?? five?.warnPct, critPct: wk?.critPct ?? five?.critPct };
+  const out = [
+    meter('Week', wk, wk ?? limits, fmtResetWeek(wk?.resetsAt)),
+    meter('5-hour window', five, five ?? limits, fmtResetIn(five?.resetsAt, now)),
+  ];
+  for (const m of h?.modelWindows ?? []) {
+    if (m.kind !== 'weekly_scoped' || !m.scopeModel || !hasPct(m)) continue;
+    if (hasPct(wk) && !(m.percent > wk.percent)) continue;
+    out.push(meter(`${m.scopeModel} · week`, m, limits, fmtResetWeek(m.resetsAt)));
+  }
+  return out;
 }
 
 // Running now: a count and the pause state — no rows, no controls.
