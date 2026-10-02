@@ -6,7 +6,8 @@ import { execFile } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ensureToken } from '../lib/token.js';
-import { dataDir, legacyDataDir, ensureDirs, defaultPort, env } from '../lib/paths.js';
+import { dataDir, defaultDataDir, legacyDataDir, explicitDataDir, ensureDirs, defaultPort, env } from '../lib/paths.js';
+import { legacyInstallBlocks } from '../lib/startup-guard.js';
 
 const cmd = process.argv[2] ?? 'open';
 
@@ -16,11 +17,22 @@ if (cmd === 'migrate') {
   const { planMigration, applyMigration } = await import('../lib/migrate.js');
   const { openSqlite } = await import('../lib/sqlite.js');
   const oldDir = legacyDataDir();
-  const newDir = dataDir();
-  const portAlive = async () => {
-    try { return (await fetch(`http://127.0.0.1:${env('PORT') || defaultPort()}/`, { signal: AbortSignal.timeout(1500) })).ok; }
+  const newDir = defaultDataDir();
+  if (explicitDataDir()) {
+    console.error(`refused: unset LB_DATA/CS_DATA before migrating (migrate always moves ${oldDir} to ${newDir})`);
+    process.exit(1);
+  }
+  // The old daemon may be on the port it wrote, not the default or LB_PORT one.
+  const ports = new Set([Number(env('PORT') || defaultPort())]);
+  try {
+    const p = Number(readFileSync(join(oldDir, 'port'), 'utf8').trim());
+    if (Number.isInteger(p) && p > 0 && p < 65536) ports.add(p);
+  } catch { /* no port file */ }
+  const answers = async (p) => {
+    try { return (await fetch(`http://127.0.0.1:${p}/`, { signal: AbortSignal.timeout(1500) })).ok; }
     catch { return false; }
   };
+  const portAlive = async () => (await Promise.all([...ports].map(answers))).some(Boolean);
   try {
     const plan = await planMigration({ oldDir, newDir, portAlive });
     console.log(`state: ${plan.state}`);
@@ -45,6 +57,12 @@ if (cmd === 'migrate') {
   }
 }
 
+// Before ensureDirs()/ensureToken(): creating the new dir here would leave a
+// pre-M6 install half-switched (an empty daemon, then a "not empty" migrate).
+{
+  const blocked = legacyInstallBlocks({ legacy: legacyDataDir(), current: dataDir(), explicit: explicitDataDir() });
+  if (blocked) { console.error(blocked); process.exit(1); }
+}
 ensureDirs();
 const token = ensureToken();
 
