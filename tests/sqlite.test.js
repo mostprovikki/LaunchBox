@@ -38,3 +38,13 @@ test('pragma() returns rows for a query pragma and runs a setting pragma', () =>
   db.pragma('journal_mode = WAL');
   assert.equal(db.pragma('journal_mode')[0].journal_mode, 'wal');
 });
+
+test('a readOnly handle reads but rejects a write', () => {
+  const path = join(tmpDir(), 'ro.db');
+  const w = openSqlite(path);
+  w.exec('CREATE TABLE t (a)'); w.prepare('INSERT INTO t VALUES (1)').run(); w.close();
+  const ro = openSqlite(path, { readOnly: true });
+  assert.equal(ro.prepare('SELECT COUNT(*) n FROM t').get().n, 1);
+  assert.throws(() => ro.prepare('INSERT INTO t VALUES (2)').run(), /readonly/i);
+  ro.close();
+});
