@@ -5,7 +5,7 @@ import { join, dirname, isAbsolute, resolve as resolvePath } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { ensureDirs, dbPath, dataDir, PORT_BASE } from './lib/paths.js';
+import { ensureDirs, dbPath, dataDir, PORT_BASE, env } from './lib/paths.js';
 import { ensureToken, tokenMatches } from './lib/token.js';
 import { createApproval, APPROVAL_CODES } from './lib/approval.js';
 import {
@@ -2446,7 +2446,7 @@ export async function main() {
   // above: a sandboxed verification run needs a throwaway transcript root
   // rather than the real ~/.claude/projects. Never set outside a throwaway
   // CS_DATA.
-  const sessions = createSessionIndex({ db, root: process.env.CS_SESSIONS_ROOT || undefined });
+  const sessions = createSessionIndex({ db, root: env('SESSIONS_ROOT') || undefined });
   sessions.events.on('error', (err) => console.warn(`sessions: ${err?.message ?? err}`));
   sessions.start();
   sessions.scan().catch((err) => console.error(`sessions: initial scan failed — ${err?.message ?? err}`));
@@ -2460,11 +2460,11 @@ export async function main() {
     // can exercise the timeout path in seconds instead of asking a human to sit
     // through 180s twice. The real default stays covered by a unit test with an
     // injected clock.
-    timeoutMs: Number(process.env.CS_APPROVAL_TIMEOUT_MS) || undefined,
+    timeoutMs: Number(env('APPROVAL_TIMEOUT_MS')) || undefined,
     // Same idea, for the degraded (non-macOS) path: there is no Linux box to
     // verify the Settings-tab notice against, so a sandboxed verification run
     // can force it without needing one. Never set outside a throwaway CS_DATA.
-    platform: process.env.CS_FORCE_PLATFORM || undefined,
+    platform: env('FORCE_PLATFORM') || undefined,
   });
   const av = approval.available();
   if (av.degraded) console.warn(`approval: ${av.reason} — high-power actions are NOT gated on this platform`);
@@ -2492,7 +2492,7 @@ export async function main() {
   // Resolved BEFORE createApp, which now needs it to pin the Origin. It used to be
   // declared after, and moving the use above the declaration cost a TDZ
   // ReferenceError that stopped the daemon booting at all — caught by running it.
-  const port = Number(process.env.CS_PORT) || PORT_BASE;
+  const port = Number(env('PORT')) || PORT_BASE;
   const app = createApp({ db, runner, scheduler, extensions, awake, usage, budget, pause, projects, beads, branches, burst, sessions, approval, originPort: port });
   // Deliberately no callback arg here: Express's app.listen(port, host, cb) wraps
   // cb with once() and registers it via BOTH server.once('error', done) and

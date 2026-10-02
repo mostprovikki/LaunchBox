@@ -34,6 +34,7 @@ import {
 } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
+import { env } from '../lib/paths.js';
 import { createHash } from 'node:crypto';
 
 const REPO = join(new URL('.', import.meta.url).pathname, '..');
@@ -267,7 +268,7 @@ try {
   // headless by default, but CS_SITTING_HEADFUL=1 forces headful so the whole
   // flow can be proven in a visible window without real dialogs.
   browser = await launchBrowser({
-    headful: !DRY || process.env.CS_SITTING_HEADFUL === '1', width: 1400, height: 900, scale: 1,
+    headful: !DRY || env('SITTING_HEADFUL') === '1', width: 1400, height: 900, scale: 1,
   });
   await page().goto(`${BASE}/#token=${TOKEN}`);
   await sleep(1500);

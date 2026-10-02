@@ -6,7 +6,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ensureToken } from '../lib/token.js';
-import { dataDir, ensureDirs, defaultPort } from '../lib/paths.js';
+import { dataDir, ensureDirs, defaultPort, env } from '../lib/paths.js';
 
 const cmd = process.argv[2] ?? 'open';
 ensureDirs();
@@ -21,7 +21,7 @@ const token = ensureToken();
 // and would *create* ~/.claude-scheduler/scheduler.db as a side effect of asking
 // for a URL. A read-only command should stay read-only.
 function port() {
-  if (process.env.CS_PORT) return Number(process.env.CS_PORT);
+  if (env('PORT')) return Number(env('PORT'));
   try {
     const f = join(dataDir(), 'port');
     if (existsSync(f)) {
