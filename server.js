@@ -1584,6 +1584,9 @@ export function createApp({
       },
       windows: namedWindows,
       modelWindows,
+      // Settings → "Overview headroom" (bead 5v2.1): banner = meters; compact
+      // and a legacy off = numbers only. Passed through raw, not re-mapped.
+      display: usageShow(),
     };
 
     const jobs = listJobs(db);

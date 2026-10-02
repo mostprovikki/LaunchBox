@@ -115,6 +115,21 @@ test('every top-level section is present, and headroom/next24h carry their OWN a
   assert.ok('asOf' in b.attention && 'asOf' in b.running && 'asOf' in b.today);
 });
 
+// Bead 5v2.1: Overview reads Settings → "Overview headroom" (stored usageShow)
+// from its own payload, so the Monitor needs no second request.
+test('headroom.display carries the stored usageShow, default banner, all three modes', async (t) => {
+  const { server, base } = await boot();
+  t.after(() => server.close());
+  const first = await req(base(), 'GET', '/api/v2/overview');
+  assert.equal(first.body.headroom.display, 'banner', 'unset → the server default');
+  for (const mode of ['compact', 'off', 'banner']) {
+    const put = await req(base(), 'PUT', '/api/settings', { usageShow: mode });
+    assert.equal(put.status, 200);
+    const r = await req(base(), 'GET', '/api/v2/overview');
+    assert.equal(r.body.headroom.display, mode);
+  }
+});
+
 test('usage unreadable produces an explicit "unknown" window, never a 0% that would render as healthy', async (t) => {
   const failSnap = {
     capturedAt: null, checkedAt: null, ok: false, error: 'probe timed out after 60000ms',
