@@ -244,3 +244,19 @@ export function filterJobs(jobs, { query = '', type = 'all' } = {}) {
     return hay.some((h) => h.includes(q));
   });
 }
+
+// "1.2M" / "84k" / "512" — token totals on the job row's meta line.
+export function fmtTokens(n) {
+  const trim = (v) => String(Math.round(v * 10) / 10);
+  if (n >= 1e6) return `${trim(n / 1e6)}M`;
+  if (n >= 1e5) return `${Math.round(n / 1e3)}k`;
+  if (n >= 1e3) return `${trim(n / 1e3)}k`;
+  return String(Math.round(n));
+}
+
+// null when the job has no joined sessions in the window — the row's other
+// empty facts (no detail, no guard tag) render nothing, so this does too.
+export function tokensText(entry) {
+  if (!entry || !(entry.tokens > 0)) return null;
+  return `${fmtTokens(entry.tokens)} tokens · last 7 days`;
+}

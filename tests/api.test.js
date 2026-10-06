@@ -2164,3 +2164,44 @@ test('a resume action refuses an injection-shaped session id', async (t) => {
   assert.notEqual(r.status, 200, 'a shell-shaped session id must not be actioned');
   assert.equal(osaCalls.length, 0, 'osascript was never invoked');
 });
+
+// ---------------- M5 §5.4: GET /api/jobs/tokens (bead claude-scheduler-5v2.3)
+
+test('jobs/tokens: sums deduped session tokens per job over the window; a resumed session counts once; out-of-window runs excluded', async (t) => {
+  const { db, server, base } = await boot();
+  t.after(() => server.close());
+  const mkJob = (name) => createJob(db, { name, type: 'command', params: { command: 'true' }, schedule: { type: 'cron', expr: '0 9 * * *' }, enabled: true, cwd: tmpdir() });
+  const A = mkJob('A');
+  const B = mkJob('B');
+  const sess = (id, tokIn, tokOut) => upsertSession(db, {
+    id, filePath: `/x/${id}.jsonl`, mtimeMs: 1, sizeBytes: 1, cwd: '/tmp', cwdGuessed: false, project: 'x',
+    gitBranch: '', version: '', entrypoint: 'sdk-cli', customTitle: '', aiTitle: '', firstPrompt: '',
+    firstTs: '', lastTs: '', spanMs: 0, activeMs: 0, prompts: 0, models: {},
+    // tokens = in + out + cache create (owner, 2026-10-03). Cache READ is
+    // deliberately huge: it must not leak in.
+    tokIn, tokOut, tokCacheCreate: tokIn * 10, tokCacheRead: 999999, webSearches: 0, webFetches: 0,
+  });
+  const ago = (days) => new Date(Date.now() - days * 86400000).toISOString();
+  const run = (job, sessionId, startedAt) => {
+    const r = insertRun(db, { jobId: job.id, status: 'ok', trigger: 'manual' });
+    updateRun(db, r.id, { startedAt, meta: JSON.stringify({ sessionId }) });
+  };
+  sess('a1', 100, 50); sess('a2', 1000, 200); sess('a3', 5000, 5000); sess('b1', 10, 5);
+  run(A, 'a1', ago(1));
+  run(A, 'a2', ago(2));
+  run(A, 'a1', ago(3));   // resumed: same session as the first run
+  run(A, 'a3', ago(10));  // outside the 7-day window
+  run(B, 'b1', ago(0.05));
+  insertRun(db, { jobId: B.id, status: 'ok', trigger: 'manual' }); // no session: contributes nothing
+
+  const r = await req(base(), 'GET', '/api/jobs/tokens?days=7');
+  assert.equal(r.status, 200);
+  assert.equal(r.body.days, 7);
+  assert.ok(Number.isFinite(Date.parse(r.body.asOf)));
+  assert.deepEqual(r.body.byJob, {
+    [A.id]: { tokens: 12350, runs: 3, sessions: 2 },  // a1 150+1000, a2 1200+10000
+    [B.id]: { tokens: 115, runs: 1, sessions: 1 },
+  });
+  // Same global token gate as every other /api route.
+  assert.equal((await req(base(), 'GET', '/api/jobs/tokens', null, { token: 'wrong' })).status, 401);
+});
