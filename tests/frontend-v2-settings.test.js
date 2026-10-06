@@ -13,7 +13,7 @@ import { JSDOM } from 'jsdom';
 import { readFileSync } from 'node:fs';
 import {
   msToSec, secToMs, armPhraseMatches, countDirty, parseExtField, USAGE_SHOW_OPTIONS,
-  usageShowSelected, usageShowWire,
+  usageShowSelected, usageShowWire, historySeries, sparkPoints, historyLine,
 } from '../public/v2/pages/settings-logic.js';
 
 // ---------------- pure logic ----------------
@@ -45,6 +45,31 @@ test('usageShowSelected / usageShowWire: a stored "off" shows as Numbers only an
   assert.equal(usageShowWire('banner', 'off'), 'banner', 'a real change is sent');
   assert.equal(usageShowWire('compact', 'banner'), 'compact');
   assert.equal(usageShowWire('banner', 'banner'), 'banner');
+});
+
+// Bead 5v2.2: usage history lives in Settings → Usage monitor (§4 nav tier).
+// /api/usage/history returns newest first; the strip reads oldest → newest.
+const SNAPS = [
+  { capturedAt: '2026-10-03T12:00:00.000Z', ok: true, windows: { seven_day: { percent: 60 }, five_hour: { percent: 10 } } },
+  { capturedAt: '2026-10-03T11:00:00.000Z', ok: true, windows: { seven_day: { percent: 55 } } },
+  { capturedAt: '2026-10-03T10:00:00.000Z', ok: true, windows: { seven_day: { percent: 50 }, five_hour: { percent: 40 } } },
+];
+
+test('historySeries: oldest first, one point per snapshot that has the window', () => {
+  assert.deepEqual(historySeries(SNAPS, 'seven_day').map((p) => p.pct), [50, 55, 60]);
+  assert.deepEqual(historySeries(SNAPS, 'five_hour').map((p) => p.pct), [40, 10], 'a snapshot without the window is skipped, not zero');
+  assert.deepEqual(historySeries([], 'seven_day'), []);
+});
+
+test('sparkPoints: x by time across the width, y = percent used (100% at the top)', () => {
+  assert.equal(sparkPoints(historySeries(SNAPS, 'seven_day'), 100, 20), '0,10 50,9 100,8');
+  assert.equal(sparkPoints([{ t: 5, pct: 25 }], 100, 20), '0,15 100,15', 'one reading is a flat line');
+  assert.equal(sparkPoints([], 100, 20), '');
+});
+
+test('historyLine: low, high and the span, or says there is nothing yet', () => {
+  assert.equal(historyLine(historySeries(SNAPS, 'seven_day')), 'low 50% · high 60% · 3 readings');
+  assert.equal(historyLine([]), 'no readings yet');
 });
 
 test('armPhraseMatches: exact match after trimming, but NOT case-insensitive', () => {
@@ -271,6 +296,57 @@ test('settings page: a stored "off" shows as Numbers only, Save stays disabled, 
   select.dispatchEvent(new window.Event('change'));
   assert.equal(saveBtn.disabled, false);
   assert.match(page.querySelector('.actionbar__l').textContent, /1 field differs/);
+});
+
+test('settings page: Usage monitor shows the history strip from /api/usage/history and Refresh now posts /api/usage/refresh', async () => {
+  freshDom();
+  const calls = [];
+  let refreshed = false;
+  globalThis.fetch = async (path, opts = {}) => {
+    calls.push(`${opts.method ?? 'GET'} ${path}`);
+    if (path.startsWith('/api/usage/history')) {
+      const snaps = refreshed ? [{ capturedAt: '2026-10-03T13:00:00.000Z', ok: true, windows: { seven_day: { percent: 77 } } }, ...SNAPS] : SNAPS;
+      return { ok: true, status: 200, text: async () => JSON.stringify({ snapshots: snaps }) };
+    }
+    if (path.startsWith('/api/usage/refresh')) {
+      refreshed = true;
+      return { ok: true, status: 202, text: async () => JSON.stringify({ ok: true, checkedAt: '2026-10-03T13:00:00.000Z', windows: { seven_day: { percent: 77 } } }) };
+    }
+    return mockFetch(() => 'ok')(path);
+  };
+  const settings = (await import(`../public/v2/pages/settings.js?t=${Date.now()}_hist`)).default;
+  settings(new URLSearchParams());
+  await tick(40);
+
+  const page = document.getElementById('v2-page');
+  const hist = page.querySelector('[data-usage-history]');
+  assert.ok(hist, 'Usage monitor carries a history strip');
+  assert.ok(calls.some((c) => c.startsWith('GET /api/usage/history')), 'the strip is read from /api/usage/history');
+  assert.match(hist.textContent, /low 50% · high 60% · 3 readings/);
+  assert.equal(hist.querySelectorAll('polyline').length, 2, 'one line for the week, one for the 5-hour window');
+
+  const btn = [...page.querySelectorAll('button')].find((b) => b.textContent === 'Refresh now');
+  assert.ok(btn, 'a Refresh now control');
+  assert.ok(btn.hasAttribute('data-mutating'), 'disabled with the other mutating controls while the daemon is unreachable');
+  btn.click();
+  await tick(40);
+  assert.ok(calls.includes('POST /api/usage/refresh'), 'Refresh now posts /api/usage/refresh');
+  assert.match(page.querySelector('[data-usage-history]').textContent, /high 77% · 4 readings/, 'the new snapshot shows after a refresh');
+});
+
+test('settings page: a refresh inside the floor says when to try again, not a generic failure', async () => {
+  freshDom();
+  globalThis.fetch = async (path, opts = {}) => {
+    if (path.startsWith('/api/usage/history')) return { ok: true, status: 200, text: async () => JSON.stringify({ snapshots: SNAPS }) };
+    if (path.startsWith('/api/usage/refresh')) return { ok: false, status: 429, text: async () => JSON.stringify({ error: 'refreshed too recently', retryAfterSec: 42 }) };
+    return mockFetch(() => 'ok')(path);
+  };
+  const settings = (await import(`../public/v2/pages/settings.js?t=${Date.now()}_429`)).default;
+  settings(new URLSearchParams());
+  await tick(40);
+  [...document.querySelectorAll('button')].find((b) => b.textContent === 'Refresh now').click();
+  await tick(40);
+  assert.match(document.body.textContent, /checked moments ago — try again in 42s/);
 });
 
 test('settings page: "Default model" is NOT rendered — extensions/claude/index.js has no such daemon-wide setting', async () => {

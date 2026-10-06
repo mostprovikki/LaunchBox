@@ -25,7 +25,7 @@
 //    still requires for every click (server.js's `grace: false` on both
 //    /api/cleanup and /api/uninstall).
 import {
-  api, guardedSubmit, degradedReason, onAuthState,
+  api, guardedSubmit, degradedReason, onAuthState, failureToast,
 } from '../api.js';
 import {
   $, el, clear, pageHead, toast, setDisabledReason,
@@ -36,7 +36,7 @@ import { onRender } from '../router.js';
 import { ICON_EMPTY } from './runs-icons.js';
 import {
   msToSec, secToMs, USAGE_SHOW_OPTIONS, usageShowSelected, usageShowWire,
-  armPhraseMatches, countDirty, parseExtField,
+  armPhraseMatches, countDirty, parseExtField, historySeries, sparkPoints, historyLine,
 } from './settings-logic.js';
 
 // Core numeric keys — everything else read off a form control is either a
@@ -99,8 +99,8 @@ async function load() {
 
 // ---------------- row builders ----------------
 
-function setRow(name, desc, control) {
-  return el('div', { class: 'setrow' }, [
+function setRow(name, desc, control, { stack = false } = {}) {
+  return el('div', { class: stack ? 'setrow setrow--stack' : 'setrow' }, [
     el('div', {}, [
       el('span', { class: 'setrow__n' }, name),
       el('span', { class: 'setrow__d' }, desc),
@@ -181,8 +181,79 @@ function usageSection(s) {
         numField(r, 'usageWarnPct', s.usageWarnPct, '%')),
       setRow('Critical at', 'Meters turn red, and model-pinned jobs whose model is past this line are guard-skipped.',
         numField(r, 'usageCritPct', s.usageCritPct, '%')),
+      setRow('History', 'Percent used per reading, oldest on the left. For tuning the lines above, not for watching.',
+        historyHost, { stack: true }),
     ]),
   ]);
+}
+
+// ---------------- usage history (bead 5v2.2) ----------------
+//
+// Read on its own after the settings load, so a slow or failing history read
+// never holds up the form. launchbox.md §4 puts usage history in the nav tier;
+// the Overview stays history-free (§7).
+
+const HIST_LIMIT = 500;
+const SPARK_W = 220;
+const SPARK_H = 28;
+const SVG_NS = 'http://www.w3.org/2000/svg';
+let historyHost = null;
+let refreshBtn = null;
+
+function spark(series) {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${SPARK_W} ${SPARK_H}`);
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.setAttribute('aria-hidden', 'true'); // the summary beside it is the readable form
+  svg.setAttribute('class', 'uhist__spark');
+  const line = document.createElementNS(SVG_NS, 'polyline');
+  line.setAttribute('points', sparkPoints(series, SPARK_W, SPARK_H));
+  svg.appendChild(line);
+  return svg;
+}
+
+function renderHistory(snapshots, note) {
+  if (!historyHost) return;
+  clear(historyHost);
+  for (const [key, label] of [['seven_day', 'Week'], ['five_hour', '5-hour']]) {
+    const series = historySeries(snapshots, key);
+    historyHost.appendChild(el('div', { class: 'uhist__row' }, [
+      el('span', { class: 'uhist__k' }, label),
+      spark(series),
+      el('span', { class: 't-meta' }, historyLine(series)),
+    ]));
+  }
+  const last = snapshots?.[0]?.capturedAt;
+  historyHost.appendChild(el('div', { class: 'uhist__foot' }, [
+    el('span', { class: 't-meta' }, note ?? (last ? `last reading ${new Date(last).toLocaleString()}` : 'no reading yet')),
+    refreshBtn,
+  ]));
+}
+
+async function loadHistory(note) {
+  try {
+    const { snapshots } = await api('GET', `/api/usage/history?limit=${HIST_LIMIT}&okOnly=1`);
+    renderHistory(snapshots ?? [], note);
+  } catch {
+    renderHistory([], 'history could not be read');
+  }
+}
+
+async function onRefreshUsage() {
+  setDisabledReason(refreshBtn, 'Checking usage…');
+  try {
+    await api('POST', '/api/usage/refresh');
+    await loadHistory();
+  } catch (err) {
+    if (err?.status === 429) {
+      await loadHistory(`checked moments ago — try again in ${err.data?.retryAfterSec ?? 'a few '}s`);
+    } else {
+      const msg = failureToast(err);
+      if (msg) toast(msg, 'bad');
+    }
+  } finally {
+    setDisabledReason(refreshBtn, degradedReason());
+  }
 }
 
 function budgetSection(s) {
@@ -479,6 +550,8 @@ function render() {
       `⚠ Touch ID approval is unavailable on this platform, so gated actions proceed WITHOUT a confirmation prompt. ${s.approvalDegradedReason ?? ''}`.trim()));
   }
 
+  historyHost = el('div', { class: 'uhist', 'data-usage-history': '' }, el('span', { class: 't-meta' }, 'reading history…'));
+  refreshBtn = el('button', { class: 'btn btn--sm', 'data-mutating': '', onclick: onRefreshUsage }, 'Refresh now');
   wrap.appendChild(usageSection(s));
   wrap.appendChild(budgetSection(s));
   wrap.appendChild(pausingSection(s));
@@ -498,6 +571,7 @@ function render() {
 
   page.appendChild(wrap);
   updateActionbar();
+  loadHistory();
 }
 
 // ---------------- route lifecycle ----------------
