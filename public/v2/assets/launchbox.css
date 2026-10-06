@@ -33,18 +33,24 @@
   font: 400 11.5px/1.4 var(--sans);
   text-align: left;
   white-space: normal;
+  /* Not rendered at rest: an opacity:0 box still widens the scrollable area,
+     so any tip near the right edge scrolled the page sideways (5v2.4). */
+  display: none;
   opacity: 0;
   pointer-events: none;
   transition: opacity .1s ease .05s;
   z-index: 90;
 }
 [data-tip]:hover::after,
-[data-tip]:focus-visible::after { opacity: 1; }   /* keyboard users get the tooltip too */
+[data-tip]:focus-visible::after { display: block; opacity: 1; }   /* keyboard users get the tooltip too */
+@starting-style {
+  [data-tip]:hover::after,
+  [data-tip]:focus-visible::after { opacity: 0; }
+}
 .appbar [data-tip]::after { bottom: auto; top: calc(100% + 7px); }
 /* keep edge tooltips on-screen in the fixed action column */
 .rowact [data-tip]:last-child::after { left: auto; right: 0; transform: none; }
-/* same for the bar's right edge — the hidden tooltip box otherwise widens
-   the scrollable area past the viewport on every page */
+/* same for the bar's right edge, so a shown tip stays on-screen */
 .appbar .themebtn::after { left: auto; right: 0; transform: none; }
 
 /* Disabled action affordance: present but visibly impossible, with the why
@@ -685,6 +691,16 @@ input.field--mono { font-family: var(--mono) !important; }
 .themebtn .ic--sun { display: none; }
 [data-theme="dark"] .themebtn .ic--sun { display: block; }
 [data-theme="dark"] .themebtn .ic--moon { display: none; }
+
+/* Appbar below its natural width (~1320px live): wrap rather than scroll. The
+   spacer becomes a line break, so row 1 is brand + nav and row 2 the glance
+   chips and controls, wrapping again if needed. Nothing hidden, nothing moved
+   behind a click (launchbox.md §4, §9 2026-10-03; claude-scheduler-5v2.4). */
+@media (max-width: 1400px) {
+  .appbar { flex-wrap: wrap; height: auto; row-gap: 8px; padding-bottom: 10px; }
+  .appbar__spacer { flex-basis: 100%; height: 0; }
+  .appbar .themebtn { margin-left: auto; }
+}
 
 /* Inbox — triage split (claude-scheduler-btv.19; docs/design/mockups/inbox-flavours.html Option 2) */
 .ibx-split { display: grid; grid-template-columns: minmax(260px, 2fr) minmax(0, 3fr); gap: 18px; align-items: start; }
