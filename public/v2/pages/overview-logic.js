@@ -71,6 +71,14 @@ export function daemonFault(data, now = Date.now()) {
 const weekWindow = (h) => h?.windows?.find((w) => w.key === 'seven_day');
 const fiveWindow = (h) => h?.windows?.find((w) => w.key === 'five_hour');
 const isLow = (w) => w && !w.unknown && typeof w.percent === 'number' && w.percent >= w.warnPct;
+// Model windows carry no thresholds of their own: they are judged by the
+// account's (week, else 5-hour) — the same limits the Overview meters draw.
+const limitsOf = (h) => {
+  const wk = weekWindow(h); const five = fiveWindow(h);
+  return { warnPct: wk?.warnPct ?? five?.warnPct, critPct: wk?.critPct ?? five?.critPct };
+};
+const modelReadings = (h) => (h?.modelWindows ?? [])
+  .filter((m) => m.kind === 'weekly_scoped' && m.scopeModel && !m.unknown && typeof m.percent === 'number');
 
 // ok / warn / bad plus the one-line state and why (§5). `needs` is the Inbox
 // count, or null when the Inbox could not be read.
@@ -85,12 +93,22 @@ export function statusLight({ data, needs, now = Date.now() }) {
   if (h && !h.available) why.push('usage could not be read');
   if (isLow(weekWindow(h))) why.push('weekly headroom is low');
   if (isLow(fiveWindow(h))) why.push('5-hour headroom is low');
+  let modelPastGuard = false;
+  const { warnPct, critPct } = limitsOf(h);
+  for (const m of modelReadings(h)) {
+    if (typeof critPct === 'number' && m.percent >= critPct) {
+      modelPastGuard = true;
+      why.push(`${m.scopeModel} weekly limit is at ${m.percent}% (guard stops runs)`);
+    } else if (typeof warnPct === 'number' && m.percent >= warnPct) {
+      why.push(`${m.scopeModel} weekly limit is at ${m.percent}% (Warn at)`);
+    }
+  }
 
   if (needs == null) {
     return { light: 'warn', title: 'Inbox unreadable', why: ['the Inbox could not be read', ...why].join(' · ') };
   }
-  if (needs > 0) return { light: 'warn', title: 'Waiting on you', why: why.join(' · ') || 'open the Inbox' };
-  return { light: why.length ? 'warn' : 'ok', title: 'Nothing needs you', why: why.join(' · ') || 'running normally' };
+  if (needs > 0) return { light: modelPastGuard ? 'bad' : 'warn', title: 'Waiting on you', why: why.join(' · ') || 'open the Inbox' };
+  return { light: modelPastGuard ? 'bad' : why.length ? 'warn' : 'ok', title: 'Nothing needs you', why: why.join(' · ') || 'running normally' };
 }
 
 // ---- cards ------------------------------------------------------------------
@@ -196,7 +214,7 @@ function meter(k, w, limits, reset) {
 export function headroomMetersModel(h, now = Date.now()) {
   const wk = weekWindow(h);
   const five = fiveWindow(h);
-  const limits = { warnPct: wk?.warnPct ?? five?.warnPct, critPct: wk?.critPct ?? five?.critPct };
+  const limits = limitsOf(h);
   const out = [
     meter('Week', wk, wk ?? limits, fmtResetWeek(wk?.resetsAt)),
     meter('5-hour window', five, five ?? limits, fmtResetIn(five?.resetsAt, now)),
