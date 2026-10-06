@@ -23,7 +23,7 @@ for (const [name, live, tweak, re] of [
   ['the daemon answers on its port', {}, (f) => { f.portAlive = async () => true; }, /daemon is running/],
   ['a run is live', { run: true }, () => {}, /running or queued/],
   ['a lease is held', { lease: true }, () => {}, /lease/],
-  ['a worktree is checked out', { worktree: true }, () => {}, /worktree/],
+  ['a worktree is checked out', { worktree: true }, () => {}, /worktree.*discard it/],
   ['the target exists and is not empty', {}, (f) => { mkdirSync(f.newDir); writeFileSync(join(f.newDir, 'x'), '1'); }, /already exists/],
   ['a non-empty launchbox.db sits in the old dir', {}, (f) => { writeFileSync(join(f.oldDir, 'launchbox.db'), 'data'); }, /launchbox\.db/],
 ]) {
