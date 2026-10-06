@@ -10,7 +10,7 @@ import { join, relative } from 'node:path';
 const ROOT = new URL('..', import.meta.url).pathname;
 const SCAN = ['lib', 'bin', 'public', 'tools', 'extensions', 'helper', 'skills', 'server.js', 'install.sh', 'uninstall.sh', 'package.json'];
 // Files allowed to name the old product, only on lines that say why (regex below).
-const LEGACY_OK = new Set(['lib/paths.js', 'lib/beads.js', 'lib/migrate.js', 'lib/uninstall.js', 'uninstall.sh', 'skills/registered-repo-session/SKILL.md']);
+const LEGACY_OK = new Set(['lib/paths.js', 'lib/beads.js', 'lib/migrate.js', 'lib/uninstall.js', 'install.sh', 'uninstall.sh', 'skills/registered-repo-session/SKILL.md']);
 const SKIP_DIR = new Set(['node_modules', 'vendor', 'fixtures']);
 const OFFENDER = /claude-scheduler(?!-[a-z0-9]{2,4}(?:\.\d+)?\b)/g;
 
@@ -29,7 +29,7 @@ export function offenders() {
       if (!/\.(m?js|sh|json|swift|md|html|css)$/.test(rel)) continue;
       readFileSync(f, 'utf8').split('\n').forEach((line, i) => {
         if (!line.match(OFFENDER)) return;
-        if (LEGACY_OK.has(rel) && /legacy|pre-M6|SCHEDULER_ACTORS|\.claude-scheduler/.test(line)) return;
+        if (LEGACY_OK.has(rel) && /legacy|pre-M6|SCHEDULER_ACTORS|(?<!\w)\.claude-scheduler/.test(line)) return;
         out.push(`${rel}:${i + 1}: ${line.trim()}`);
       });
     }

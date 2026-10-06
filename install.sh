@@ -68,6 +68,13 @@ cat > "$PLIST" <<EOF
 </plist>
 EOF
 
+# legacy (pre-M6): the old com.claude-scheduler agent reloads at login and fights com.launchbox for the port.
+LEGACY_PLIST="$HOME/Library/LaunchAgents/com.claude-scheduler.plist" # legacy (pre-M6)
+if [ -f "$LEGACY_PLIST" ]; then
+  launchctl bootout "gui/$(id -u)/com.claude-scheduler" 2>/dev/null || true # legacy (pre-M6)
+  rm -f "$LEGACY_PLIST"
+  echo "✓ removed legacy (pre-M6) launchd agent"
+fi
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST"
 

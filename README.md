@@ -32,6 +32,7 @@ The product was renamed. An old install keeps its data in `~/.claude-scheduler/s
 LaunchBox reads `~/.launchbox/launchbox.db` and refuses to start (and `launchbox open|url|token`
 refuse) until the data is moved. To move it:
 
+0. Update the checkout to M6 or later (`git pull`, then `npm install`). Needs node 24+ (`node -v`).
 1. Pause everything in the old UI and wait until it is idle (no runs running or queued).
 2. Stop the old daemon: Ctrl-C its terminal, or `launchctl bootout gui/$(id -u)/com.claude-scheduler`
    if it was installed with the old `install.sh`.
@@ -39,7 +40,11 @@ refuse) until the data is moved. To move it:
 4. `node bin/launchbox.mjs migrate` — backs up the DB (`scheduler.db.pre-m6.bak`), rewrites stored
    paths, moves the dir to `~/.launchbox`, leaves `~/.claude-scheduler` as a symlink to it, and runs
    `git worktree repair` in each registered repo.
-5. `npm start` (or `./install.sh` for the background service).
+5. `npm start` (or `./install.sh` for the background service). `install.sh` also removes the old
+   `~/Library/LaunchAgents/com.claude-scheduler.plist`; if you skip it, delete that file by hand, or
+   it reloads at login and fights `com.launchbox` for port 43400.
+6. Unpause in the UI. The pause from step 1 is stored in the DB and survives the move, so nothing
+   runs until you lift it.
 
 Run it with `LB_DATA`/`CS_DATA` unset; migrate always targets `~/.launchbox`.
 
@@ -122,7 +127,7 @@ pre-rename `CS_*` names are still read when the `LB_*` one is unset.
 
 `npm run screenshots` writes every screen and dialog to
 `working_prototype_screenshots/v<N>/` (next free `N`) plus a generated `INDEX.md`, for
-before/after comparison across a UI overhaul. Needs Chrome (or `CHROME_PATH`) and node 22+;
+before/after comparison across a UI overhaul. Needs Chrome (or `CHROME_PATH`) and node 24+;
 no npm dependencies. Takes ~3 min, most of it seeding.
 
 It boots its own scheduler on a free port against a throwaway `LB_DATA`, so
