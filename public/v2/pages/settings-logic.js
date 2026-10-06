@@ -71,3 +71,28 @@ export function parseExtField(spec, raw) {
   }
   return { value: String(raw ?? ''), error: null };
 }
+
+// Usage history (bead 5v2.2): /api/usage/history returns newest first; the
+// strip reads oldest → newest. A snapshot without the window is skipped, not
+// drawn as zero.
+export function historySeries(snapshots, key) {
+  return [...(snapshots ?? [])].reverse()
+    .map((s) => ({ t: Date.parse(s.capturedAt), pct: s.windows?.[key]?.percent }))
+    .filter((p) => Number.isFinite(p.t) && typeof p.pct === 'number');
+}
+
+// SVG polyline points: x by time across `w`, y = percent used with 100% at the
+// top. One reading is a flat line across the strip.
+export function sparkPoints(series, w, h) {
+  if (!series.length) return '';
+  const y = (pct) => Math.round(h - (Math.min(100, Math.max(0, pct)) / 100) * h);
+  if (series.length === 1) return `0,${y(series[0].pct)} ${w},${y(series[0].pct)}`;
+  const t0 = series[0].t; const span = series.at(-1).t - t0 || 1;
+  return series.map((p) => `${Math.round(((p.t - t0) / span) * w)},${y(p.pct)}`).join(' ');
+}
+
+export function historyLine(series) {
+  if (!series.length) return 'no readings yet';
+  const pcts = series.map((p) => p.pct);
+  return `low ${Math.min(...pcts)}% · high ${Math.max(...pcts)}% · ${series.length} reading${series.length === 1 ? '' : 's'}`;
+}
