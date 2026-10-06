@@ -19,7 +19,7 @@ import { openJobDialog } from './job-dialog.js';
 import { openBurnDownDialog } from './plan-dialogs.js';
 import {
   typeBadge, jobDetailLine, scheduleDescribe, hasAfterReset, relIn, fmtWhen,
-  attentionByJobId, runningByJobId, computeRowState, filterJobs,
+  attentionByJobId, runningByJobId, computeRowState, filterJobs, tokensText,
 } from './jobs-logic.js';
 import { dotClass } from '../state-vocab.js';
 
@@ -34,7 +34,7 @@ const SVG_CLOCK = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="curre
 const SVG_SEARCH_SM = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>';
 const SVG_SEARCH_LG = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>';
 
-const state = { jobs: [], running: 0, overview: null, extNames: {}, query: '', type: 'all', listHost: null };
+const state = { jobs: [], running: 0, overview: null, tokens: {}, extNames: {}, query: '', type: 'all', listHost: null };
 // True only while this page owns #v2-page. See render()'s guard.
 let mounted = false;
 let pollTimer = null;
@@ -74,6 +74,12 @@ async function loadAndRender() {
     state.overview = await api('GET', '/api/v2/overview');
   } catch {
     state.overview = null;
+  }
+  // Additive meta text (M5 §5.4); a failure just leaves the rows without it.
+  try {
+    state.tokens = (await api('GET', '/api/jobs/tokens?days=7')).byJob ?? {};
+  } catch {
+    state.tokens = {};
   }
   render();
 }
@@ -143,11 +149,15 @@ function jobCell(job) {
   const guardOff = job.params?.budget?.ignoreGuard
     ? el('span', { class: 'tag', 'data-tip': 'This job intentionally ignores the budget guard' }, 'guard off')
     : null;
-  const parts = [jobDetailLine(job)].filter(Boolean);
-  if (!job.enabled) parts.push('disabled — will not fire');
+  // Path/command in mono on its own line; facts (tokens, disabled) in body
+  // text beneath — appended to the mono line they wrapped mid-sentence and read
+  // as part of the path (owner, 2026-10-03).
+  const detail = jobDetailLine(job);
+  const facts = [tokensText(state.tokens?.[job.id]), job.enabled ? null : 'disabled — will not fire'].filter(Boolean);
   return el('div', { class: 'cell' }, [
     el('div', { class: 'cell__l1' }, [el('span', { class: 'row__n' }, job.name), guardOff]),
-    el('div', { class: 'cell__l2' }, parts.length ? el('span', { class: 'mono' }, parts.join(' · ')) : null),
+    detail ? el('div', { class: 'cell__l2' }, el('span', { class: 'mono jobpath' }, detail)) : null,
+    facts.length ? el('div', { class: 'cell__l2 jobfacts' }, facts.join(' · ')) : null,
   ]);
 }
 

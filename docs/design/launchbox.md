@@ -33,6 +33,8 @@ Jobs of other modes:
 - Glance check: jobs 1 and 5 (Overview, zero clicks).
 - Planning: activate a project, burst a project's ready beads. Burst is one click from both the
   Projects list row and the Project page. Activation stays on the Project page.
+  See which cron job eats headroom, to retune it: token totals (last 7 days) as meta text on
+  each Jobs row (added 2026-10-03, bead 5v2.3).
 - Planning also tunes budgets from usage history: Settings → *Usage monitor* (history strip +
   Refresh now), the nav tier of §4.
 
@@ -193,3 +195,4 @@ Mockups (Option 2 chosen in each): `docs/design/mockups/inbox-flavours.html`, `p
 | 2026-10-02 | Overview: Running now moves beside the needs-you hero; Headroom card gets Week / 5-hour (+ tighter model) meters when Settings → *Overview headroom* is Meters; that setting (was the dead "Show usage as") now offers Meters / Numbers only, a stored `off` reads as Numbers only | owner, via `overview-meters.html` + design-gate on bead 5v2.1 (decisions 1A, 2, 3) | the setting changed nothing in `/v2`; owner chose to wire it rather than remove it. Usage history charts stay cut (§7) |
 | 2026-10-03 | Appbar wraps to two rows below its natural width (~1300px): brand + nav, then usage chips, running, keep-awake, pause, theme. Nothing hidden or demoted | owner, via ASCII preview on bead 5v2.4 (over collapse-to-menu and tightest-chip-only) | appbar overflowed at 1024 and 760; collapsing pause into a menu would move it to two clicks (§4) |
 | 2026-10-03 | Usage history + Refresh now live in Settings → Usage monitor, not a nav page | owner, design-gate on bead 5v2.2 | §4 puts usage history in the nav tier; no new nav link while the appbar is tight. Overview stays history-free (§7) |
+| 2026-10-03 | New planning job: which cron job eats headroom → per-job tokens (last 7 days) on Jobs rows | owner, design-gate on bead 5v2.3 | no ranked job covered it; Jobs is where a job is retuned or disabled, and comparing needs the list |

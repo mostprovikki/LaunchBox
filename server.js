@@ -14,7 +14,7 @@ import {
   insertRun, getRun, listRuns, lastRun, failOrphanRuns,
   getSetting, setSetting, cleanupAll, listUsageSnapshots,
   listProjects, getProject, getProjectByPath, createProject, updateProject, deleteProject,
-  listLeases, listJobsByProject, avgDeltaForJob, spendRollup,
+  listLeases, listJobsByProject, avgDeltaForJob, spendRollup, tokensByJob,
 } from './lib/db.js';
 import { validateJob, previewSchedule, scheduleEntries, hasAfterReset } from './lib/validate.js';
 import { loadExtensions, manifest, validateFields } from './lib/extensions.js';
@@ -690,6 +690,17 @@ export function createApp({
     scheduler.reload(job.id);
     awake?.refresh();
     res.status(201).json(decorate(job));
+  });
+
+  // Per-job deduped session tokens over the last N days (M5 §5.4). Declared
+  // before /api/jobs/:id or "tokens" would be read as a job id. Behind the same
+  // global /api token gate as its neighbours.
+  app.get('/api/jobs/tokens', (req, res) => {
+    const d = Number(req.query.days ?? 7);
+    const days = Number.isFinite(d) && d > 0 && d <= 365 ? d : 7;
+    const asOf = new Date();
+    const sinceIso = new Date(asOf.getTime() - days * 86400000).toISOString();
+    res.json({ asOf: asOf.toISOString(), days, byJob: tokensByJob(db, { sinceIso }) });
   });
 
   app.get('/api/jobs/:id', (req, res) => {

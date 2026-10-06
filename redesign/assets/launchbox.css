@@ -242,6 +242,9 @@ input.field:disabled, textarea.field:disabled, select:disabled { opacity: .55; }
 /* ------------------------------------------------------------- Job rows */
 
 .jobrow { grid-template-columns: 24px minmax(0, 1fr) 210px 150px auto; }
+/* Jobs row: path wraps anywhere on its own line; facts line sits tight under it. */
+.jobpath { overflow-wrap: anywhere; }
+.jobfacts { margin-top: 3px; }
 .jobrow--disabled .cell__l1,
 .jobrow--disabled .ftype { opacity: .55; }
 .jobrow__ctl { display: flex; align-items: center; gap: 2px; justify-self: end; }

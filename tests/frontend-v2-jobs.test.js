@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 import {
   fmtDuration, scheduleDescribe, reasonText, stopReasonText,
-  computeRowState, filterJobs, attentionByJobId, runningByJobId, jobDetailLine, typeBadge,
+  computeRowState, filterJobs, fmtTokens, tokensText, attentionByJobId, runningByJobId, jobDetailLine, typeBadge,
 } from '../public/v2/pages/jobs-logic.js';
 // ordinal() and the status table moved to the shared vocabulary module
 // (claude-scheduler-bmn) — jobs-logic no longer owns or re-exports them.
@@ -173,10 +173,11 @@ const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
 globalThis.setInterval = () => ({});
 globalThis.clearInterval = () => {};
 
-function mockApi({ jobs = [], running = 0, overview = { attention: [], running: { runs: [] } }, extensions = [] } = {}) {
+function mockApi({ jobs = [], running = 0, overview = { attention: [], running: { runs: [] } }, extensions = [], tokens = {} } = {}) {
   const calls = [];
   globalThis.fetch = async (path, opts) => {
     calls.push({ path, method: opts?.method ?? 'GET', body: opts?.body ? JSON.parse(opts.body) : undefined });
+    if (path.startsWith('/api/jobs/tokens')) return { ok: true, status: 200, text: async () => JSON.stringify({ asOf: 'x', days: 7, byJob: tokens }) };
     if (path === '/api/jobs') return { ok: true, status: 200, text: async () => JSON.stringify({ jobs, running }) };
     if (path === '/api/v2/overview') return { ok: true, status: 200, text: async () => JSON.stringify(overview) };
     if (path === '/api/extensions') return { ok: true, status: 200, text: async () => JSON.stringify({ extensions }) };
@@ -350,4 +351,36 @@ test('jobs tab: Delete asks for confirmation (window.confirm) before calling DEL
   delBtn.click();
   await tick();
   assert.ok(calls.some((c) => c.method === 'DELETE' && c.path === `/api/jobs/${CLAUDE_JOB.id}`), 'a confirmed delete must call DELETE /api/jobs/:id');
+});
+
+test('fmtTokens/tokensText: compact counts; no joined sessions renders nothing', () => {
+  assert.equal(fmtTokens(512), '512');
+  assert.equal(fmtTokens(1234), '1.2k');
+  assert.equal(fmtTokens(84_200), '84.2k');
+  assert.equal(fmtTokens(184_000), '184k');
+  assert.equal(fmtTokens(1_240_000), '1.2M');
+  assert.equal(tokensText({ tokens: 84_200, runs: 2, sessions: 2 }), '84.2k tokens · last 7 days');
+  assert.equal(tokensText({ tokens: 0, runs: 1, sessions: 1 }), null);
+  assert.equal(tokensText(undefined), null);
+});
+
+test('jobs tab: a row shows "N tokens · last 7 days" from /api/jobs/tokens; a job without tokens shows none', async () => {
+  freshDom();
+  const calls = mockApi({ jobs: [CLAUDE_JOB, SHELL_JOB_RUNNING], tokens: { [CLAUDE_JOB.id]: { tokens: 1_240_000, runs: 3, sessions: 3 } } });
+  const { default: jobsPage } = await import(`../public/v2/pages/jobs.js?t=${Date.now()}_tokens`);
+  jobsPage(new URLSearchParams());
+  await tick();
+
+  assert.ok(calls.some((c) => c.path === '/api/jobs/tokens?days=7'), 'the page must fetch the roll-up');
+  const rows = [...document.querySelectorAll('.row.jobrow:not(.row--head)')];
+  const claudeRow = rows.find((r) => /Sync design tokens/.test(r.textContent));
+  const shellRow = rows.find((r) => /Rotate and ship logs/.test(r.textContent));
+  // Its own line in body text — not appended to the mono path, where it wrapped
+  // mid-sentence and read as part of the path (owner, 2026-10-03).
+  const facts = claudeRow.querySelector('.jobfacts');
+  assert.ok(facts, 'tokens sit on their own facts line');
+  assert.match(facts.textContent, /1\.2M tokens · last 7 days/);
+  assert.ok(!facts.closest('.mono') && !facts.querySelector('.mono'), 'the facts line is not monospace');
+  assert.ok(!/tokens/.test(claudeRow.querySelector('.jobpath')?.textContent ?? ''), 'the path line carries only the path');
+  assert.ok(!/tokens ·/.test(shellRow.textContent), 'no joined sessions: nothing rendered');
 });
