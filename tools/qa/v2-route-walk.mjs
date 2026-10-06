@@ -3,6 +3,7 @@
 //
 //   npm run qa:v2                 # boot an isolated instance, walk, exit non-zero on findings
 //   npm run qa:v2 -- --keep       # leave the sandbox up afterwards
+//   npm run qa:v2 -- --shots DIR  # also save a PNG per route, theme and width
 //   npm run qa:v2 -- --url URL    # walk an instance that is ALREADY running
 //   npm run qa:v2 -- --json FILE  # also write the findings as JSON
 //
@@ -41,7 +42,7 @@ import {
   V2_ROUTES, resolveHash, isWalkable, evaluateRoute, summarise,
   AA_NORMAL, AA_LARGE, LARGE_PX, LARGE_BOLD_PX, LARGE_BOLD_WEIGHT,
   STRANDED_MIN_ALPHA, STRANDED_MIN_LUM, STRANDED_MIN_W, STRANDED_MIN_H,
-  MIN_PAGE_TEXT_LEN, SENTINEL_ATTR,
+  MIN_PAGE_TEXT_LEN, SENTINEL_ATTR, WALK_WIDTHS,
 } from './audit-rules.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -51,13 +52,14 @@ const PORT = qaPort('route-walk', { repo: REPO }); // tools/qa/sandbox-port.mjs:
 const log = (m) => process.stdout.write(m + '\n');
 
 function parseArgs(argv) {
-  const opts = { keep: false, url: null, json: null, headful: false };
+  const opts = { keep: false, url: null, json: null, headful: false, shots: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--keep') opts.keep = true;
     else if (a === '--headful') opts.headful = true;
     else if (a === '--url') opts.url = argv[++i];
     else if (a === '--json') opts.json = argv[++i];
+    else if (a === '--shots') opts.shots = argv[++i];
     else if (a === '-h' || a === '--help') opts.help = true;
     else throw new Error(`unknown argument: ${a}`);
   }
@@ -169,6 +171,34 @@ function probeSource(thresholds) {
   const page = document.querySelector('#v2-page');
   out.pageTextLen = ((page && page.innerText) || '').trim().length;
   out.overflowPx = document.documentElement.scrollWidth - document.documentElement.clientWidth;
+  if (out.overflowPx > 0) {
+    // The culprits: elements past the right edge none of whose children are —
+    // the deepest boxes that stick out, not every ancestor that contains one.
+    const cw = document.documentElement.clientWidth;
+    const past = (e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.right > cw + 0.5; };
+    const culprits = [];
+    for (const e of document.body.querySelectorAll('*')) {
+      if (!past(e) || [...e.children].some(past)) continue;
+      culprits.push({ sel: sel(e), w: Math.round(e.getBoundingClientRect().width), over: Math.round(e.getBoundingClientRect().right - cw) });
+    }
+    out.wide = culprits.sort((x, y) => y.over - x.over).slice(0, 5);
+    if (!culprits.length) {
+      // No box sticks out: a pseudo-element does — usually an opacity:0
+      // [data-tip] tooltip, which still counts toward scrollWidth. Hide them
+      // all, re-measure, and name the tooltip hosts nearest the right edge.
+      const st = document.createElement('style');
+      st.textContent = '[data-tip]::before, [data-tip]::after { display: none !important; }';
+      document.head.appendChild(st);
+      const without = document.documentElement.scrollWidth - cw;
+      st.remove();
+      if (without <= 0) {
+        out.wide = [...document.querySelectorAll('[data-tip]')]
+          .map((e) => ({ e, r: e.getBoundingClientRect() })).filter(({ r }) => r.width > 0)
+          .sort((x, y) => y.r.right - x.r.right).slice(0, 3)
+          .map(({ e, r }) => ({ sel: sel(e) + '::after (tooltip)', w: Math.round(r.width), over: Math.round(r.right - cw) }));
+      }
+    }
+  }
   const isDark = document.documentElement.dataset.theme === 'dark';
 
   for (const b of document.querySelectorAll('.iconbtn')) {
@@ -322,7 +352,7 @@ async function seedForWalk(api) {
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   if (opts.help) {
-    log('Usage: npm run qa:v2 -- [--url URL] [--json FILE] [--keep] [--headful]');
+    log('Usage: npm run qa:v2 -- [--url URL] [--json FILE] [--shots DIR] [--keep] [--headful]');
     return 0;
   }
 
@@ -347,7 +377,7 @@ async function main() {
     }
 
     const ids = api ? await seedForWalk(api) : {};
-    browser = await launchBrowser({ width: 1512, height: 950, scale: 2, headful: opts.headful });
+    browser = await launchBrowser({ width: WALK_WIDTHS[0], height: 950, scale: 2, headful: opts.headful });
     const { page, conn } = browser;
 
     await conn.send('Runtime.enable');
@@ -383,23 +413,34 @@ async function main() {
     }
 
     const probe = probeSource(THRESHOLDS);
-    for (const theme of ['dark', 'light']) {
-      log(`\n· theme: ${theme}`);
+    const [fullWidth, ...narrow] = WALK_WIDTHS;
+    const passes = [
+      ...['dark', 'light'].map((theme) => ({ width: fullWidth, theme })),
+      ...narrow.map((width) => ({ width, theme: 'dark' })),
+    ];
+    for (const { width, theme } of passes) {
+      log(`\n· theme: ${theme} @ ${width}px`);
+      await conn.send('Emulation.setDeviceMetricsOverride', { width, height: 950, deviceScaleFactor: 2, mobile: false });
       await page.eval((t) => { document.documentElement.setAttribute('data-theme', t); }, theme);
       for (const route of V2_ROUTES) {
+        const name = width === fullWidth ? route.name : `${route.name}@${width}`;
         if (!isWalkable(route, ids)) {
-          skipped.push(`${route.name} (${theme}) — no id available to deep-link with`);
-          log(`  – ${route.name}: skipped (no id)`);
+          skipped.push(`${name} (${theme}) — no id available to deep-link with`);
+          log(`  – ${name}: skipped (no id)`);
           continue;
         }
-        const sentinel = `${theme}:${route.name}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+        const sentinel = `${theme}:${name}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
         await stampSentinel(page, sentinel);
         await page.goto(`${baseUrl}/v2/${resolveHash(route.hash, ids)}`);
         const measured = await settleAndMeasure(page, probe);
         const stale = await sentinelSurvived(page, SENTINEL_ATTR, sentinel);
-        const found = evaluateRoute({ route: route.name, theme, page: { ...measured, sentinelSurvived: stale } });
+        if (opts.shots) {
+          await mkdir(opts.shots, { recursive: true });
+          await writeFile(join(opts.shots, `${route.name}-${theme}-${width}.png`), await page.screenshot());
+        }
+        const found = evaluateRoute({ route: name, theme, page: { ...measured, sentinelSurvived: stale } });
         routeFindings.push(...found);
-        log(`  ${found.length ? '✗' : '✓'} ${route.name}${found.length ? ` — ${found.length} finding${found.length === 1 ? '' : 's'}` : ''}`);
+        log(`  ${found.length ? '✗' : '✓'} ${name}${found.length ? ` — ${found.length} finding${found.length === 1 ? '' : 's'}` : ''}`);
         for (const f of found) log(`      ${f.kind}: ${f.detail}`);
       }
     }
@@ -414,7 +455,7 @@ async function main() {
       log('');
     }
     if (verdict.ok) {
-      log(`route walk clean — ${V2_ROUTES.length} routes × 2 themes, ${skipped.length} skipped`);
+      log(`route walk clean — ${V2_ROUTES.length} routes × 2 themes at ${WALK_WIDTHS[0]}px + dark at ${WALK_WIDTHS.slice(1).join(", ")}px, ${skipped.length} skipped`);
     } else {
       log(`route walk FAILED — ${verdict.findings.length} finding(s): ${JSON.stringify(verdict.byKind)}`);
       for (const f of verdict.findings) log(`  [${f.route}/${f.theme}] ${f.kind}: ${f.detail}`);

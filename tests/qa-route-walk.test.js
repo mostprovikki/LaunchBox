@@ -18,7 +18,7 @@ import {
   isLargeText, requiredRatio, parseColor, luminance, contrastRatio, composite,
   isStrandedLightSurface, isAllowedConsole, isAllowedRequestFailure,
   evaluateRoute, summarise, V2_ROUTES, resolveHash, isWalkable,
-  ALLOWED_CONSOLE, ALLOWED_REQUEST_FAILURES,
+  ALLOWED_CONSOLE, ALLOWED_REQUEST_FAILURES, WALK_WIDTHS,
 } from '../tools/qa/audit-rules.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -268,4 +268,19 @@ test('the gate exits non-zero when it finds something', () => {
   const src = read('tools/qa/v2-route-walk.mjs');
   assert.match(src, /return verdict\.ok \? 0 : 1;/);
   assert.match(src, /process\.exitCode = await main\(\)/);
+});
+
+// claude-scheduler-5v2.4: the appbar overflowed at 760px for weeks because the
+// walk only ever ran at 1512. The narrow widths are part of the gate.
+test('the walk covers the narrow widths the appbar must fit', () => {
+  for (const w of [1024, 760]) assert.ok(WALK_WIDTHS.includes(w), `walk must measure at ${w}px`);
+});
+
+test('an overflow finding names the elements sticking out, so the fix knows where to look', () => {
+  const [f] = evaluateRoute({
+    route: 'overview@760', theme: 'dark',
+    page: { pageTextLen: 500, overflowPx: 562, wide: [{ sel: 'div.uchips', w: 300, over: 400 }, { sel: 'div.segs', w: 210, over: 162 }] },
+  }).filter((x) => x.kind === 'overflow');
+  assert.match(f.detail, /562px/);
+  assert.match(f.detail, /div\.uchips \(300px wide, 400px past the edge\).*div\.segs \(210px wide, 162px past the edge\)/);
 });

@@ -123,6 +123,11 @@ export const MIN_PAGE_TEXT_LEN = 60;
 // screen belongs to whatever ran before it.
 export const SENTINEL_ATTR = 'data-qa-sentinel';
 
+// Viewport widths the walk measures. 1512 is the full walk (both themes); the
+// narrower ones re-walk dark only, for overflow above all: the appbar
+// overflowed at 760 unseen while the walk ran at 1512 alone (claude-scheduler-5v2.4).
+export const WALK_WIDTHS = Object.freeze([1512, 1024, 760]);
+
 export function evaluateRoute({ route, theme, page }) {
   const findings = [];
   const at = (kind, detail) => findings.push({ route, theme, kind, detail });
@@ -139,7 +144,8 @@ export function evaluateRoute({ route, theme, page }) {
     at('stranded_page', `#v2-page still holds the sentinel stamped before this route navigated — the route never cleared the page, so this content belongs to whatever rendered before it (claude-scheduler-7l3)`);
   }
   if ((page.overflowPx ?? 0) > 0) {
-    at('overflow', `the document scrolls ${page.overflowPx}px horizontally`);
+    const wide = (page.wide ?? []).map((x) => `${x.sel} (${x.w}px wide, ${x.over}px past the edge)`).join(', ');
+    at('overflow', `the document scrolls ${page.overflowPx}px horizontally${wide ? ` — sticking out: ${wide}` : ''}`);
   }
   for (const c of page.contrast ?? []) {
     at('contrast', `${c.sel} "${c.text}" is ${c.ratio}:1 on ${c.bg} (needs ${c.need}:1)`);
