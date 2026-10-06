@@ -119,6 +119,28 @@ test('statusLight: ok / warn / bad with the three §5 one-liners and a why', () 
   assert.match(bad.why, /claude binary/);
 });
 
+// claude-scheduler-5v2.5: a per-model weekly limit at Warn at turned the meter
+// and chip amber while the light still said "running normally".
+test('statusLight: a per-model weekly limit past Warn at / the guard line colours the light', () => {
+  const model = (percent) => ({ kind: 'weekly_scoped', group: 'weekly', scopeModel: 'Fable', percent, severity: 'normal', resetsAt: null, isActive: true, unknown: false });
+  const warn = statusLight({ data: overviewPayload({ modelWindows: [model(75)] }), needs: 0 });
+  // fixture thresholds: Warn at 70, guard 85
+  assert.deepEqual([warn.light, warn.title, warn.why], ['warn', 'Nothing needs you', 'Fable weekly limit is at 75% (Warn at)']);
+
+  const crit = statusLight({ data: overviewPayload({ modelWindows: [model(86)] }), needs: 0 });
+  assert.equal(crit.light, 'bad');
+  assert.equal(crit.why, 'Fable weekly limit is at 86% (guard stops runs)');
+
+  const waiting = statusLight({ data: overviewPayload({ modelWindows: [model(86)] }), needs: 2 });
+  assert.equal(waiting.light, 'bad', 'a model past the guard line outranks the Inbox amber');
+
+  const under = statusLight({ data: overviewPayload({ modelWindows: [model(69)] }), needs: 0 });
+  assert.deepEqual([under.light, under.why], ['ok', 'running normally']);
+
+  const unread = statusLight({ data: overviewPayload({ modelWindows: [{ ...model(90), unknown: true }] }), needs: 0 });
+  assert.equal(unread.light, 'ok', 'an unread model window says nothing');
+});
+
 test('statusLight: an unreadable Inbox never reads as "Nothing needs you"', () => {
   const s = statusLight({ data: overviewPayload(), needs: null });
   assert.notEqual(s.title, 'Nothing needs you');

@@ -10,6 +10,7 @@ import {
   api, onAuthState, getAuthState, FAILURE_COPY, failureToast, degradedReason,
 } from './api.js';
 import { el, iconBtn, setDisabledReason, toast } from './ui.js';
+import { usageChips } from './usage-chips.js';
 
 const NAV = [
   ['overview', 'Overview'],
@@ -168,22 +169,6 @@ function renderInboxBadge() {
 export function setInboxCount(n) {
   inboxCount = Number.isFinite(n) ? n : 0;
   renderInboxBadge();
-}
-
-function usageChips(u) {
-  const crit = (pct) => typeof pct === 'number' && pct >= (u?.critPct ?? 85);
-  if (!u || u.ok === null) return [{ k: '5h', v: '—' }, { k: 'wk', v: '—' }];
-  if (u.buckets?.length) {
-    return u.buckets.map((b) => ({
-      k: b.scopeModel ?? (b.group === 'weekly' ? 'wk' : (b.kind === 'session' ? '5h' : String(b.kind ?? '?'))),
-      v: typeof b.percent === 'number' ? `${b.percent}%` : '—',
-      crit: crit(b.percent) || b.severity === 'critical',
-    }));
-  }
-  const WL = { five_hour: '5h', seven_day: 'wk' };
-  return Object.entries(u.windows ?? {})
-    .filter(([, w]) => typeof w?.percent === 'number')
-    .map(([k, w]) => ({ k: WL[k] ?? k, v: `${w.percent}%`, crit: crit(w.percent) }));
 }
 
 function fmtTime(iso) {
@@ -346,7 +331,7 @@ function renderChips() {
   const uchips = el('div', {
     class: 'uchips',
     'data-tip': checked ? `Claude usage — checked ${checked}` : 'Claude usage — not yet checked',
-  }, usageChips(usageState).map((b) => el('span', { class: b.crit ? 'uchip uchip--crit' : 'uchip' }, [
+  }, usageChips(usageState).map((b) => el('span', { class: b.tone ? `uchip uchip--${b.tone}` : 'uchip' }, [
     el('span', { class: 'uchip__k' }, b.k),
     el('span', { class: 'uchip__v' }, b.v),
   ])));
